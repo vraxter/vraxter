@@ -1,0 +1,105 @@
+package services
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+
+	"github.com/patagonicrune/vraxter/internal/db"
+	"github.com/patagonicrune/vraxter/internal/skills"
+	"github.com/patagonicrune/vraxter/pkg/types"
+)
+
+// SkillService handles installation and registration of system skills
+type SkillService struct {
+	repo      *db.SkillRepository
+	skillsDir string
+}
+
+func NewSkillService(repo *db.SkillRepository, skillsDir string) *SkillService {
+	return &SkillService{repo: repo, skillsDir: skillsDir}
+}
+
+// InstallSkill persists a new skill to the database after copying the binary to the internal storage
+func (s *SkillService) InstallSkill(m types.SkillManifest) error {
+	// 1. Ensure the destination directory exists
+	if err := os.MkdirAll(s.skillsDir, 0700); err != nil {
+		return fmt.Errorf("failed to ensure skills directory: %w", err)
+	}
+
+	// 2. Identify source and destination
+	srcPath := m.Command
+	filename := m.ID + filepath.Ext(srcPath)
+	destPath := filepath.Join(s.skillsDir, filename)
+
+	// 3. Copy if needed
+	if srcPath != destPath {
+		if err := copyFile(srcPath, destPath); err != nil {
+			return fmt.Errorf("failed to copy skill binary: %w", err)
+		}
+	}
+	m.Command = destPath
+
+	// 4. Calculate Integrity Checksum (Phase 12)
+	checksum, err := s.CalculateHash(m.Command)
+	if err == nil {
+		m.Checksum = checksum
+	}
+
+	return s.repo.UpsertSkill(m)
+}
+
+
+func (s *SkillService) CalculateHash(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:]), nil
+}
+
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	if err != nil {
+		return err
+	}
+
+	// Make executable if it's a binary/wasm (usually just keep bits or set 0755)
+	return os.Chmod(dst, 0755)
+}
+
+
+// LoadAllIntoRegistry fetches all skills from DB and fills the memory registry
+func (s *SkillService) LoadAllIntoRegistry(reg *skills.Registry) error {
+	all, err := s.repo.GetAllSkills()
+	if err != nil {
+		return err
+	}
+	for _, sm := range all {
+		reg.Register(sm)
+	}
+	log.Printf("Skills: Loaded %d tools from DB into registry", len(all))
+	return nil
+}
+
+// ListSkills returns all installed metadata
+func (s *SkillService) ListSkills() ([]types.SkillManifest, error) {
+	return s.repo.GetAllSkills()
+}
