@@ -7,8 +7,8 @@ import (
 	"os"
 )
 
-// VerifyChecksum hashes the given file using SHA-256 and compares it to expectedHash.
 func VerifyChecksum(filePath, expectedHash string) error {
+	/* VerifyChecksum hashes the given file using SHA-256 and compares it to expectedHash. */
 	f, err := os.Open(filePath)
 	if err != nil {
 		return err

@@ -108,3 +108,44 @@ func (a *OllamaAdapter) CheckHealth(ctx context.Context) error {
 	defer resp.Body.Close()
 	return nil
 }
+
+func (a *OllamaAdapter) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
+	// Ollama /api/embed takes {"model": "...", "input": ["..."]}
+	host := a.baseURL[:len(a.baseURL)-9]
+	embedURL := host + "/api/embed"
+	
+	payload := map[string]interface{}{
+		"model": model,
+		"input": texts,
+	}
+	
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", embedURL, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	
+	resp, err := a.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Ollama embed returned status: %d", resp.StatusCode)
+	}
+	
+	var parsed struct {
+		Embeddings [][]float32 `json:"embeddings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+	
+	return parsed.Embeddings, nil
+}

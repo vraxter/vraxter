@@ -25,6 +25,14 @@ type SkillManifest struct {
 	Score       float64   `json:"score"`
 	Downloads   int       `json:"downloads"`
 	IsOfficial  bool      `json:"is_official"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"` // Configurable max execution time for WASM
+
+	// Intent Resolver Metadata
+	Keywords   []string `json:"keywords"`    // Exact word matching
+	Examples   []string `json:"examples"`    // Semantic or UI examples
+	Tags       []string `json:"tags"`        // Broad categorization
+	ParamRegex string   `json:"param_regex"` // Regex pattern with named capture groups
+	Vector     []float32 `json:"vector,omitempty"` // Runtime cached embedding vector
 }
 
 // ExecutionStatus represents the current state of a skill's execution

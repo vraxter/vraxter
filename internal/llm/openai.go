@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 type openaiMessage struct {
@@ -124,4 +125,57 @@ func (a *OpenAIAdapter) CheckHealth(ctx context.Context) error {
 		return fmt.Errorf("unhealthy status: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func (a *OpenAIAdapter) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
+	if a.apiKey == "" {
+		return nil, fmt.Errorf("OpenAI API Key is missing")
+	}
+
+	payload := map[string]interface{}{
+		"model": model,
+		"input": texts,
+	}
+
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	// We append /embeddings to the base URL domain instead of /chat/completions
+	embedURL := strings.Replace(a.baseURL, "chat/completions", "embeddings", 1)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", embedURL, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+
+	resp, err := a.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("OpenAI embed returned status: %d", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+
+	var results [][]float32
+	for _, raw := range parsed.Data {
+		results = append(results, raw.Embedding)
+	}
+	return results, nil
 }

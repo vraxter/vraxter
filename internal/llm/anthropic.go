@@ -121,3 +121,7 @@ func (a *AnthropicAdapter) CheckHealth(ctx context.Context) error {
 	// We check for simple unauthorized errors
 	return nil
 }
+
+func (a *AnthropicAdapter) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
+	return nil, fmt.Errorf("unimplemented: anthropic embeddings")
+}

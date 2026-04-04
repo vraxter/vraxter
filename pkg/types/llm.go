@@ -13,3 +13,11 @@ type ModelConfig struct {
 	Capabilities  string `json:"capabilities"` // Comma separated capabilities: "vision,tools,1M-context"
 	ContextWindow int    `json:"context_window"` // Stored explicit size
 }
+
+// LLMResponse is the structured format expected uniformly from ALL providers
+type LLMResponse struct {
+	Action  string                 `json:"action"`              // "chat" or "skill"
+	SkillID string                 `json:"skill_id,omitempty"`
+	Params  map[string]interface{} `json:"params,omitempty"`
+	Content string                 `json:"content,omitempty"`
+}

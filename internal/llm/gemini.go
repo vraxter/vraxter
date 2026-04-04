@@ -256,3 +256,76 @@ func (a *GeminiAdapter) CheckHealth(ctx context.Context) error {
 
 	return nil
 }
+
+func (a *GeminiAdapter) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
+	if a.apiKey == "" {
+		return nil, fmt.Errorf("Gemini API Key is missing")
+	}
+
+	modelName := model
+	if !strings.HasPrefix(modelName, "models/") {
+		modelName = "models/" + modelName
+	}
+	
+	// Fast workaround: batchEmbedContents allows multiple text embeddings in one call
+	embedURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/%s:batchEmbedContents?key=%s", modelName, a.apiKey)
+
+	// Build Requests
+	type embedReq struct {
+		Model   string `json:"model"`
+		Content struct {
+			Parts []map[string]string `json:"parts"`
+		} `json:"content"`
+	}
+	
+	var requests []embedReq
+	for _, text := range texts {
+		r := embedReq{Model: modelName}
+		r.Content.Parts = []map[string]string{{"text": text}}
+		requests = append(requests, r)
+	}
+
+	payload := map[string]interface{}{
+		"requests": requests,
+	}
+
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", embedURL, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errData map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&errData)
+		return nil, fmt.Errorf("Gemini embed returned status: %d - %v", resp.StatusCode, errData)
+	}
+
+	var parsed struct {
+		Embeddings []struct {
+			Values []float32 `json:"values"`
+		} `json:"embeddings"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+
+	var results [][]float32
+	for _, e := range parsed.Embeddings {
+		results = append(results, e.Values)
+	}
+	return results, nil
+}

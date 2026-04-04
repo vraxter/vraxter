@@ -43,6 +43,7 @@ type CompletionResponse struct {
 type Provider interface {
 	Generate(ctx context.Context, req CompletionRequest) (CompletionResponse, error)
 	StreamGenerate(ctx context.Context, req CompletionRequest) (<-chan StreamEvent, error)
+	Embed(ctx context.Context, model string, texts []string) ([][]float32, error)
 	CheckHealth(ctx context.Context) error
 }
 

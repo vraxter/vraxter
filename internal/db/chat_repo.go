@@ -28,14 +28,38 @@ func (r *ChatRepository) CreateConversation(c *types.Conversation) error {
 	return err
 }
 
+// FindConversation finds a conversation by its exact session ID
+func (r *ChatRepository) FindConversation(id string) (*types.Conversation, error) {
+	query := "SELECT id, title, summary, specialist_id, created_at, updated_at FROM conversations WHERE id = ?"
+	row := r.store.Conn.QueryRow(query, id)
+
+	var c types.Conversation
+	var sID, sum sql.NullString
+	err := row.Scan(&c.ID, &c.Title, &sum, &sID, &c.CreatedAt, &c.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed fetching conversation: %w", err)
+	}
+
+	if sum.Valid {
+		c.Summary = sum.String
+	}
+	if sID.Valid {
+		c.SpecialistID = sID.String
+	}
+	return &c, nil
+}
+
 // FindLatestConversationBySpecialist finds the master rolling-chat for a specialist
 func (r *ChatRepository) FindLatestConversationBySpecialist(specialistID string) (*types.Conversation, error) {
-	query := "SELECT id, title, specialist_id, created_at, updated_at FROM conversations WHERE specialist_id = ? ORDER BY created_at DESC LIMIT 1"
+	query := "SELECT id, title, summary, specialist_id, created_at, updated_at FROM conversations WHERE specialist_id = ? ORDER BY created_at DESC LIMIT 1"
 	row := r.store.Conn.QueryRow(query, specialistID)
 
 	var c types.Conversation
-	var sID sql.NullString
-	err := row.Scan(&c.ID, &c.Title, &sID, &c.CreatedAt, &c.UpdatedAt)
+	var sID, sum sql.NullString
+	err := row.Scan(&c.ID, &c.Title, &sum, &sID, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Not found, that's fine
@@ -45,6 +69,9 @@ func (r *ChatRepository) FindLatestConversationBySpecialist(specialistID string)
 
 	if sID.Valid {
 		c.SpecialistID = sID.String
+	}
+	if sum.Valid {
+		c.Summary = sum.String
 	}
 	return &c, nil
 }
@@ -84,4 +111,24 @@ func (r *ChatRepository) GetMessagesByConversation(conversationID string, limit 
 		msgs = append(msgs, m)
 	}
 	return msgs, nil
+}
+
+// UpdateConversationSummary overwrites the background memory block
+func (r *ChatRepository) UpdateConversationSummary(conversationID string, summary string) error {
+	query := "UPDATE conversations SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+	_, err := r.store.Conn.Exec(query, summary, conversationID)
+	return err
+}
+
+// TruncateOldMessages deletes messages for a conversation EXCLUDING the N most recent ones
+func (r *ChatRepository) TruncateOldMessages(conversationID string, keepN int) error {
+	query := `
+		DELETE FROM messages 
+		WHERE conversation_id = ? 
+		AND id NOT IN (
+			SELECT id FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT ?
+		)
+	`
+	_, err := r.store.Conn.Exec(query, conversationID, conversationID, keepN)
+	return err
 }

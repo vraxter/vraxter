@@ -20,30 +20,44 @@ import (
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
-// Runner manages the execution of local skills via IPC (Stdin/Stdout/WASM)
 type Runner struct {
 	Timeout time.Duration
-	
-	// Performance Optimization: Reusable runtime and module cache
 	runtime wazero.Runtime
 	cache   map[string]wazero.CompiledModule
 	mu      sync.RWMutex
 }
 
-// NewRunner creates a new Runner scoped to a timeout
 func NewRunner() *Runner {
 	ctx := context.Background()
-	r := wazero.NewRuntime(ctx)
-	
-	// Pre-instantiate WASI into the runtime
-	wasi_snapshot_preview1.MustInstantiate(ctx, r)
 
-	// --- Vraxter Power Host functions (vrax_v1) ---
-	_, err := r.NewHostModuleBuilder("vrax_v1").
+	// Hardening: 128MB Memory Limit (2048 pages * 64KB) and strict CPU bounds.
+	config := wazero.NewRuntimeConfig().
+		WithMemoryLimitPages(2048).
+		WithCloseOnContextDone(true)
+
+	r := wazero.NewRuntimeWithConfig(ctx, config)
+
+	wasi_snapshot_preview1.MustInstantiate(ctx, r)
+	if err := createHostBuilder(r, ctx); err != nil {
+		fmt.Printf("Warning: Failed to initialize Vraxter V1 host functions: %v\n", err)
+	}
+
+	rn := &Runner{
+		Timeout: 60 * time.Second,
+		runtime: r,
+		cache:   make(map[string]wazero.CompiledModule),
+	}
+	return rn
+}
+
+func createHostBuilder(rt wazero.Runtime, ctx context.Context) error {
+	_, err := rt.NewHostModuleBuilder("vrax_sandbox").
 		NewFunctionBuilder().
 		WithFunc(func(ctx context.Context, mod api.Module, urlPtr, urlLen, outPtr, outMax uint32) uint32 {
 			urlBytes, ok := mod.Memory().Read(urlPtr, urlLen)
-			if !ok { return 0 }
+			if !ok {
+				return 0
+			}
 			url := string(urlBytes)
 
 			client := &http.Client{Timeout: 10 * time.Second}
@@ -55,45 +69,33 @@ func NewRunner() *Runner {
 
 			body, _ := io.ReadAll(resp.Body)
 			if uint32(len(body)) > outMax {
-				body = body[:outMax] // Truncate to buffer size
+				body = body[:outMax]
 			}
 			mod.Memory().Write(outPtr, body)
 			return uint32(len(body))
 		}).
 		Export("http_get").
 		Instantiate(ctx)
-	if err != nil {
-		fmt.Printf("Warning: Failed to initialize Vraxter V1 host functions: %v\n", err)
-	}
 
-	return &Runner{
-		Timeout: 60 * time.Second,
-		runtime: r,
-		cache:   make(map[string]wazero.CompiledModule),
-	}
+	return err
 }
 
-// Close releases resources held by the runner
 func (rn *Runner) Close(ctx context.Context) error {
 	return rn.runtime.Close(ctx)
 }
-
-// Execute handles the environment selection logic based on the skill Manifest
 func (rn *Runner) Execute(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}) (*types.ExecutionResult, error) {
 	if manifest.Engine == "wasm" || manifest.Engine == "" {
 		return rn.executeWasm(ctx, manifest, params)
 	}
-	// Fallback to absolute OS level binary execution (Dangerous: Requires Trust)
 	return rn.executeNative(ctx, manifest, params)
 }
 
-// executeNative runs raw OS binaries.
 func (rn *Runner) executeNative(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}) (*types.ExecutionResult, error) {
 	reqPayload := types.SkillRequest{
 		JSONRPC: "2.0",
 		Method:  "execute",
 		Params:  params,
-		ID:      "1", // TODO: Use real IDs or from metadata
+		ID:      manifest.ID,
 	}
 
 	inputBytes, err := json.Marshal(reqPayload)
@@ -136,13 +138,12 @@ func (rn *Runner) executeNative(ctx context.Context, manifest types.SkillManifes
 	return response.Result, nil
 }
 
-// executeWasm handles executing .wasm sandboxed logic using Tetrate Labs Wazero engine
 func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}) (*types.ExecutionResult, error) {
 	reqPayload := types.SkillRequest{
 		JSONRPC: "2.0",
 		Method:  "execute",
 		Params:  params,
-		ID:      "1",
+		ID:      manifest.ID,
 	}
 
 	inputBytes, err := json.Marshal(reqPayload)
@@ -150,21 +151,28 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 		return nil, fmt.Errorf("failed to encode intent payload: %w", err)
 	}
 
-	execCtx, cancel := context.WithTimeout(ctx, rn.Timeout)
+	timeout := rn.Timeout
+	if manifest.TimeoutSeconds > 0 {
+		timeout = time.Duration(manifest.TimeoutSeconds) * time.Second
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 1. INTEGRITY CHECK (Vraxter Shield - Phase 12.10)
-	// We MUST ensure the file on disk matches what's in the DB
 	currentHash, err := rn.calculateHash(manifest.Command)
 	if err != nil {
 		return nil, fmt.Errorf("shield: failed to verify binary integrity: %w", err)
 	}
 	if manifest.Checksum != "" && currentHash != manifest.Checksum {
-		return nil, fmt.Errorf("CRITICAL SECURITY ALERT: Binary %s integrity verification FAILED. Expected %s, got %s. Possible hijacking or corruption detected", manifest.ID, manifest.Checksum, currentHash)
+		return nil, fmt.Errorf(
+			"CRITICAL SECURITY ALERT: Binary %s integrity verification FAILED. "+
+				"Expected %s, got %s. Possible hijacking or corruption detected",
+			manifest.ID,
+			manifest.Checksum,
+			currentHash,
+		)
 	}
 
-	// 2. PERMISSION SHIELD (Autonomous Trust v2)
-	// Priority: Official > Reputation (High score/downloads) > Sandbox Safety
 	isOfficial := manifest.IsOfficial
 	hasHighReputation := manifest.Score >= 4.0 && manifest.Downloads > 100
 	isSandboxSafe := len(manifest.Permissions) == 0
@@ -172,10 +180,11 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 	isAuthorized := isOfficial || hasHighReputation || isSandboxSafe
 
 	if !isAuthorized && manifest.Tier >= types.Tier3Unverified {
-		return nil, fmt.Errorf("VRAXTER SHIELD: Skill '%s' requires specialized permissions and lacks community trust. To allow this skill, run 'vraxter skills trust %s'", manifest.ID, manifest.ID)
+		return nil, fmt.Errorf(
+			"VRAXTER SHIELD: Skill '%s' requires specialized permissions and lacks community trust. "+
+				"To allow this skill, run 'vraxter skills trust %s'", manifest.ID, manifest.ID)
 	}
 
-	// 2. Get or Compile Module (Caching for Performance)
 	rn.mu.RLock()
 	compiled, ok := rn.cache[manifest.Command]
 	rn.mu.RUnlock()
@@ -183,12 +192,19 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 	if !ok {
 		wasmBytes, err := os.ReadFile(manifest.Command)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read WASM isolation binary %s: %w", manifest.Command, err)
+			return nil, fmt.Errorf(
+				"failed to read WASM isolation binary %s: %w",
+				manifest.Command,
+				err,
+			)
 		}
 
 		compiled, err = rn.runtime.CompileModule(execCtx, wasmBytes)
 		if err != nil {
-			return nil, fmt.Errorf("failed to compile WASM module: %w", err)
+			return nil, fmt.Errorf(
+				"failed to compile WASM module: %w",
+				err,
+			)
 		}
 
 		rn.mu.Lock()
@@ -200,25 +216,38 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 	config := wazero.NewModuleConfig().
 		WithStdin(bytes.NewReader(inputBytes)).
 		WithStdout(&stdout).
-		WithStderr(&stderr)
+		WithStderr(&stderr).
+		WithEnv("PATH", "").
+		WithFSConfig(wazero.NewFSConfig())
 
-	// 2. Instantiate and Execute instantly
-	_, err = rn.runtime.InstantiateModule(execCtx, compiled, config)
+	mod, err := rn.runtime.InstantiateModule(execCtx, compiled, config)
 	if err != nil {
 		if execCtx.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("wasm skill execution timed out")
 		}
-		return nil, fmt.Errorf("wasm skill crashed during execution: %v, stderr: %s", err, stderr.String())
+		return nil, fmt.Errorf(
+			"wasm skill crashed during execution: %v, stderr: %s",
+			err,
+			stderr.String(),
+		)
 	}
+	defer mod.Close(execCtx)
 
-	// 3. Return Output and Interpret
 	var response types.SkillResponse
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
-		return nil, fmt.Errorf("failed to parse WASM standard output: %w. Raw STDOUT: %s", err, stdout.String())
+		return nil, fmt.Errorf(
+			"failed to parse WASM standard output: %w. Raw STDOUT: %s",
+			err,
+			stdout.String(),
+		)
 	}
 
 	if response.Error != nil {
-		return nil, fmt.Errorf("wasm skill returned logical error: code %d, message: %s", response.Error.Code, response.Error.Message)
+		return nil, fmt.Errorf(
+			"wasm skill returned logical error: code %d, message: %s",
+			response.Error.Code,
+			response.Error.Message,
+		)
 	}
 
 	if response.Result == nil {

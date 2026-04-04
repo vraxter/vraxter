@@ -160,7 +160,7 @@ func init() {
 	modelsCmd.AddCommand(deactivateModelCmd)
 	modelsCmd.AddCommand(activateModelCmd)
 	modelsCmd.AddCommand(priorityModelCmd)
-	rootCmd.AddCommand(modelsCmd)
+	// rootCmd.AddCommand(modelsCmd)
 }
 
 var deleteModelCmd = &cobra.Command{

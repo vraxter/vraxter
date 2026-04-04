@@ -23,7 +23,7 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 	ctx := stream.Context()
 
 	// 1. Process intent via Engine (Returns a channel of events)
-	events, err := h.engine.ProcessRawIntent(ctx, req.Query, "")
+	events, err := h.engine.ProcessRawIntent(ctx, "grpc-default", req.Query, "")
 	if err != nil {
 		return fmt.Errorf("engine failed to initialize stream: %w", err)
 	}

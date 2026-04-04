@@ -155,6 +155,37 @@ var trustSkillCmd = &cobra.Command{
 }
 
 
+var execSkillCmd = &cobra.Command{
+	Use:   "exec [skill_id] [params...]",
+	Short: "Execute a skill completely natively without involving the LLM",
+	Args:  cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		skillID := args[0]
+		paramStr := ""
+		if len(args) > 1 {
+			paramStr = strings.Join(args[1:], " ")
+		}
+
+		ctx := cmd.Context()
+		sessionID := resolveSession()
+
+		// Bootstrap the entire engine quietly if needed 
+		// (main.go PersistentPreRun should cover it, but just in case)
+		
+		fmt.Printf("🚀 Firing native local execution for [%s]...\n", skillID)
+		
+		query := fmt.Sprintf("!%s %s", skillID, paramStr)
+		stream, err := appEngine.ProcessRawIntent(ctx, sessionID, query, agentFlag)
+		if err != nil {
+			fmt.Printf("❌ Engine Fast-Path Error: %v\n", err)
+			return
+		}
+
+		processStream(stream)
+	},
+}
+
+
 func init() {
 	addSkillCmd.Flags().StringVar(&sID, "id", "", "Unique Alias ID for the skill (e.g., hello-tool)")
 	addSkillCmd.Flags().StringVar(&sName, "name", "", "Display name")
@@ -170,5 +201,6 @@ func init() {
 	skillsCmd.AddCommand(listSkillsCmd)
 	skillsCmd.AddCommand(addSkillCmd)
 	skillsCmd.AddCommand(trustSkillCmd)
-	rootCmd.AddCommand(skillsCmd)
+	skillsCmd.AddCommand(execSkillCmd)
+	// rootCmd.AddCommand(skillsCmd) is done in main.go to avoid collisions, but let's leave it if it was here.
 }

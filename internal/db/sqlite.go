@@ -73,6 +73,10 @@ func (s *Store) initSchema() error {
 		checksum TEXT NOT NULL,
 		permissions TEXT NOT NULL DEFAULT '',
 		downloads INTEGER NOT NULL DEFAULT 0,
+		keywords TEXT NOT NULL DEFAULT '[]',
+		examples TEXT NOT NULL DEFAULT '[]',
+		tags TEXT NOT NULL DEFAULT '[]',
+		param_regex TEXT NOT NULL DEFAULT '',
 		installed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -147,6 +151,9 @@ func (s *Store) initSchema() error {
 	// Migration for Phase 16.2 (Model Capabilities)
 	_, _ = s.Conn.Exec("ALTER TABLE models ADD COLUMN capabilities TEXT DEFAULT ''")
 	_, _ = s.Conn.Exec("ALTER TABLE models ADD COLUMN context_window INTEGER DEFAULT 0")
+
+	// Migration for Context Summarization
+	_, _ = s.Conn.Exec("ALTER TABLE conversations ADD COLUMN summary TEXT DEFAULT ''")
 
 	return err
 }

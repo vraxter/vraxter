@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/md5"
 	"fmt"
 	"os"
 	"strings"
@@ -26,6 +27,7 @@ var (
 	appCrypto *security.CryptoService
 	appEngine *core.Engine
 	agentFlag   string
+	sessionFlag string
 	verboseFlag bool
 
 	bootstrapOnce sync.Once
@@ -58,7 +60,7 @@ func bootstrap() {
 		}
 
 		tm := services.NewToolchainManager(appConfig.SDKDir)
-		coder := services.NewCoderService(skillRepo, tm, appConfig.SkillsDir)
+		coder := services.NewCoderService(skillRepo, tm, appConfig.SkillsDir, runner)
 
 		appEngine, err = core.NewEngine(appStore, appCrypto, registry, runner, coder, verboseFlag)
 		if err != nil {
@@ -88,6 +90,7 @@ func main() {
 	rootCmd.AddCommand(skillsCmd)
 
 	rootCmd.Flags().StringVarP(&agentFlag, "agent", "a", "", "Delegate execution directly to a Specialist sub-agent ID")
+	rootCmd.Flags().StringVarP(&sessionFlag, "session", "s", "", "Specify a topic or conversation ID to isolate context")
 	rootCmd.PersistentFlags().BoolVarP(&verboseFlag, "verbose", "v", false, "Enable detailed logging")
 
 	if err := rootCmd.Execute(); err != nil {
@@ -96,23 +99,35 @@ func main() {
 	}
 }
 
+// resolveSession computes a conversation ID for the CLI.
+// If explicitly provided via --session, it's used directly.
+// Otherwise, it hashes the current working directory to group commands by project folder.
+func resolveSession() string {
+	if sessionFlag != "" {
+		return sessionFlag
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "cli-default"
+	}
+	return fmt.Sprintf("workspace-%x", md5.Sum([]byte(cwd)))
+}
+
 var rootCmd = &cobra.Command{
 	Use:   "vraxter",
 	Short: "Vraxter - Local-first AI agent engine",
 	Args:  cobra.ArbitraryArgs,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		// Only bootstrap if we are NOT using a sub-action that manages its own bootstrap
-		// or if we are the root command running standalone.
-		// For now, let's just bootstrap always for simplicity in the CLI
 		bootstrap() 
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
+		sessionID := resolveSession()
 
 		if len(args) == 0 {
-			// 2. Fallback: Standalone Mode (Full Bootstrap)
+			// 1. REPL Mode
 			fmt.Println(" [OFFLINE]")
-			fmt.Printf("🧠 Starting Local Motor (REPL Mode)...")
+			fmt.Printf("🧠 Starting Local Motor (REPL Mode)... Session: %s", sessionID)
 			bootstrap()
 			fmt.Println(" [READY]")
 			fmt.Println("\nWelcome to Vraxter. Press Ctrl+C to exit.")
@@ -128,7 +143,7 @@ var rootCmd = &cobra.Command{
 					continue
 				}
 
-				stream, err := appEngine.ProcessRawIntent(ctx, query, agentFlag)
+				stream, err := appEngine.ProcessRawIntent(ctx, sessionID, query, agentFlag)
 				if err != nil {
 					fmt.Printf("❌ Engine Error: %v\n", err)
 					continue
@@ -140,11 +155,12 @@ var rootCmd = &cobra.Command{
 
 		query := strings.Join(args, " ")
 
-		// 1. Try Remote Mode (gRPC Daemon)
+		// 2. Try Remote Mode (gRPC Daemon)
 		fmt.Printf("🔍 Connecting to Vraxter Daemon...")
 		gClient, err := client.NewGRPCClient(":50051")
 		if err == nil {
 			fmt.Println(" [CONNECTED]")
+			// TODO: Add SessionID passing in gRPC client executing in v1.1
 			stream, err := gClient.ExecuteStream(ctx, query)
 			if err != nil {
 				fmt.Printf("❌ gRPC stream error: %v\n", err)
@@ -154,13 +170,13 @@ var rootCmd = &cobra.Command{
 			return
 		}
 
-		// 2. Fallback: Standalone Mode (Full Bootstrap)
+		// 3. Fallback: Standalone Mode (Full Bootstrap)
 		fmt.Println(" [OFFLINE]")
-		fmt.Printf("🧠 Starting Local Motor (Standalone)...")
+		fmt.Printf("🧠 Starting Local Motor (Standalone)... Context: %s", sessionID)
 		bootstrap()
 		fmt.Println(" [READY]")
 
-		stream, err := appEngine.ProcessRawIntent(ctx, query, agentFlag)
+		stream, err := appEngine.ProcessRawIntent(ctx, sessionID, query, agentFlag)
 		if err != nil {
 			fmt.Printf("❌ Engine Error: %v\n", err)
 			return

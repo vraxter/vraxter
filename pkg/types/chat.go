@@ -10,10 +10,18 @@ type Intent struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// IntentMatch represents the outcome of the IntentResolver
+type IntentMatch struct {
+	SkillID    string                 `json:"skill_id"`
+	Confidence float64                `json:"confidence"`
+	Params     map[string]interface{} `json:"params"`
+}
+
 // Conversation represents a chat session to group history
 type Conversation struct {
 	ID           string    `json:"id"`
 	Title        string    `json:"title"`
+	Summary      string    `json:"summary,omitempty"`
 	SpecialistID string    `json:"specialist_id,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
