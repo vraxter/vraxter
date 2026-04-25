@@ -772,7 +772,10 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
   /session <id>     - Switches your context to a different session ID
   /models [args]    - Proxy: Run 'vraxter models' directly within TUI
   /skills [args]    - Proxy: Run 'vraxter skills' directly within TUI
-  /quit             - Exits Vraxter (or press Ctrl+C)
+  /specialists [args]- Proxy: Manage sub-agents directly within TUI
+  /user [args]      - Proxy: Manage your profile directly within TUI
+  /add [args]       - Proxy: Quickly add a skill or model
+  /quit, /exit      - Exits Vraxter (or press Ctrl+C)
   /help, /?         - Shows this help menu
 `
 		m.appendHistory(BlockComponent, toolStyle.Render(help)+"\n\n")
@@ -904,7 +907,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	case "/quit", "/exit":
 		m.appendHistory(BlockComponent, toolStyle.Render("👋 Press Ctrl+C or ESC to exit.\n\n"))
 		return nil
-	case "/models", "/skills", "/add", "/specialists":
+	case "/models", "/skills", "/add", "/specialists", "/user":
 		m.appendHistory(BlockComponent, fmt.Sprintf("\n\n⚙️ Running local CLI: %s\n", cmd))
 		execArgs := append([]string{strings.TrimPrefix(parts[0], "/")}, parts[1:]...)
 
