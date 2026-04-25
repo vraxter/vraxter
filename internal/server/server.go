@@ -7,6 +7,8 @@ import (
 	v1 "github.com/patagonicrune/vraxter/api/v1"
 	"github.com/patagonicrune/vraxter/internal/core"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
+	"time"
 )
 
 // Start initiates the gRPC server for the Vraxter Daemon
@@ -17,7 +19,17 @@ func Start(engine *core.Engine, ready chan bool) {
 		return
 	}
 
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             2 * time.Second, // extremely permissive for local dev
+			PermitWithoutStream: true,            // allow pings even on idle connections
+		}),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle: 5 * time.Minute,
+			Time:              20 * time.Second,
+			Timeout:           10 * time.Second,
+		}),
+	)
 
 	// Register the Core Agent Service
 	handler := NewAgentHandler(engine)

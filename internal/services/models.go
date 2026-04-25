@@ -20,7 +20,7 @@ func NewModelService(repo *db.ModelRepository) *ModelService {
 }
 
 // AddAndVerifyModel tries to instantiate the target LLM and bounces a health check before permitting DB insertion.
-func (s *ModelService) AddAndVerifyModel(ctx context.Context, provider, modelName, apiKey, baseURL string, priority int) error {
+func (s *ModelService) AddAndVerifyModel(ctx context.Context, provider, modelName, apiKey, baseURL string, priority int, useCases string) error {
 	adapter, err := s.getAdapter(provider, apiKey, baseURL)
 	if err != nil {
 		return err
@@ -41,6 +41,7 @@ func (s *ModelService) AddAndVerifyModel(ctx context.Context, provider, modelNam
 		BaseURL:  baseURL,
 		Priority: priority,
 		IsActive: true,
+		UseCases: useCases,
 	}
 
 	if err := s.repo.UpsertModel(cfg); err != nil {
@@ -56,7 +57,7 @@ func (s *ModelService) ListModels() ([]types.ModelConfig, error) {
 }
 
 // UpdateModel allows changing specific fields of a model identified by its ID (or short ID)
-func (s *ModelService) UpdateModel(ctx context.Context, id string, alias, modelName, apiKey *string, priority *int, isActive *bool) error {
+func (s *ModelService) UpdateModel(ctx context.Context, id string, alias, modelName, apiKey *string, priority *int, isActive *bool, useCases *string) error {
 	m, err := s.repo.GetModelByID(id)
 	if err != nil {
 		return fmt.Errorf("model with ID prefix %s not found: %w", id, err)
@@ -74,7 +75,9 @@ func (s *ModelService) UpdateModel(ctx context.Context, id string, alias, modelN
 	if isActive != nil {
 		m.IsActive = *isActive
 	}
-
+	if useCases != nil {
+		m.UseCases = *useCases
+	}
 
 	if apiKey != nil {
 		m.APIKey = *apiKey

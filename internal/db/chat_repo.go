@@ -132,3 +132,56 @@ func (r *ChatRepository) TruncateOldMessages(conversationID string, keepN int) e
 	_, err := r.store.Conn.Exec(query, conversationID, conversationID, keepN)
 	return err
 }
+
+// ListConversations returns the N most recent conversations ordered by last activity
+func (r *ChatRepository) ListConversations(limit int) ([]types.Conversation, error) {
+	query := `
+		SELECT c.id, c.title, COALESCE(c.summary, ''), COALESCE(c.specialist_id, ''), c.created_at, c.updated_at,
+			(SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as msg_count
+		FROM conversations c
+		ORDER BY c.updated_at DESC
+		LIMIT ?
+	`
+	rows, err := r.store.Conn.Query(query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list conversations: %w", err)
+	}
+	defer rows.Close()
+
+	var convs []types.Conversation
+	for rows.Next() {
+		var c types.Conversation
+		var msgCount int
+		if err := rows.Scan(&c.ID, &c.Title, &c.Summary, &c.SpecialistID, &c.CreatedAt, &c.UpdatedAt, &msgCount); err != nil {
+			return nil, err
+		}
+		c.MessageCount = msgCount
+		convs = append(convs, c)
+	}
+	return convs, nil
+}
+
+// GetFullConversation retrieves ALL messages for a conversation, ordered chronologically
+func (r *ChatRepository) GetFullConversation(conversationID string) ([]types.Message, error) {
+	query := `
+		SELECT id, conversation_id, role, content, tokens_used, timestamp
+		FROM messages
+		WHERE conversation_id = ?
+		ORDER BY timestamp ASC
+	`
+	rows, err := r.store.Conn.Query(query, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch full conversation: %w", err)
+	}
+	defer rows.Close()
+
+	var msgs []types.Message
+	for rows.Next() {
+		var m types.Message
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.TokensUsed, &m.Timestamp); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, nil
+}

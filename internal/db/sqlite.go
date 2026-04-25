@@ -56,6 +56,9 @@ func (s *Store) initSchema() error {
 		name TEXT NOT NULL,
 		language TEXT NOT NULL DEFAULT 'en',
 		theme_preference TEXT NOT NULL DEFAULT 'system',
+		expertise TEXT DEFAULT '',
+		interests TEXT DEFAULT '',
+		bio TEXT DEFAULT '',
 		registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -77,6 +80,7 @@ func (s *Store) initSchema() error {
 		examples TEXT NOT NULL DEFAULT '[]',
 		tags TEXT NOT NULL DEFAULT '[]',
 		param_regex TEXT NOT NULL DEFAULT '',
+		vector BLOB DEFAULT NULL,
 		installed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -122,7 +126,8 @@ func (s *Store) initSchema() error {
 		priority INTEGER DEFAULT 99,
 		is_active BOOLEAN DEFAULT 1,
 		capabilities TEXT DEFAULT '',
-		context_window INTEGER DEFAULT 8192
+		context_window INTEGER DEFAULT 8192,
+		use_cases TEXT DEFAULT ''
 	);
 
 	CREATE TABLE IF NOT EXISTS specialists (
@@ -133,6 +138,16 @@ func (s *Store) initSchema() error {
 		system_prompt TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS embeddings (
+		id TEXT PRIMARY KEY,
+		conversation_id TEXT NOT NULL,
+		text_content TEXT NOT NULL,
+		vector BLOB NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(conversation_id) REFERENCES conversations(id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_embeddings_conv ON embeddings (conversation_id);
 
 	`
 	_, err := s.Conn.Exec(schema)
@@ -155,6 +170,36 @@ func (s *Store) initSchema() error {
 	// Migration for Context Summarization
 	_, _ = s.Conn.Exec("ALTER TABLE conversations ADD COLUMN summary TEXT DEFAULT ''")
 
+	// Migration: User Profile fields (Phase 18)
+	_, _ = s.Conn.Exec("ALTER TABLE users ADD COLUMN expertise TEXT DEFAULT ''")
+	_, _ = s.Conn.Exec("ALTER TABLE users ADD COLUMN interests TEXT DEFAULT ''")
+	_, _ = s.Conn.Exec("ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''")
+	
+	// Migration: Skills metadata (Phase 20)
+	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN keywords TEXT NOT NULL DEFAULT '[]'")
+	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN examples TEXT NOT NULL DEFAULT '[]'")
+	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN param_regex TEXT NOT NULL DEFAULT ''")
+	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN vector BLOB DEFAULT NULL")
+
+	return err
+}
+
+func (s *Store) BootstrapDefaultUser() error {
+	var count int
+	err := s.Conn.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	_, err = s.Conn.Exec(`
+		INSERT INTO users (id, name, language, theme_preference, expertise, interests, bio)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"default", "Vraxter User", "en", "system", "Software Engineer", "Artificial Intelligence, Automation", "A power user looking for automated efficiency.",
+	)
 	return err
 }
 

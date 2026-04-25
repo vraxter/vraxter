@@ -9,37 +9,72 @@ import (
 	"github.com/patagonicrune/vraxter/internal/llm"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 )
 
-// gRPCClient manages the connection to the Vraxter Daemon
-type gRPCClient struct {
+// GRPCClient manages the connection to the Vraxter Daemon
+type GRPCClient struct {
 	conn   *grpc.ClientConn
 	client v1.AgentServiceClient
 }
 
 // NewGRPCClient connects to the local daemon
-func NewGRPCClient(addr string) (*gRPCClient, error) {
-	// Fast Dial: if it's not there, we want to know quickly to fallback to local mode
+func NewGRPCClient(addr string) (*GRPCClient, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	conn, err := grpc.DialContext(ctx, addr, 
+	conn, err := grpc.DialContext(ctx, addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: false,
+		}),
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return &gRPCClient{
+	return &GRPCClient{
 		conn:   conn,
 		client: v1.NewAgentServiceClient(conn),
 	}, nil
 }
 
+// Close gracefully shuts down the gRPC connection
+func (c *GRPCClient) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
+}
+
+// GetInfo returns daemon metadata
+func (c *GRPCClient) GetInfo(ctx context.Context) (map[string]string, error) {
+	resp, err := c.client.GetInfo(ctx, &v1.GetInfoRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"model_id": resp.ModelId,
+		"version":  resp.Version,
+		"status":   resp.Status,
+	}, nil
+}
+
 // ExecuteStream sends a query and returns a generic LLM StreamEvent channel
-func (c *gRPCClient) ExecuteStream(ctx context.Context, query string) (<-chan llm.StreamEvent, error) {
-	req := &v1.ExecuteRequest{Query: query}
+func (c *GRPCClient) ExecuteStream(ctx context.Context, query string, conversationID string, specialistID string, modelID string) (<-chan llm.StreamEvent, error) {
+	if specialistID != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "specialist-id", specialistID)
+	}
+	req := &v1.ExecuteRequest{
+		Query:          query,
+		ConversationId: conversationID,
+		SpecialistId:   specialistID,
+		ModelId:        modelID,
+	}
 	stream, err := c.client.Execute(ctx, req)
 	if err != nil {
 		return nil, err
@@ -49,19 +84,16 @@ func (c *gRPCClient) ExecuteStream(ctx context.Context, query string) (<-chan ll
 
 	go func() {
 		defer close(out)
-		defer c.conn.Close()
-
 
 		for {
 			resp, err := stream.Recv()
 			if err != nil {
-				// End of stream or error
 				return
 			}
 
-			// Map gRPC response back to internal StreamEvent
 			event := llm.StreamEvent{
-				Content: resp.Content,
+				Content:       resp.Content,
+				ActiveModelID: resp.ActiveModelId,
 			}
 
 			switch resp.Type {
@@ -72,6 +104,12 @@ func (c *gRPCClient) ExecuteStream(ctx context.Context, query string) (<-chan ll
 			case v1.ExecuteResponse_ERROR:
 				event.Type = llm.EventTypeError
 				event.Err = fmt.Errorf("%s", resp.Content)
+			case v1.ExecuteResponse_PLAN_PROPOSAL:
+				event.Type = llm.EventTypePlanProposal
+			case v1.ExecuteResponse_STATUS:
+				event.Type = llm.EventTypeStatus
+			case v1.ExecuteResponse_SPECIALIST_RESULT:
+				event.Type = llm.EventTypeSpecialistResult
 			case v1.ExecuteResponse_DONE:
 				event.Type = llm.EventTypeDone
 				out <- event
@@ -83,4 +121,58 @@ func (c *gRPCClient) ExecuteStream(ctx context.Context, query string) (<-chan ll
 	}()
 
 	return out, nil
+}
+
+// ConversationSummary is a lightweight view of a conversation for listing
+type ConversationSummary struct {
+	ID           string
+	Title        string
+	MessageCount int
+	CreatedAt    string
+	UpdatedAt    string
+}
+
+// HistoryMessage is a single message entry for conversation replay
+type HistoryMessage struct {
+	Role      string
+	Content   string
+	Timestamp string
+}
+
+// ListHistory returns the most recent conversations
+func (c *GRPCClient) ListHistory(ctx context.Context, limit int) ([]ConversationSummary, error) {
+	resp, err := c.client.ListHistory(ctx, &v1.ListHistoryRequest{Limit: int32(limit)})
+	if err != nil {
+		return nil, err
+	}
+
+	var result []ConversationSummary
+	for _, conv := range resp.Conversations {
+		result = append(result, ConversationSummary{
+			ID:           conv.Id,
+			Title:        conv.Title,
+			MessageCount: int(conv.MessageCount),
+			CreatedAt:    conv.CreatedAt,
+			UpdatedAt:    conv.UpdatedAt,
+		})
+	}
+	return result, nil
+}
+
+// GetConversation returns all messages for a given conversation ID
+func (c *GRPCClient) GetConversation(ctx context.Context, conversationID string) ([]HistoryMessage, error) {
+	resp, err := c.client.GetConversation(ctx, &v1.GetConversationRequest{ConversationId: conversationID})
+	if err != nil {
+		return nil, err
+	}
+
+	var result []HistoryMessage
+	for _, msg := range resp.Messages {
+		result = append(result, HistoryMessage{
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp,
+		})
+	}
+	return result, nil
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -212,13 +213,24 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 		rn.mu.Unlock()
 	}
 
+	fsConfig := wazero.NewFSConfig()
+	for _, perm := range manifest.Permissions {
+		if strings.HasPrefix(perm, "fs_read:") {
+			dir := strings.TrimPrefix(perm, "fs_read:")
+			fsConfig = fsConfig.WithReadOnlyDirMount(dir, dir)
+		} else if strings.HasPrefix(perm, "fs_write:") {
+			dir := strings.TrimPrefix(perm, "fs_write:")
+			fsConfig = fsConfig.WithDirMount(dir, dir)
+		}
+	}
+
 	var stdout, stderr bytes.Buffer
 	config := wazero.NewModuleConfig().
 		WithStdin(bytes.NewReader(inputBytes)).
 		WithStdout(&stdout).
 		WithStderr(&stderr).
 		WithEnv("PATH", "").
-		WithFSConfig(wazero.NewFSConfig())
+		WithFSConfig(fsConfig)
 
 	mod, err := rn.runtime.InstantiateModule(execCtx, compiled, config)
 	if err != nil {
@@ -235,10 +247,18 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 
 	var response types.SkillResponse
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		// FALLBACK: If the WASM tool outputs raw text or invalid JSONRPC, gracefully wrap it!
+		rawStr := strings.TrimSpace(stdout.String())
+		if rawStr != "" {
+			return &types.ExecutionResult{
+				Status: "completed",
+				Output: rawStr,
+			}, nil
+		}
+		
 		return nil, fmt.Errorf(
-			"failed to parse WASM standard output: %w. Raw STDOUT: %s",
+			"failed to parse WASM standard output and STDOUT was empty. Raw err: %w",
 			err,
-			stdout.String(),
 		)
 	}
 
@@ -251,6 +271,14 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 	}
 
 	if response.Result == nil {
+		// FALLBACK for properly parsed JSON but missing root payload
+		rawStr := strings.TrimSpace(stdout.String())
+		if rawStr != "" {
+			return &types.ExecutionResult{
+				Status: "completed",
+				Output: rawStr,
+			}, nil
+		}
 		return nil, fmt.Errorf("wasm response format malformation: missing root payload")
 	}
 

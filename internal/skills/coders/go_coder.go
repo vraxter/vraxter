@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/patagonicrune/vraxter/internal/db"
@@ -18,6 +19,7 @@ import (
 
 type GoToolchain interface {
 	GetGoPath() string
+	GetTinyGoPath() string
 	IsReady(lang string) bool
 	SetupSDK(lang string) error
 }
@@ -48,43 +50,41 @@ func (c *GoCoder) Compile(name, description, code string) error {
 
 	code = strings.TrimSpace(code)
 
-	startIdx := strings.Index(code, "```")
-	if startIdx != -1 {
-		openingTagEnd := strings.Index(code[startIdx:], "\n")
-		if openingTagEnd == -1 {
-			code = code[startIdx+3:]
-		} else {
-			code = code[startIdx+openingTagEnd+1:]
-		}
-
-		if endIdx := strings.Index(code, "```"); endIdx != -1 {
-			code = code[:endIdx]
+	// Clean out markdown blocks using regex
+	re := regexp.MustCompile(`(?s)(?:` + "```" + `(?:go)?\s*)(.*?)(?:` + "```" + `)`)
+	matches := re.FindStringSubmatch(code)
+	if len(matches) > 1 {
+		code = matches[1]
+	} else {
+		// Fallback: Manually trim markdown backticks if regex didn't trigger
+		if strings.HasPrefix(code, "```") {
+			lines := strings.Split(code, "\n")
+			if len(lines) > 2 {
+				code = strings.Join(lines[1:len(lines)-1], "\n")
+			}
 		}
 	}
 	code = strings.TrimSpace(code)
 
-	if !strings.Contains(code, "package main") {
-		if strings.Contains(code, "import ") && !strings.Contains(code, "\"") && !strings.Contains(code, "(") {
-			return fmt.Errorf("code detected as non-Go (likely Python/Ruby). Please use Go (standard lib only)")
-		}
-		if strings.Contains(code, "def ") {
-			return fmt.Errorf("code detected as Python (contains 'def'). Please provide Go implementation")
-		} else {
-			if !strings.Contains(code, "func main()") {
-				code = "package main\n\nimport \"fmt\"\n\n" + code + "\n\nfunc main() {}\n"
-			} else {
-				code = "package main\n\nimport \"fmt\"\n\n" + code
-			}
-		}
+	// Language detection sanity checks
+	if strings.Contains(code, "def ") && !strings.Contains(code, "func ") {
+		return fmt.Errorf("code detected as Python (contains 'def'). Please provide Go implementation")
+	}
 
-		code = "package main\n\nimport \"fmt\"\n\n" + code
+	// Normalizing the main package structure
+	hasPackageMain := strings.Contains(code, "package main")
+	hasFuncMain := strings.Contains(code, "func main()")
+
+	if !hasPackageMain {
+		code = "package main\n\n" + code
 	} else {
 		if pkgIdx := strings.Index(code, "package main"); pkgIdx > 0 {
 			code = code[pkgIdx:]
 		}
-		if !strings.Contains(code, "func main()") {
-			code = code + "\n\nfunc main() {}\n"
-		}
+	}
+
+	if !hasFuncMain {
+		code = code + "\n\nfunc main() {}\n"
 	}
 
 	log.Printf("GoCoder: Compiling skill '%s' (%d bytes). Preview: %.50s...", name, len(code), strings.ReplaceAll(code, "\n", " "))
@@ -106,13 +106,33 @@ func (c *GoCoder) Compile(name, description, code string) error {
 		os.WriteFile(sdkPath, []byte(sdkCode), 0600)
 	}
 
-	cmd := exec.Command(goPath, "build", "-o", wasmPath, ".")
-	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+	var cmd *exec.Cmd
+	var isTinyGo bool
+	if c.TM.IsReady("tinygo") {
+		tinyGoPath := c.TM.GetTinyGoPath()
+		cmd = exec.Command(tinyGoPath, "build", "-o", wasmPath, "-target=wasi", ".")
+		isTinyGo = true
+	} else {
+		goPath := c.TM.GetGoPath()
+		cmd = exec.Command(goPath, "build", "-o", wasmPath, ".")
+		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+	}
 
+	cmd.Dir = workDir
 	output, err := cmd.CombinedOutput()
+
+	// If TinyGo fails (e.g., unsupported stdlib package like full 'net/http'), fallback automatically to standard Go!
+	if err != nil && isTinyGo {
+		log.Printf("GoCoder: TinyGo compilation failed, falling back to standard Go compiler. Reason: %v", err)
+		goPath := c.TM.GetGoPath()
+		cmd = exec.Command(goPath, "build", "-o", wasmPath, ".")
+		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+		cmd.Dir = workDir
+		output, err = cmd.CombinedOutput()
+	}
+
 	if err != nil {
-		return fmt.Errorf("go build failed: %v | log: %s", err, string(output))
+		return fmt.Errorf("build failed: %v | log: %s", err, string(output))
 	}
 
 	checksum := ""
@@ -140,7 +160,7 @@ func (c *GoCoder) Compile(name, description, code string) error {
 		return fmt.Errorf("skill compiled successfully but failed verification check (Dry-Run crashed): %v", err)
 	}
 
-	// TODO: Dispatch to Central Vraxter Hub 
+	// Technical success logged to vraxter.log
 	log.Printf("GoCoder: Skill verified! Persisting '%s' to database.", skillID)
 
 	return c.Repo.UpsertSkill(manifest)

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -16,6 +17,8 @@ type StreamParser struct {
 	markerTool string
 	markerCode string
 
+	enforcementSuffix string
+
 	fullBuffer strings.Builder
 	chatPos    int
 }
@@ -25,6 +28,8 @@ func NewStreamParser(chat, tool, code string) *StreamParser {
 		markerChat: chat,
 		markerTool: tool,
 		markerCode: code,
+		enforcementSuffix: fmt.Sprintf("\n\n[CRITICAL: IF tools are needed, follow the EXACT protocol: %s (Friendly confirmation), %s (Valid JSON parameters), %s (Full source code). NO MARKDOWN!]",
+			chat, tool, code),
 	}
 }
 
@@ -33,55 +38,46 @@ func (p *StreamParser) ProcessToken(token string) (chatContent string) {
 	p.fullBuffer.WriteString(token)
 	accumulated := p.fullBuffer.String()
 
-	// Find where CHAT starts
+	// 1. Identify where everything starts and stops
 	chatStart := strings.Index(accumulated, p.markerChat)
-	if chatStart == -1 {
-		// No VRAX_CHAT marker — this is a native chat response.
-		// Only hold back if the tail looks like it could be building a marker (has a '<').
-		tail := accumulated[p.chatPos:]
-		if strings.Contains(tail, "<") {
-			// Hold — might be building <<<VRAX_CHAT>>>
-			return ""
-		}
-		if len(tail) == 0 {
-			return ""
-		}
-		p.chatPos = len(accumulated)
-		return tail
-	}
-
-	chatStart += len(p.markerChat)
-
-	// If there's a TOOL marker, we stop streaming chat there.
 	toolStart := strings.Index(accumulated, p.markerTool)
-	if toolStart != -1 && p.chatPos >= toolStart {
-		return "" // Tool has started, silent mode
-	}
+	codeStart := strings.Index(accumulated, p.markerCode)
 
-	endIdx := len(accumulated)
+	// Determine where we should stop streaming chat
+	chatStopIdx := len(accumulated)
 	if toolStart != -1 {
-		endIdx = toolStart
+		chatStopIdx = toolStart
+	} else if codeStart != -1 {
+		chatStopIdx = codeStart
 	} else {
-		// Only hold back if the tail could be forming a <<<VRAX marker
+		// Only hold back if the tail strictly looks like a Vraxter marker [VRAX_...
+		// This prevents holding back simple conversational [ brackets.
 		tail := accumulated[p.chatPos:]
-		if strings.Contains(tail, "<") {
-			// Find the '<' and only emit up to it
-			angIdx := strings.LastIndex(accumulated, "<")
-			if angIdx > p.chatPos {
-				endIdx = angIdx
-			} else {
-				return ""
-			}
+		if strings.HasSuffix(tail, "[V") || strings.HasSuffix(tail, "[VR") || strings.HasSuffix(tail, "[VRA") || strings.HasSuffix(tail, "[VRAX") {
+			return ""
 		}
 	}
 
-	if p.chatPos < chatStart {
-		p.chatPos = chatStart
+	// Determine where we should start streaming from
+	var streamFrom int
+	if chatStart != -1 {
+		streamFrom = chatStart + len(p.markerChat)
+		// Skip optional colon and spacing that models love to add
+		for streamFrom < len(accumulated) && (accumulated[streamFrom] == ':' || accumulated[streamFrom] == ' ') {
+			streamFrom++
+		}
+	} else {
+		// Native chat mode: start from the beginning
+		streamFrom = 0
 	}
 
-	if p.chatPos < endIdx {
-		chunk := accumulated[p.chatPos:endIdx]
-		p.chatPos = endIdx
+	if p.chatPos < streamFrom {
+		p.chatPos = streamFrom
+	}
+
+	if p.chatPos < chatStopIdx {
+		chunk := accumulated[p.chatPos:chatStopIdx]
+		p.chatPos = chatStopIdx
 		return chunk
 	}
 
@@ -95,12 +91,22 @@ func (p *StreamParser) ToolPayload() string {
 		return ""
 	}
 	toolStart += len(p.markerTool)
-
-	codeStart := strings.Index(full, p.markerCode)
-	if codeStart == -1 {
-		return full[toolStart:]
+	// Skip optional colon and spacing
+	for toolStart < len(full) && (full[toolStart] == ':' || full[toolStart] == ' ' || full[toolStart] == '\n') {
+		toolStart++
 	}
-	return full[toolStart:codeStart]
+
+	// Find the FIRST marker that appears AFTER toolStart to act as the boundary
+	nextBoundary := len(full)
+	for _, marker := range []string{p.markerCode, p.markerChat} {
+		if idx := strings.Index(full[toolStart:], marker); idx != -1 {
+			if toolStart+idx < nextBoundary {
+				nextBoundary = toolStart + idx
+			}
+		}
+	}
+
+	return strings.TrimSpace(full[toolStart:nextBoundary])
 }
 
 func (p *StreamParser) CodePayload() string {
@@ -110,7 +116,20 @@ func (p *StreamParser) CodePayload() string {
 		return ""
 	}
 	codeStart += len(p.markerCode)
-	return full[codeStart:]
+	// Skip optional colon and spacing
+	for codeStart < len(full) && (full[codeStart] == ':' || full[codeStart] == ' ' || full[codeStart] == '\n') {
+		codeStart++
+	}
+	// Find the FIRST marker that appears AFTER codeStart to act as the boundary
+	nextBoundary := len(full)
+	for _, marker := range []string{p.markerTool, p.markerChat} {
+		if idx := strings.Index(full[codeStart:], marker); idx != -1 {
+			if codeStart+idx < nextBoundary {
+				nextBoundary = codeStart + idx
+			}
+		}
+	}
+	return strings.TrimSpace(full[codeStart:nextBoundary])
 }
 
 func (p *StreamParser) State() int { return 0 }
@@ -119,15 +138,15 @@ func (p *StreamParser) State() int { return 0 }
 // Must be called when the stream is fully done (EventTypeDone).
 func (p *StreamParser) Flush() string {
 	full := p.fullBuffer.String()
-	// If there's an active VRAX tool block, don't flush chat
-	if strings.Contains(full, p.markerTool) {
-		return ""
-	}
 
 	chatStart := strings.Index(full, p.markerChat)
 	var from int
 	if chatStart != -1 {
 		from = chatStart + len(p.markerChat)
+		// Skip optional colon and spacing
+		for from < len(full) && (full[from] == ':' || full[from] == ' ') {
+			from++
+		}
 	} else {
 		from = 0
 	}
@@ -140,7 +159,7 @@ func (p *StreamParser) Flush() string {
 		remaining := full[p.chatPos:]
 		p.chatPos = len(full)
 		// Strip any VRAX markers that sneaked in at the tail
-		if idx := strings.Index(remaining, "<<<"); idx != -1 {
+		if idx := strings.Index(remaining, "[VRAX"); idx != -1 {
 			remaining = remaining[:idx]
 		}
 		return remaining

@@ -22,7 +22,7 @@ func NewModelRepository(store *Store, crypto *security.CryptoService) *ModelRepo
 
 // GetActiveModels fetches user configured models sorted by highest priority and decrypts API keys on the fly
 func (r *ModelRepository) GetActiveModels() ([]types.ModelConfig, error) {
-	query := "SELECT id, alias, provider, model, COALESCE(api_key, ''), COALESCE(base_url, ''), priority, is_active, COALESCE(capabilities, ''), COALESCE(context_window, 8192) FROM models WHERE is_active = 1 ORDER BY priority ASC"
+	query := "SELECT id, alias, provider, model, COALESCE(api_key, ''), COALESCE(base_url, ''), priority, is_active, COALESCE(capabilities, ''), COALESCE(context_window, 8192), COALESCE(use_cases, '') FROM models WHERE is_active = 1 ORDER BY priority ASC"
 	rows, err := r.store.Conn.Query(query)
 	if err != nil {
 		return nil, err
@@ -33,7 +33,7 @@ func (r *ModelRepository) GetActiveModels() ([]types.ModelConfig, error) {
 	for rows.Next() {
 		var m types.ModelConfig
 		var encryptedKey string
-		if err := rows.Scan(&m.ID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow); err != nil {
+		if err := rows.Scan(&m.ID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases); err != nil {
 			log.Printf("Failed to scan model: %v", err)
 			continue
 		}
@@ -54,7 +54,7 @@ func (r *ModelRepository) GetActiveModels() ([]types.ModelConfig, error) {
 
 // GetAllModels fetches all models (active or inactive) for management
 func (r *ModelRepository) GetAllModels() ([]types.ModelConfig, error) {
-	query := "SELECT id, alias, provider, model, COALESCE(api_key, ''), COALESCE(base_url, ''), priority, is_active, COALESCE(capabilities, ''), COALESCE(context_window, 8192) FROM models ORDER BY priority ASC, id DESC"
+	query := "SELECT id, alias, provider, model, COALESCE(api_key, ''), COALESCE(base_url, ''), priority, is_active, COALESCE(capabilities, ''), COALESCE(context_window, 8192), COALESCE(use_cases, '') FROM models ORDER BY priority ASC, id DESC"
 	rows, err := r.store.Conn.Query(query)
 	if err != nil {
 		return nil, err
@@ -65,7 +65,7 @@ func (r *ModelRepository) GetAllModels() ([]types.ModelConfig, error) {
 	for rows.Next() {
 		var m types.ModelConfig
 		var encryptedKey string
-		if err := rows.Scan(&m.ID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow); err != nil {
+		if err := rows.Scan(&m.ID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases); err != nil {
 			log.Printf("Failed to scan model: %v", err)
 			continue
 		}
@@ -79,7 +79,7 @@ func (r *ModelRepository) GetAllModels() ([]types.ModelConfig, error) {
 
 // GetAllModelsPublic returns all models without decrypting keys (faster for prompt building)
 func (r *ModelRepository) GetAllModelsPublic() ([]types.ModelConfig, error) {
-	query := "SELECT id, alias, provider, model, COALESCE(base_url, ''), priority, is_active, COALESCE(capabilities, ''), COALESCE(context_window, 8192) FROM models ORDER BY priority ASC"
+	query := "SELECT id, alias, provider, model, COALESCE(base_url, ''), priority, is_active, COALESCE(capabilities, ''), COALESCE(context_window, 8192), COALESCE(use_cases, '') FROM models ORDER BY priority ASC"
 	rows, err := r.store.Conn.Query(query)
 	if err != nil {
 		return nil, err
@@ -89,7 +89,7 @@ func (r *ModelRepository) GetAllModelsPublic() ([]types.ModelConfig, error) {
 	var models []types.ModelConfig
 	for rows.Next() {
 		var m types.ModelConfig
-		err := rows.Scan(&m.ID, &m.Alias, &m.Provider, &m.Model, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow)
+		err := rows.Scan(&m.ID, &m.Alias, &m.Provider, &m.Model, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases)
 		if err != nil {
 			return nil, err
 		}
@@ -101,10 +101,10 @@ func (r *ModelRepository) GetAllModelsPublic() ([]types.ModelConfig, error) {
 
 // GetModelByID allows finding a model by its full ID or a prefix (e.g., first 6-8 chars)
 func (r *ModelRepository) GetModelByID(id string) (*types.ModelConfig, error) {
-	query := "SELECT id, alias, provider, model, COALESCE(api_key, ''), COALESCE(base_url, ''), priority, is_active, COALESCE(capabilities, ''), COALESCE(context_window, 8192) FROM models WHERE id LIKE ? LIMIT 1"
+	query := "SELECT id, alias, provider, model, COALESCE(api_key, ''), COALESCE(base_url, ''), priority, is_active, COALESCE(capabilities, ''), COALESCE(context_window, 8192), COALESCE(use_cases, '') FROM models WHERE id LIKE ? LIMIT 1"
 	var m types.ModelConfig
 	var encryptedKey string
-	err := r.store.Conn.QueryRow(query, id+"%").Scan(&m.ID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow)
+	err := r.store.Conn.QueryRow(query, id+"%").Scan(&m.ID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases)
 	if err != nil {
 		return nil, err
 	}
@@ -134,14 +134,14 @@ func (r *ModelRepository) UpsertModel(m types.ModelConfig) error {
 		return err
 	}
 
-	query := `INSERT INTO models (id, alias, provider, model, api_key, base_url, priority, is_active, capabilities, context_window)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	query := `INSERT INTO models (id, alias, provider, model, api_key, base_url, priority, is_active, capabilities, context_window, use_cases)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	          ON CONFLICT(id) DO UPDATE SET
 	          alias=excluded.alias, provider=excluded.provider, model=excluded.model,
 	          api_key=excluded.api_key, base_url=excluded.base_url, priority=excluded.priority, is_active=excluded.is_active,
-			  capabilities=excluded.capabilities, context_window=excluded.context_window`
+			  capabilities=excluded.capabilities, context_window=excluded.context_window, use_cases=excluded.use_cases`
 
-	_, err = r.store.Conn.Exec(query, m.ID, m.Alias, m.Provider, m.Model, encryptedKey, m.BaseURL, m.Priority, m.IsActive, m.Capabilities, m.ContextWindow)
+	_, err = r.store.Conn.Exec(query, m.ID, m.Alias, m.Provider, m.Model, encryptedKey, m.BaseURL, m.Priority, m.IsActive, m.Capabilities, m.ContextWindow, m.UseCases)
 	return err
 }
 

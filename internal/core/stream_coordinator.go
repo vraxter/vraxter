@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/patagonicrune/vraxter/internal/llm"
+	"github.com/patagonicrune/vraxter/internal/telemetry"
 	"github.com/patagonicrune/vraxter/pkg/types"
 	"github.com/patagonicrune/vraxter/pkg/vraxerror"
 )
@@ -29,6 +31,9 @@ func (sc *StreamCoordinator) Run(
 	req llm.CompletionRequest,
 	markerChat, markerTool, markerCode string,
 ) error {
+	ctx, span := telemetry.StartSpan(ctx, "core.StreamCoordinator_Run")
+	defer span.End()
+
 	orderedProviders := sc.Router.GetOrderedProviders()
 	if len(orderedProviders) == 0 {
 		return vraxerror.New(vraxerror.ErrTypeInternal, "no configured model providers available", false, nil)
@@ -51,7 +56,11 @@ func (sc *StreamCoordinator) Run(
 			}
 		} else {
 			msg := fmt.Sprintf("⚠️  [Fallback] Switching to %s", entry.Config.Model)
-			out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n" + msg + "\n"}
+			select {
+			case out <- llm.StreamEvent{Type: llm.EventTypeStatus, Content: msg}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 
 		stream, err := entry.Provider.StreamGenerate(ctx, currentReq)
@@ -77,22 +86,49 @@ func (sc *StreamCoordinator) Run(
 					lastErr = event.Err
 					break streamLoop
 				}
-				queue <- types.Event{Type: types.EventTypeError, Payload: event.Err}
-				out <- event
+				select {
+				case queue <- types.Event{Type: types.EventTypeError, Payload: event.Err}:
+				case <-ctx.Done():
+				}
+				select {
+				case out <- event:
+				case <-ctx.Done():
+				}
 				return nil
 
 			case llm.EventTypeToken:
 				if chatContent := parser.ProcessToken(event.Content); chatContent != "" {
 					isCommitted = true
-					queue <- types.Event{Type: types.EventTypeText, Payload: chatContent}
-					out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: chatContent}
+					
+					// SHIELD: Filter out internal control signals from the user-visible stream
+					cleanContent := chatContent
+					if containsControlSignal(chatContent) {
+						cleanContent = ""
+					}
+
+					if cleanContent != "" {
+						select {
+						case queue <- types.Event{Type: types.EventTypeText, Payload: cleanContent}:
+						case <-ctx.Done():
+						}
+						select {
+						case out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: cleanContent}:
+						case <-ctx.Done():
+						}
+					}
 				}
 
 			case llm.EventTypeDone:
 				if tail := parser.Flush(); tail != "" {
 					isCommitted = true
-					queue <- types.Event{Type: types.EventTypeText, Payload: tail}
-					out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: tail}
+					select {
+					case queue <- types.Event{Type: types.EventTypeText, Payload: tail}:
+					case <-ctx.Done():
+					}
+					select {
+					case out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: tail}:
+					case <-ctx.Done():
+					}
 				}
 
 				toolP := parser.ToolPayload()
@@ -103,18 +139,23 @@ func (sc *StreamCoordinator) Run(
 				}
 
 				if len(toolP) > 0 {
-					queue <- types.Event{
+					select {
+					case queue <- types.Event{
 						Type: types.EventTypeToolCall,
 						Payload: map[string]string{
 							"tool_payload": toolP,
 							"code_payload": codeP,
 						},
+					}:
+					case <-ctx.Done():
 					}
 				}
 
 				streamFinished = true
-				queue <- types.Event{Type: types.EventTypeDone, Payload: nil}
-				out <- event
+				select {
+				case queue <- types.Event{Type: types.EventTypeDone, Payload: nil}:
+				case <-ctx.Done():
+				}
 				break streamLoop
 			}
 		}
@@ -122,9 +163,22 @@ func (sc *StreamCoordinator) Run(
 
 	if !streamFinished {
 		err := vraxerror.New(vraxerror.ErrTypeNetwork, "all models failed in cascading fallback loop", false, lastErr)
-		queue <- types.Event{Type: types.EventTypeError, Payload: err}
+		select {
+		case queue <- types.Event{Type: types.EventTypeError, Payload: err}:
+		case <-ctx.Done():
+		}
 		return err
 	}
 
 	return nil
+}
+
+func containsControlSignal(s string) bool {
+	signals := []string{"◈DELEGATE_BACK", "vraxter-return-control"}
+	for _, sig := range signals {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
 }

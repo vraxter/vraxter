@@ -118,10 +118,39 @@ func printAvailableModels() {
 	w.Flush()
 }
 
+var specialistsDeleteCmd = &cobra.Command{
+	Use:   "delete <identifier>",
+	Short: "Delete a specialist profile (ID or Name)",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		identifier := args[0]
+
+		if appEngine.GetResolver() == nil {
+			fmt.Println("❌ Error: Engine resolver not initialized.")
+			return
+		}
+
+		// Use the same safe semantic search fallback used by the LLM
+		spec, err := appEngine.GetResolver().FindSpecialistSemantically(cmd.Context(), identifier)
+		if err != nil {
+			fmt.Printf("❌ Failed to isolate specialist safely: %v\n", err)
+			return
+		}
+
+		if err := appEngine.SpecialistRepo.DeleteSpecialist(spec.ID); err != nil {
+			fmt.Printf("❌ Error deleting specialist: %v\n", err)
+			return
+		}
+
+		fmt.Printf("🗑️ Specialist '%s' (ID: %s) permanently deleted.\n", spec.Name, spec.ID)
+	},
+}
+
 func init() {
 	specialistsCreateCmd.Flags().StringVarP(&createSpecialistModel, "model", "m", "", "Specific Model ID to assign to this specialist's isolated context")
 
 	specialistsCmd.AddCommand(specialistsListCmd)
 	specialistsCmd.AddCommand(specialistsCreateCmd)
+	specialistsCmd.AddCommand(specialistsDeleteCmd)
 	rootCmd.AddCommand(specialistsCmd)
 }

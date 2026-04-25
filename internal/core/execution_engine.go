@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/patagonicrune/vraxter/internal/llm"
 	"github.com/patagonicrune/vraxter/internal/services"
 	"github.com/patagonicrune/vraxter/internal/skills"
+	"github.com/patagonicrune/vraxter/internal/telemetry"
 	"github.com/patagonicrune/vraxter/pkg/types"
 	"github.com/patagonicrune/vraxter/pkg/vraxerror"
 )
@@ -20,12 +22,16 @@ import (
 // ExecutionEngine is responsible for running skills (both LLM-directed and fast-path),
 // logging execution events, and emitting result events to the output channel.
 type ExecutionEngine struct {
-	Registry  *skills.Registry
-	Runner    *skills.Runner
-	Coder     *services.CoderService
-	ChatRepo  *db.ChatRepository
-	SpecRepo  *db.SpecialistRepository
-	Verbose   bool
+	Registry      *skills.Registry
+	Runner        *skills.Runner
+	Coder         *services.CoderService
+	ChatRepo      *db.ChatRepository
+	SpecRepo      *db.SpecialistRepository
+	Verbose       bool
+	SwarmDelegate func(ctx context.Context, out chan<- llm.StreamEvent, specialistID string, task string, threadID string) string
+	ActivateModelDelegate func(sessionID, modelID string) error
+	RestoreModelDelegate  func(sessionID string)
+	ResolveSpecialistDelegate func(ctx context.Context, query string) (*types.Specialist, error)
 }
 
 // NewExecutionEngine creates a new ExecutionEngine.
@@ -47,33 +53,101 @@ func NewExecutionEngine(
 	}
 }
 
+// emitEvent safely sends an event to the out channel, aborting if context is canceled.
+func (e *ExecutionEngine) emitEvent(ctx context.Context, out chan<- llm.StreamEvent, event llm.StreamEvent) {
+	select {
+	case out <- event:
+	case <-ctx.Done():
+	}
+}
+
 // RunFastPath executes a pre-resolved skill match without consulting the LLM.
 // It emits a SkillCall event, runs the skill, and emits a Token event with the result.
 func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.StreamEvent, match types.IntentMatch, conversationID string) {
-	out <- llm.StreamEvent{Type: llm.EventTypeSkillCall, Content: match.SkillID}
-
-	manifest, err := e.Registry.FindSkill(match.SkillID)
-	if err != nil {
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n❌ Skill not found: %s", match.SkillID)}
-		return
-	}
-
 	e.ChatRepo.SaveMessage(&types.Message{
 		ID:             uuid.New().String(),
 		ConversationID: conversationID,
-		Role:           "skill",
-		Content:        fmt.Sprintf("Invoked %s (Fast Path)", match.SkillID),
+		Role:           match.Type,
+		Content:        fmt.Sprintf("Invoked %s (Fast Path)", match.ID),
 		Timestamp:      time.Now(),
 	})
 
-	result, err := e.Runner.Execute(ctx, *manifest, match.Params)
-	if err != nil {
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n❌ Skill execution failed: %v", err)}
-		return
-	}
+	var finalContent string
 
-	finalContent := fmt.Sprintf("\n[%s]: %s", match.SkillID, result.Output)
-	out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent}
+	switch match.Type {
+	case types.IntentTypeSkill:
+		// We don't emit EventTypeSkillCall here because DispatchToolPayload will do it consistently
+		manifest, err := e.Registry.FindSkill(match.ID)
+		if err != nil {
+			out <- llm.StreamEvent{
+				Type:    llm.EventTypeToken,
+				Content: fmt.Sprintf("\n❌ Skill not found: %s", match.ID),
+			}
+			return
+		}
+
+		// NATIVE SKILLS BYPASS: If it's a built-in manager tool, use the internal dispatcher
+		if strings.HasPrefix(match.ID, "vraxter-") {
+			payloadJSON, _ := json.Marshal(map[string]interface{}{
+				"skill_id": match.ID,
+				"params":   match.Params,
+			})
+			if feedback := e.DispatchToolPayload(ctx, out, string(payloadJSON), "", conversationID); feedback != "" {
+				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n" + feedback}
+				return
+			}
+		}
+
+		result, err := e.Runner.Execute(ctx, *manifest, match.Params)
+		if err != nil {
+			out <- llm.StreamEvent{
+				Type:    llm.EventTypeToken,
+				Content: fmt.Sprintf("\n❌ Skill execution failed: %v", err),
+			}
+			return
+		}
+
+		finalContent = fmt.Sprintf("\n[%s]: %s", match.ID, result.Output)
+		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent}
+	case types.IntentTypeCommand:
+		out <- llm.StreamEvent{Type: llm.EventTypeCommandCall, Content: match.ID}
+		cmd := exec.CommandContext(ctx, match.ID, match.Args...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			out <- llm.StreamEvent{
+				Type:    llm.EventTypeToken,
+				Content: fmt.Sprintf("\n❌ Command execution failed: %v", err),
+			}
+			return
+		}
+
+		finalContent = fmt.Sprintf("\n[%s]: %s", match.ID, string(output))
+		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent}
+	case types.IntentTypeSpecialist:
+		displayName := match.ID
+		spec, err := e.SpecRepo.GetSpecialist(match.ID)
+		if err == nil && spec != nil {
+			displayName = spec.Name
+		}
+
+		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n🔄 Sub-Agent Swarm Spawned: Delegating task to '%s' (Fast Path)...\n", displayName)}
+
+		if e.SwarmDelegate != nil {
+			taskText, _ := match.Params["task"].(string)
+			swarmResult := e.SwarmDelegate(ctx, out, match.ID, taskText, conversationID)
+			
+			// ◈ SEMANTIC PROTOCOL: Sub-agent result is now STREAMED natively.
+			// We send a metadata-only event to ensure the TUI latches the ID, but we do NOT repeat the content.
+			out <- llm.StreamEvent{
+				Type:    llm.EventTypeSpecialistResult, 
+				Content: fmt.Sprintf("%s|%s|", match.ID, displayName),
+			}
+			finalContent = swarmResult
+		} else {
+			finalContent = "\n❌ Error: SwarmDelegate not fully bound in engine."
+			out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent}
+		}
+	}
 
 	e.ChatRepo.SaveMessage(&types.Message{
 		ID:             uuid.New().String(),
@@ -86,7 +160,10 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 
 // ExecutePipeline independently consumes the event queue produced by the parser.
 // It aggregates assistant output, triggers tools asynchronously, and records history.
-func (e *ExecutionEngine) ExecutePipeline(ctx context.Context, in <-chan types.Event, out chan<- llm.StreamEvent, conversationID string) {
+func (e *ExecutionEngine) ExecutePipeline(ctx context.Context, in <-chan types.Event, out chan<- llm.StreamEvent, conversationID string) string {
+	ctx, span := telemetry.StartSpan(ctx, "engine.ExecutePipeline")
+	defer span.End()
+
 	var assistantText string
 
 	for event := range in {
@@ -100,7 +177,19 @@ func (e *ExecutionEngine) ExecutePipeline(ctx context.Context, in <-chan types.E
 			if payloadMap, ok := event.Payload.(map[string]string); ok {
 				toolP := payloadMap["tool_payload"]
 				codeP := payloadMap["code_payload"]
-				e.DispatchToolPayload(ctx, out, toolP, codeP, conversationID)
+				if feedback := e.DispatchToolPayload(ctx, out, toolP, codeP, conversationID); feedback != "" {
+					// Persist intermediate text before breaking off for retry
+					if assistantText != "" {
+						e.ChatRepo.SaveMessage(&types.Message{
+							ID:             uuid.New().String(),
+							ConversationID: conversationID,
+							Role:           "assistant",
+							Content:        strings.TrimSpace(assistantText),
+							Timestamp:      time.Now(),
+						})
+					}
+					return feedback
+				}
 			}
 
 		case types.EventTypeError:
@@ -124,6 +213,8 @@ func (e *ExecutionEngine) ExecutePipeline(ctx context.Context, in <-chan types.E
 			Timestamp:      time.Now(),
 		})
 	}
+
+	return ""
 }
 
 // DispatchToolPayload handles a parsed tool payload emitted by the LLM.
@@ -134,7 +225,7 @@ func (e *ExecutionEngine) DispatchToolPayload(
 	toolPayload string,
 	codePayload string,
 	conversationID string,
-) {
+) string {
 	rawTool := strings.TrimSpace(toolPayload)
 	if e.Verbose {
 		slog.Info("Parsing Tool JSON", "payload", rawTool)
@@ -145,7 +236,7 @@ func (e *ExecutionEngine) DispatchToolPayload(
 		if e.Verbose {
 			slog.Warn("Failed to unmarshal tool payload", "error", err)
 		}
-		return
+		return ""
 	}
 
 	skillID, _ := generic["skill_id"].(string)
@@ -153,7 +244,7 @@ func (e *ExecutionEngine) DispatchToolPayload(
 		skillID = "vraxter-coder"
 	}
 
-	out <- llm.StreamEvent{Type: llm.EventTypeSkillCall, Content: skillID}
+	e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeSkillCall, Content: skillID})
 
 	e.ChatRepo.SaveMessage(&types.Message{
 		ID:             uuid.New().String(),
@@ -163,37 +254,18 @@ func (e *ExecutionEngine) DispatchToolPayload(
 		Timestamp:      time.Now(),
 	})
 
-	switch skillID {
-	case "vraxter-create-specialist":
-		e.handleCreateSpecialist(out, generic, conversationID)
-
-	case "vraxter-delegate":
-		specID := ""
-		if params, ok := generic["params"].(map[string]interface{}); ok {
-			if s, ok := params["specialist_id"].(string); ok {
-				specID = s
-			}
-		}
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n🔄 Delegating query to Specialist %s...", specID)}
-		out <- llm.StreamEvent{Type: llm.EventTypeDone}
-
-	case "vraxter-return-control":
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n🔄 Returning control to Main Supervisor..."}
-		out <- llm.StreamEvent{Type: llm.EventTypeDone}
-
-	case "vraxter-coder", "vraxter-coder-rust":
-		if len(codePayload) > 0 {
-			e.handleCoderSkill(ctx, out, generic, codePayload, skillID, conversationID)
-		}
-
-	default:
-		e.handleStandardSkill(ctx, out, generic, skillID)
+	// Look for a registered internal command
+	if handler, exists := BuiltInCommands[skillID]; exists {
+		return handler(ctx, generic, codePayload, conversationID, e, out)
 	}
+
+	// Fallback to standard WASM/binary skill runner
+	return e.handleStandardSkill(ctx, out, generic, skillID)
 }
 
 // --- Internal handlers ---
 
-func (e *ExecutionEngine) handleCreateSpecialist(out chan<- llm.StreamEvent, generic map[string]interface{}, conversationID string) {
+func (e *ExecutionEngine) handleCreateSpecialist(ctx context.Context, out chan<- llm.StreamEvent, generic map[string]interface{}, conversationID string) {
 	name, expertise, modelID := "", "", ""
 	if params, ok := generic["params"].(map[string]interface{}); ok {
 		if n, ok := params["name"].(string); ok {
@@ -214,14 +286,13 @@ func (e *ExecutionEngine) handleCreateSpecialist(out chan<- llm.StreamEvent, gen
 			ModelID:   modelID,
 		}
 		e.SpecRepo.CreateSpecialist(s)
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ Sub-Agent Specialist '%s' created! (ID: %s, Model: %s)", name, s.ID, modelID)}
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ Sub-Agent Specialist '%s' created! (ID: %s, Model: %s)", name, s.ID, modelID)})
 	} else {
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: specific 'name' and 'expertise' required to create specialist."}
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: specific 'name' and 'expertise' required to create specialist."})
 	}
-	out <- llm.StreamEvent{Type: llm.EventTypeDone}
 }
 
-func (e *ExecutionEngine) handleCoderSkill(ctx context.Context, out chan<- llm.StreamEvent, generic map[string]interface{}, codePayload, skillID, conversationID string) {
+func (e *ExecutionEngine) handleCoderSkill(ctx context.Context, out chan<- llm.StreamEvent, generic map[string]interface{}, codePayload, skillID, conversationID string) string {
 	name, desc := "auto-tool", "Auto-generated skill"
 
 	if params, ok := generic["params"].(map[string]interface{}); ok {
@@ -256,28 +327,33 @@ func (e *ExecutionEngine) handleCoderSkill(ctx context.Context, out chan<- llm.S
 		if e.Verbose {
 			slog.Error("Coder Compilation Error", "error", err)
 		}
-		
-		// Wrap err into a standardized reproducible engine error
+
 		engineErr := vraxerror.New(vraxerror.ErrTypeSandbox, "Skill compilation/testing failed", true, err)
-		errMsg := fmt.Sprintf("\n❌ Code Generation Error: %s\n\n[RECOVERY PROTOCOL: Please fix the issues and retry.]", engineErr.Error())
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg}
+		errMsg := fmt.Sprintf("\n❌ Auto-Tool Iteration Failed: %s\n🔄 Engine retrying autonomously...", engineErr.Error())
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+
+		return fmt.Sprintf("Code Generation Error:\n%s\n\nPlease review your code block. Fix the compilation errors and RE-GENERATE the entire tool specifically using the 3 VRAXTER PROTOCOL tags ([VRAX_CHAT], [VRAX_TOOL], [VRAX_CODE]) EXACTLY as documented. DO NOT JUST RETURN CODE.", err.Error())
 	} else {
 		if e.Verbose {
 			slog.Info("Skill successfully compiled and installed", "skill", name)
 		}
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ Skill '%s' created and installed successfully!", name)}
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ Skill '%s' created and installed successfully!", name)})
 	}
-	out <- llm.StreamEvent{Type: llm.EventTypeDone}
+	return ""
 }
 
-func (e *ExecutionEngine) handleStandardSkill(ctx context.Context, out chan<- llm.StreamEvent, generic map[string]interface{}, skillID string) {
+func (e *ExecutionEngine) handleStandardSkill(ctx context.Context, out chan<- llm.StreamEvent, generic map[string]interface{}, skillID string) string {
 	manifest, err := e.Registry.FindSkill(skillID)
 	if err != nil {
-		return
+		return fmt.Sprintf("ERROR: Skill %s not found in registry.", skillID)
 	}
 	params, _ := generic["params"].(map[string]interface{})
 	result, err := e.Runner.Execute(ctx, *manifest, params)
-	if err == nil {
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n[%s]: %s", skillID, result.Output)}
+	if err != nil {
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n❌ Skill execution failed: %v", err)})
+		return fmt.Sprintf("SKILL ['%s'] FAILED: %v", skillID, err)
 	}
+	
+	e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n[%s]: %s", skillID, result.Output)})
+	return fmt.Sprintf("SKILL ['%s'] RETURNED RESULT: %s", skillID, result.Output)
 }

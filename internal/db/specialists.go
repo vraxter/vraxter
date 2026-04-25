@@ -59,3 +59,9 @@ func (r *SpecialistRepository) GetAllSpecialists() ([]types.Specialist, error) {
 
 	return list, nil
 }
+
+func (r *SpecialistRepository) DeleteSpecialist(id string) error {
+	query := `DELETE FROM specialists WHERE id = ?`
+	_, err := r.Store.Conn.Exec(query, id)
+	return err
+}

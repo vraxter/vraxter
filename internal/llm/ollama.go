@@ -5,7 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 )
 
 type ollamaMessage struct {
@@ -35,15 +39,29 @@ func NewOllamaAdapter(host string) *OllamaAdapter {
 	if host == "" {
 		host = "http://localhost:11434"
 	}
+	// Ensure protocol scheme
+	if !strings.Contains(host, "://") {
+		host = "http://" + host
+	}
 	return &OllamaAdapter{
-		baseURL:    host + "/api/chat",
-		httpClient: &http.Client{},
+		baseURL: host + "/api/chat",
+		httpClient: &http.Client{
+			Timeout: 20 * time.Minute,
+			Transport: &http.Transport{
+				ResponseHeaderTimeout: 60 * time.Second, // More time for large model load
+			},
+		},
 	}
 }
 
 func (a *OllamaAdapter) Generate(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
+	model := req.Model
+	if !strings.Contains(model, ":") {
+		model += ":latest"
+	}
+
 	payload := ollamaChatReq{
-		Model:    req.Model,
+		Model:    model,
 		Messages: make([]ollamaMessage, len(req.Messages)),
 		Stream:   false,
 	}
@@ -85,22 +103,97 @@ func (a *OllamaAdapter) Generate(ctx context.Context, req CompletionRequest) (Co
 }
 
 func (a *OllamaAdapter) StreamGenerate(ctx context.Context, req CompletionRequest) (<-chan StreamEvent, error) {
+	model := req.Model
+	if !strings.Contains(model, ":") {
+		model += ":latest"
+	}
+
+	payload := ollamaChatReq{
+		Model:    model,
+		Messages: make([]ollamaMessage, len(req.Messages)),
+		Stream:   true,
+	}
+
+	for i, m := range req.Messages {
+		payload.Messages[i] = ollamaMessage{
+			Role:    m.Role,
+			Content: m.Content,
+		}
+	}
+
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.baseURL, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	slog.Info("Ollama streaming request started", "model", req.Model, "url", a.baseURL)
+	resp, err := a.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+
 	ch := make(chan StreamEvent)
 	go func() {
+		defer resp.Body.Close()
 		defer close(ch)
-		res, err := a.Generate(ctx, req)
-		if err != nil {
-			ch <- StreamEvent{Type: EventTypeError, Err: err}
+
+		if resp.StatusCode != http.StatusOK {
+			ch <- StreamEvent{Type: EventTypeError, Err: fmt.Errorf("Ollama returned status: %d", resp.StatusCode)}
 			return
 		}
-		ch <- StreamEvent{Type: EventTypeToken, Content: res.Content}
-		ch <- StreamEvent{Type: EventTypeDone}
+
+		firstToken := true
+		decoder := json.NewDecoder(resp.Body)
+		for {
+			var chunk struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+				Done bool   `json:"done"`
+				Eval bool   `json:"eval"` // Some ollama versions use this
+				Error string `json:"error"`
+			}
+			if err := decoder.Decode(&chunk); err != nil {
+				if err == io.EOF {
+					ch <- StreamEvent{Type: EventTypeDone}
+					return
+				}
+				ch <- StreamEvent{Type: EventTypeError, Err: fmt.Errorf("ollama stream decode error: %w", err)}
+				return
+			}
+			if chunk.Error != "" {
+				ch <- StreamEvent{Type: EventTypeError, Err: fmt.Errorf("ollama reported error: %s", chunk.Error)}
+				return
+			}
+			if chunk.Message.Content != "" {
+				if firstToken {
+					slog.Info("Ollama first token arrived", "content", chunk.Message.Content)
+					firstToken = false
+				}
+				ch <- StreamEvent{Type: EventTypeToken, Content: chunk.Message.Content}
+			}
+			if chunk.Done {
+				ch <- StreamEvent{Type: EventTypeDone}
+				return
+			}
+		}
 	}()
+
 	return ch, nil
 }
 
 func (a *OllamaAdapter) CheckHealth(ctx context.Context) error {
-	req, _ := http.NewRequestWithContext(ctx, "GET", a.baseURL[:len(a.baseURL)-9], nil) // Just GET the host
+	host := a.baseURL[:len(a.baseURL)-9]
+	req, err := http.NewRequestWithContext(ctx, "GET", host, nil)
+	if err != nil {
+		return fmt.Errorf("invalid ollama host URL: %w", err)
+	}
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ollama not running at host: %w", err)

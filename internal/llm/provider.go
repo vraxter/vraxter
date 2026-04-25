@@ -19,19 +19,23 @@ type CompletionRequest struct {
 type StreamEventType string
 
 const (
-	EventTypeToken    StreamEventType = "token"
-	EventTypeError    StreamEventType = "error"
-	EventTypeDone     StreamEventType = "done"
-	EventTypeSkillCall StreamEventType = "skill_call"
+	EventTypeToken       StreamEventType = "token"
+	EventTypeError       StreamEventType = "error"
+	EventTypeDone        StreamEventType = "done"
+	EventTypeSkillCall   StreamEventType = "skill_call"
+	EventTypeCommandCall StreamEventType = "command_call"
+	EventTypePlanProposal StreamEventType = "plan_proposal"
+	EventTypeStatus       StreamEventType = "status"
+	EventTypeSpecialistResult StreamEventType = "specialist_result"
 )
 
 // StreamEvent is the unit of communication for Vraxter's reactive architecture
 type StreamEvent struct {
-	Type    StreamEventType
-	Content string
-	Err     error
+	Type          StreamEventType
+	Content       string
+	Err           error
+	ActiveModelID string // The model ID currently driving the session
 }
-
 
 // CompletionResponse encapsulates what an LLM responds
 type CompletionResponse struct {
@@ -46,4 +50,3 @@ type Provider interface {
 	Embed(ctx context.Context, model string, texts []string) ([][]float32, error)
 	CheckHealth(ctx context.Context) error
 }
-

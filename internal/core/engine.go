@@ -10,6 +10,7 @@ import (
 	"github.com/patagonicrune/vraxter/internal/security"
 	"github.com/patagonicrune/vraxter/internal/services"
 	"github.com/patagonicrune/vraxter/internal/skills"
+	appcfg "github.com/patagonicrune/vraxter/internal/config"
 )
 
 // LLMResponse is kept here for backward compatibility.
@@ -25,6 +26,7 @@ type Engine struct {
 	// Direct repo access for CLI sub-commands (e.g. specialists.go, models commands)
 	SpecialistRepo *db.SpecialistRepository
 	ModelsRepo     *db.ModelRepository
+	ChatRepo       *db.ChatRepository
 	// Expose Verbose for compatibility
 	Verbose bool
 }
@@ -37,8 +39,18 @@ func NewEngine(
 	run *skills.Runner,
 	coder *services.CoderService,
 	verbose bool,
+	appDir string, // needed to load routing.yaml
 ) (*Engine, error) {
-	orch, err := NewOrchestrator(store, crypto, reg, run, coder, verbose)
+	// Load the use-case routing config from disk (won't fail if missing)
+	routingCfg, err := appcfg.LoadRoutingConfig(appDir)
+	if err != nil {
+		// Best-effort: log and continue without routing overrides
+		routingCfg = appcfg.DefaultRoutingConfig()
+	}
+	// Ensure a documented sample is written on first run
+	_ = appcfg.WriteSampleRoutingConfig(appDir)
+
+	orch, err := NewOrchestrator(store, crypto, reg, run, coder, verbose, routingCfg.Routes)
 	if err != nil {
 		return nil, err
 	}
@@ -46,11 +58,21 @@ func NewEngine(
 		orch:           orch,
 		SpecialistRepo: orch.SpecialistRepo,
 		ModelsRepo:     orch.ModelsRepo,
+		ChatRepo:       orch.ChatRepo,
 		Verbose:        verbose,
 	}, nil
 }
 
+// GetResolver exposes the orchestrator's resolver
+func (e *Engine) GetResolver() *IntentResolver {
+	return e.orch.Resolver
+}
+
 // ProcessRawIntent delegates to the Orchestrator.
-func (e *Engine) ProcessRawIntent(ctx context.Context, sessionID, text, specialistID string) (<-chan llm.StreamEvent, error) {
-	return e.orch.ProcessRawIntent(ctx, sessionID, text, specialistID)
+func (e *Engine) ProcessRawIntent(ctx context.Context, sessionID, text, specialistID, overrideModelID string) (<-chan llm.StreamEvent, error) {
+	return e.orch.ProcessRawIntent(ctx, sessionID, text, specialistID, overrideModelID)
+}
+
+func (e *Engine) GetActiveModelID(sessionID string) string {
+	return e.orch.GetActiveModelID(sessionID)
 }

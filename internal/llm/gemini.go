@@ -140,7 +140,7 @@ func (a *GeminiAdapter) StreamGenerate(ctx context.Context, req CompletionReques
 
 	for _, m := range req.Messages {
 		switch m.Role {
-		case "system_instruction":
+		case "system":
 			systemMsg = &geminiContent{Parts: []geminiPart{{Text: m.Content}}}
 		case "user":
 			contents = append(contents, geminiContent{

@@ -33,3 +33,7 @@ go.work.sum
 
 *.db
 *.sqlite
+
+# Binaries
+bin/*
+output.log

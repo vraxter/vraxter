@@ -2,27 +2,33 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"regexp"
 	"strings"
 
+	"github.com/patagonicrune/vraxter/internal/db"
 	"github.com/patagonicrune/vraxter/internal/llm"
 	"github.com/patagonicrune/vraxter/internal/skills"
 	"github.com/patagonicrune/vraxter/pkg/types"
 )
 
-// IntentResolver scores incoming intents against existing skills
+// IntentResolver scores incoming intents against existing skills and specialists,
 // acting as a fast-path filter before falling back to the LLM.
 type IntentResolver struct {
 	registry  *skills.Registry
 	llmRouter *llm.Router
+	skillRepo *db.SkillRepository
+	specRepo  *db.SpecialistRepository
 }
 
 // NewIntentResolver constructs an IntentResolver
-func NewIntentResolver(registry *skills.Registry, llmRouter *llm.Router) *IntentResolver {
+func NewIntentResolver(registry *skills.Registry, llmRouter *llm.Router, repo *db.SkillRepository, specRepo *db.SpecialistRepository) *IntentResolver {
 	r := &IntentResolver{
 		registry:  registry,
 		llmRouter: llmRouter,
+		skillRepo: repo,
+		specRepo:  specRepo,
 	}
 
 	// Asynchronously bootstrap embedded models into memory if available
@@ -30,24 +36,55 @@ func NewIntentResolver(registry *skills.Registry, llmRouter *llm.Router) *Intent
 	return r
 }
 
-// Resolve analyzes the query and returns the best matching skill
+// Resolve analyzes the query and returns the best matching skill or specialist
 func (r *IntentResolver) Resolve(ctx context.Context, query string) types.IntentMatch {
 	lowerQuery := strings.ToLower(query)
 
-	// --- 1. SEMANTIC VECTOR LANE ---
+	// 0. QUICK MATCH: Check for Specialist mentions (Fast-Path Delegation)
+	if r.specRepo != nil {
+		allSpecs, err := r.specRepo.GetAllSpecialists()
+		if err == nil {
+			for _, s := range allSpecs {
+				// Exact name match or @mention match (Confidence 1.0)
+				if strings.Contains(lowerQuery, "@"+strings.ToLower(s.Name)) || strings.Contains(lowerQuery, strings.ToLower(s.Name)) {
+					return types.IntentMatch{
+						Type:       types.IntentTypeSpecialist,
+						ID:         s.ID,
+						Confidence: 1.0,
+						Params:     map[string]interface{}{"task": query},
+					}
+				}
+				// Domain/Expertise keyword match (Confidence 0.9)
+				expertiseKeywords := strings.Fields(strings.ToLower(s.Expertise))
+				for _, kw := range expertiseKeywords {
+					if len(kw) > 3 && strings.Contains(lowerQuery, kw) {
+						return types.IntentMatch{
+							Type:       types.IntentTypeSpecialist,
+							ID:         s.ID,
+							Confidence: 0.9,
+							Params:     map[string]interface{}{"task": query},
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Semantic matching by using embeddings
 	embedModel, embedProvider, err := r.llmRouter.GetEmbeddingProvider()
 	if err == nil && embedProvider != nil {
 		vecMatrix, err := embedProvider.Embed(ctx, embedModel.Model, []string{lowerQuery})
 		if err == nil && len(vecMatrix) > 0 {
 			queryVec := vecMatrix[0]
 			bestSemanticMatch := types.IntentMatch{}
-			
+
 			for _, skill := range r.registry.GetAll() {
 				if len(skill.Vector) > 0 {
-					sim := cosineSimilarity(queryVec, skill.Vector)
+					sim := CosineSimilarity(queryVec, skill.Vector)
 					if sim > bestSemanticMatch.Confidence {
 						bestSemanticMatch = types.IntentMatch{
-							SkillID:    skill.ID,
+							Type:       types.IntentTypeSkill,
+							ID:         skill.ID,
 							Confidence: sim,
 							Params:     map[string]interface{}{"query": query},
 						}
@@ -74,9 +111,10 @@ func (r *IntentResolver) Resolve(ctx context.Context, query string) types.Intent
 				if re.MatchString(lowerQuery) {
 					// We have a direct regex match! It's an absolute lock.
 					return types.IntentMatch{
-						SkillID:    skill.ID,
+						Type:       types.IntentTypeSkill,
+						ID:         skill.ID,
 						Confidence: 1.0,
-						Params:     extractRegexParams(re, query),
+						Params:     ExtractRegexParams(re, query),
 					}
 				}
 			}
@@ -99,7 +137,7 @@ func (r *IntentResolver) Resolve(ctx context.Context, query string) types.Intent
 
 		// Heavy boost for exact skill name match
 		if skill.Name != "" && strings.Contains(lowerQuery, strings.ToLower(skill.Name)) {
-			matchCount += 2 
+			matchCount += 2
 			totalKeywords += 2 // Normalize the total to avoid >1.0 just from name
 		}
 
@@ -117,7 +155,8 @@ func (r *IntentResolver) Resolve(ctx context.Context, query string) types.Intent
 		// If this is the best so far, record it
 		if confidence > bestMatch.Confidence {
 			bestMatch = types.IntentMatch{
-				SkillID:    skill.ID,
+				Type:       types.IntentTypeSkill,
+				ID:         skill.ID,
 				Confidence: confidence,
 				Params:     map[string]interface{}{"query": query},
 			}
@@ -127,8 +166,8 @@ func (r *IntentResolver) Resolve(ctx context.Context, query string) types.Intent
 	return bestMatch
 }
 
-// extractRegexParams maps regex named capture groups to a map[string]interface{}
-func extractRegexParams(re *regexp.Regexp, query string) map[string]interface{} {
+// ExtractRegexParams maps regex named capture groups to a map[string]interface{}
+func ExtractRegexParams(re *regexp.Regexp, query string) map[string]interface{} {
 	match := re.FindStringSubmatch(query)
 	params := make(map[string]interface{})
 
@@ -153,22 +192,28 @@ func (r *IntentResolver) PrecomputeEmbeddings() {
 	if err != nil || embedProvider == nil {
 		return // Gracefully skip if no embedded model is configured
 	}
-	
+
 	for _, rawSkill := range r.registry.GetAll() {
 		// Only calculate if missing
 		if len(rawSkill.Vector) == 0 {
 			textContext := rawSkill.Name + " - " + rawSkill.Description
+			if len(rawSkill.Examples) > 0 {
+				textContext += " Examples: " + strings.Join(rawSkill.Examples, "; ")
+			}
 			matrix, err := embedProvider.Embed(context.Background(), "", []string{textContext})
 			if err == nil && len(matrix) > 0 {
 				rawSkill.Vector = matrix[0]
-				r.registry.Register(rawSkill) // Re-save to memory with the updated vector
+				r.registry.Register(rawSkill)      // Update memory
+				if r.skillRepo != nil {
+					_ = r.skillRepo.UpsertSkill(rawSkill) // Persist to DB
+				}
 			}
 		}
 	}
 }
 
-// cosineSimilarity measures the angle between two float arrays
-func cosineSimilarity(a, b []float32) float64 {
+// CosineSimilarity measures the angle between two float arrays (exported for testing)
+func CosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) {
 		return 0
 	}
@@ -182,4 +227,59 @@ func cosineSimilarity(a, b []float32) float64 {
 		return 0
 	}
 	return dot / (math.Sqrt(magA) * math.Sqrt(magB))
+}
+
+// FindSpecialistSemantically attempts to find a specialist by ID, exact name, or semantic closeness. 
+// Uses a high confidence threshold (0.85) to avoid dangerous fuzzy actions.
+func (r *IntentResolver) FindSpecialistSemantically(ctx context.Context, query string) (*types.Specialist, error) {
+	if r.specRepo == nil {
+		return nil, fmt.Errorf("specialist repository not attached to resolver")
+	}
+
+	allSpecs, err := r.specRepo.GetAllSpecialists()
+	if err != nil || len(allSpecs) == 0 {
+		return nil, fmt.Errorf("no specialists found")
+	}
+
+	lowerQuery := strings.ToLower(strings.TrimSpace(query))
+
+	// 1. Literal Matches (ID or Name)
+	for _, s := range allSpecs {
+		if s.ID == lowerQuery || strings.ToLower(s.Name) == lowerQuery {
+			return &s, nil
+		}
+	}
+
+	// 2. Semantic Fallback
+	embedModel, embedProvider, err := r.llmRouter.GetEmbeddingProvider()
+	if err == nil && embedProvider != nil {
+		vecMatrix, err := embedProvider.Embed(ctx, embedModel.Model, []string{lowerQuery})
+		if err == nil && len(vecMatrix) > 0 {
+			queryVec := vecMatrix[0]
+			var bestMatch *types.Specialist
+			var highestScore float64 = 0.0
+
+			for _, s := range allSpecs {
+				// Embed "Name. Expertise" to give the model rich context mapping
+				doc := fmt.Sprintf("%s. %s", s.Name, s.Expertise)
+				docVecs, err := embedProvider.Embed(ctx, embedModel.Model, []string{doc})
+				if err == nil && len(docVecs) > 0 {
+					sim := CosineSimilarity(queryVec, docVecs[0])
+					if sim > highestScore {
+						highestScore = sim
+						// Create safely scoped pointer
+						safeS := s
+						bestMatch = &safeS
+					}
+				}
+			}
+
+			// Strict safety threshold
+			if bestMatch != nil && highestScore > 0.85 {
+				return bestMatch, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no specialist found matching '%s' with high confidence", query)
 }

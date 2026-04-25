@@ -12,11 +12,9 @@ import (
 	"github.com/patagonicrune/vraxter/internal/utils"
 )
 
-// ToolchainManager handles the hermetic installation and detection of SDKs (Go, Rust)
 type ToolchainManager struct {
 	sdkDir string
 
-	// Concurrency control to prevent multiple setups of the same language
 	mu          sync.Mutex
 	isSettingUp map[string]bool
 }
@@ -27,13 +25,11 @@ func NewToolchainManager(sdkDir string) *ToolchainManager {
 		isSettingUp: make(map[string]bool),
 	}
 
-	// Lazy setup: SDKs will be downloaded on-demand when a Coder needs them.
 	return m
 }
 
-// ProactiveSetup checks for missing SDKs and starts downloading them if needed
 func (m *ToolchainManager) ProactiveSetup() {
-	langs := []string{"go", "rust"}
+	langs := []string{"tinygo", "go", "rust"}
 	for _, lang := range langs {
 		if !m.IsReady(lang) {
 			fmt.Printf("🚀 Proactive Toolchain: %s is missing. Starting background prep...\n", lang)
@@ -48,7 +44,6 @@ func (m *ToolchainManager) ProactiveSetup() {
 	}
 }
 
-// GetGoPath returns the path to the hermetic go binary or the system one as fallback
 func (m *ToolchainManager) GetGoPath() string {
 	hermeticGo := filepath.Join(m.sdkDir, "go", "bin", "go")
 	if runtime.GOOS == "windows" {
@@ -59,12 +54,24 @@ func (m *ToolchainManager) GetGoPath() string {
 		return hermeticGo
 	}
 
-	// Fallback to system go
 	path, _ := exec.LookPath("go")
 	return path
 }
 
-// GetRustcPath returns the path to the hermetic rustc binary
+func (m *ToolchainManager) GetTinyGoPath() string {
+	hermeticTinyGo := filepath.Join(m.sdkDir, "tinygo", "bin", "tinygo")
+	if runtime.GOOS == "windows" {
+		hermeticTinyGo += ".exe"
+	}
+
+	if _, err := os.Stat(hermeticTinyGo); err == nil {
+		return hermeticTinyGo
+	}
+
+	path, _ := exec.LookPath("tinygo")
+	return path
+}
+
 func (m *ToolchainManager) GetRustcPath() string {
 	hermeticRustc := filepath.Join(m.sdkDir, "rust", "bin", "rustc")
 	if runtime.GOOS == "windows" {
@@ -79,11 +86,12 @@ func (m *ToolchainManager) GetRustcPath() string {
 	return path
 }
 
-// IsReady checks if the required tools for a language are available
 func (m *ToolchainManager) IsReady(lang string) bool {
 	switch lang {
 	case "go":
 		return m.GetGoPath() != ""
+	case "tinygo":
+		return m.GetTinyGoPath() != ""
 	case "rust":
 		return m.GetRustcPath() != ""
 	default:
@@ -91,12 +99,11 @@ func (m *ToolchainManager) IsReady(lang string) bool {
 	}
 }
 
-// SetupSDK downloads and extracts the SDK for the specified language
 func (m *ToolchainManager) SetupSDK(lang string) error {
 	m.mu.Lock()
 	if m.isSettingUp[lang] {
 		m.mu.Unlock()
-		return nil // Already in progress
+		return nil
 	}
 	m.isSettingUp[lang] = true
 	m.mu.Unlock()
@@ -128,6 +135,38 @@ func (m *ToolchainManager) SetupSDK(lang string) error {
 		}
 
 		fmt.Printf("📦 Extracting Go SDK...\n")
+		os.MkdirAll(dest, 0755)
+		var err error
+		if runtime.GOOS == "windows" {
+			err = utils.ExtractZip(tmpFile, dest)
+		} else {
+			err = utils.ExtractTarGz(tmpFile, dest)
+		}
+		if err != nil {
+			return err
+		}
+
+		utils.CleanupFolder(dest)
+		os.Remove(tmpFile)
+		return nil
+
+	case "tinygo":
+		url := m.getTinyGoURL()
+		if url == "" {
+			return fmt.Errorf("unsupported platform for TinyGo: %s/%s", runtime.GOOS, runtime.GOARCH)
+		}
+
+		tmpFile := filepath.Join(os.TempDir(), "vraxter-tinygo-sdk.tar.gz")
+		if runtime.GOOS == "windows" {
+			tmpFile = filepath.Join(os.TempDir(), "vraxter-tinygo-sdk.zip")
+		}
+
+		fmt.Printf("📥 Downloading TinyGo SDK for %s/%s...\n", runtime.GOOS, runtime.GOARCH)
+		if err := utils.DownloadFile(tmpFile, url); err != nil {
+			return err
+		}
+
+		fmt.Printf("📦 Extracting TinyGo SDK...\n")
 		os.MkdirAll(dest, 0755)
 		var err error
 		if runtime.GOOS == "windows" {
@@ -188,6 +227,32 @@ func (m *ToolchainManager) getGoURL() string {
 
 	arch := runtime.GOARCH
 	return fmt.Sprintf("https://go.dev/dl/go%s.%s-%s.%s", version, osName, arch, ext)
+}
+
+func (m *ToolchainManager) getTinyGoURL() string {
+	const version = "0.32.0"
+	var osName, arch, ext string
+
+	switch runtime.GOOS {
+	case "linux":
+		osName, ext = "linux", "tar.gz"
+	case "darwin":
+		osName, ext = "darwin", "tar.gz"
+	case "windows":
+		osName, ext = "windows", "zip"
+	default:
+		return ""
+	}
+
+	if runtime.GOARCH == "amd64" {
+		arch = "amd64"
+	} else if runtime.GOARCH == "arm64" {
+		arch = "arm64"
+	} else {
+		return ""
+	}
+
+	return fmt.Sprintf("https://github.com/tinygo-org/tinygo/releases/download/v%s/tinygo%s.%s-%s.%s", version, version, osName, arch, ext)
 }
 
 func (m *ToolchainManager) getRustURL() string {

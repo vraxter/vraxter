@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/patagonicrune/vraxter/internal/db"
 	"github.com/patagonicrune/vraxter/internal/services"
 	"github.com/patagonicrune/vraxter/pkg/types"
@@ -44,23 +45,18 @@ var listSkillsCmd = &cobra.Command{
 		}
 
 		fmt.Printf("\n🛡️  VRAXTER SHIELD — Installed Skills (%d)\n", len(all))
-		fmt.Println(strings.Repeat("─", 85))
-		fmt.Printf("%-18s %-22s %-10s %-8s %-8s %-12s\n",
-			"ID", "NAME", "TRUST", "SCORE", "DL", "ENGINE")
-		fmt.Println(strings.Repeat("─", 85))
+		header := fmt.Sprintf("%-15s | %-18s | %-12s | %-6s | %-4s | %-10s | %-6s", "ID", "NAME", "TRUST", "SCORE", "DL", "ENGINE", "SIG")
+		fmt.Println(header)
+		fmt.Println(strings.Repeat("―", 90))
 
 		for _, s := range all {
 			trust := "Community"
-			trustIcon := "⚙️ "
 			if s.IsOfficial {
 				trust = "[OFFICIAL]"
-				trustIcon = "✅"
 			} else if s.Score >= 4.0 && s.Downloads > 100 {
 				trust = "High Rep."
-				trustIcon = "⭐"
 			} else if len(s.Permissions) > 0 {
 				trust = "⚠️  Restricted"
-				trustIcon = "🔒"
 			}
 
 			checksumOK := "✓"
@@ -68,8 +64,17 @@ var listSkillsCmd = &cobra.Command{
 				checksumOK = "?"
 			}
 
-			fmt.Printf("%s %-17s %-22s %-10s %-8.1f %-8d %-12s [SHA:%s]\n",
-				trustIcon, s.ID, s.Name, trust, s.Score, s.Downloads, s.Engine, checksumOK)
+			// Cell-aware padding for perfect alignment
+			idStr := runewidth.FillRight(runewidth.Truncate(s.ID, 15, ".."), 15)
+			nameStr := runewidth.FillRight(runewidth.Truncate(s.Name, 18, ".."), 18)
+			trustStr := runewidth.FillRight(runewidth.Truncate(trust, 12, ".."), 12)
+			scoreStr := runewidth.FillRight(fmt.Sprintf("%.1f", s.Score), 6)
+			dlStr := runewidth.FillRight(fmt.Sprintf("%d", s.Downloads), 4)
+			engineStr := runewidth.FillRight(s.Engine, 10)
+			sigStr := runewidth.FillRight(checksumOK, 6)
+
+			fmt.Printf("%s | %s | %s | %s | %s | %s | %s\n",
+				idStr, nameStr, trustStr, scoreStr, dlStr, engineStr, sigStr)
 
 			if len(s.Permissions) > 0 {
 				fmt.Printf("   └─ Permissions: %s\n", strings.Join(s.Permissions, ", "))
@@ -154,7 +159,6 @@ var trustSkillCmd = &cobra.Command{
 	},
 }
 
-
 var execSkillCmd = &cobra.Command{
 	Use:   "exec [skill_id] [params...]",
 	Short: "Execute a skill completely natively without involving the LLM",
@@ -169,13 +173,13 @@ var execSkillCmd = &cobra.Command{
 		ctx := cmd.Context()
 		sessionID := resolveSession()
 
-		// Bootstrap the entire engine quietly if needed 
+		// Bootstrap the entire engine quietly if needed
 		// (main.go PersistentPreRun should cover it, but just in case)
-		
+
 		fmt.Printf("🚀 Firing native local execution for [%s]...\n", skillID)
-		
+
 		query := fmt.Sprintf("!%s %s", skillID, paramStr)
-		stream, err := appEngine.ProcessRawIntent(ctx, sessionID, query, agentFlag)
+		stream, err := appEngine.ProcessRawIntent(ctx, sessionID, query, agentFlag, "")
 		if err != nil {
 			fmt.Printf("❌ Engine Fast-Path Error: %v\n", err)
 			return
@@ -185,6 +189,21 @@ var execSkillCmd = &cobra.Command{
 	},
 }
 
+var deleteSkillCmd = &cobra.Command{
+	Use:   "delete <id>",
+	Short: "Delete a skill from Vraxter",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		id := args[0]
+		repo := db.NewSkillRepository(appStore)
+		err := repo.DeleteSkill(id)
+		if err != nil {
+			fmt.Printf("❌ Failed to delete skill: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✅ Skill '%s' deleted successfully.\n", id)
+	},
+}
 
 func init() {
 	addSkillCmd.Flags().StringVar(&sID, "id", "", "Unique Alias ID for the skill (e.g., hello-tool)")
@@ -202,5 +221,5 @@ func init() {
 	skillsCmd.AddCommand(addSkillCmd)
 	skillsCmd.AddCommand(trustSkillCmd)
 	skillsCmd.AddCommand(execSkillCmd)
-	// rootCmd.AddCommand(skillsCmd) is done in main.go to avoid collisions, but let's leave it if it was here.
+	skillsCmd.AddCommand(deleteSkillCmd)
 }
