@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package v1;
+option go_package = "github.com/patagonicrune/vraxter/api/v1";
+
+// AgentService manages the interaction between User Clients and The Brain
+service AgentService {
+  // Execute sends a natural language query and receives a stream of events
+  rpc Execute(ExecuteRequest) returns (stream ExecuteResponse);
+
+  // GetInfo returns the current status and metadata of the Vraxter Engine
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse);
+
+  // ListHistory returns the most recent conversations
+  rpc ListHistory(ListHistoryRequest) returns (ListHistoryResponse);
+
+  // GetConversation returns all messages for a specific conversation
+  rpc GetConversation(GetConversationRequest) returns (GetConversationResponse);
+}
+
+message GetInfoRequest {}
+
+message GetInfoResponse {
+  string model_id = 1;
+  string version = 2;
+  string status = 3;
+}
+
+message ExecuteRequest {
+  string query = 1;
+  string conversation_id = 2;
+  string specialist_id = 3;
+  string model_id = 4;
+}
+
+message ExecuteResponse {
+  enum Type {
+    TOKEN = 0;        // Incremental text token
+    TOOL_CALL = 1;    // The LLM wants to run a tool
+    TOOL_RESULT = 2;  // Results from a tool execution
+    ERROR = 3;        // Error during processing
+    DONE = 4;         // Final completion marker
+    PLAN_PROPOSAL = 5; // A multi-phase plan awaiting confirmation
+    STATUS = 6;       // System status notice (e.g. Fallback alerts)
+    SPECIALIST_RESULT = 7; // Sub-agent stream events
+  }
+  
+  Type type = 1;
+  string content = 2;      // Text content or JSON for tools
+  string skill_id = 3;     // ID if it's a tool-related event
+  string active_model_id = 4; // The model ID currently driving the execution
+}
+
+// --- History RPCs ---
+
+message ListHistoryRequest {
+  int32 limit = 1;
+}
+
+message ListHistoryResponse {
+  repeated ConversationSummary conversations = 1;
+}
+
+message ConversationSummary {
+  string id = 1;
+  string title = 2;
+  int32 message_count = 3;
+  string created_at = 4;
+  string updated_at = 5;
+}
+
+message GetConversationRequest {
+  string conversation_id = 1;
+}
+
+message GetConversationResponse {
+  repeated HistoryMessage messages = 1;
+}
+
+message HistoryMessage {
+  string role = 1;
+  string content = 2;
+  string timestamp = 3;
+}
+
