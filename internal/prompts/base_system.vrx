@@ -14,22 +14,16 @@ Protocol = [
 ]
 
 @System.WasmProtocol
-Terminology = "A 'skill' in Vraxter is an internal, executable Go plugin."
+Terminology = "A 'skill' in Vraxter is an internal, executable Go or Rust plugin. Go is preferred for logic-heavy tasks, while Rust is recommended for hardware interaction or low-level systems work."
 Execution = "Only when absolutely required, output exactly 3 DISTINCT blocks WITHOUT markdown backticks around the tool block: {{.MarkerChat}}, {{.MarkerTool}} (calling vraxter-coder), {{.MarkerCode}}"
-Boilerplate = [
-  "package main",
-  "import (\"encoding/json\"; \"os\"; \"fmt\")",
-  "func main() {",
-  "  var req struct { Params map[string]interface{} \"json:\\\"params\\\"\"; ID string \"json:\\\"id\\\"\" }",
-  "  if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil { return }",
-  "  if req.Params[\"_vraxter_dry_run\"] == true {",
-  "    fmt.Printf(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":\\\"%s\\\",\\\"result\\\":{\\\"status\\\":\\\"completed\\\",\\\"output\\\":\\\"dry-run success\\\"}}\", req.ID)",
-  "    return",
-  "  }",
-  "  fmt.Printf(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":\\\"%s\\\",\\\"result\\\":{\\\"status\\\":\\\"completed\\\",\\\"output\\\":\\\"Result\\\"}}\", req.ID)",
-  "}"
-]
 
+$Boilerplate.Go
+{{prefix "| " .GoBoilerplate}}
+
+$Boilerplate.Rust
+{{prefix "| " .RustBoilerplate}}
+
+@System.Context
 {{if .UserProfile}}$Context.Identity
 {{prefix "| " .UserProfile}}
 {{end}}

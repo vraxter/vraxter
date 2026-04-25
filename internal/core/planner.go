@@ -9,6 +9,8 @@ import (
 
 	"github.com/patagonicrune/vraxter/internal/db"
 	"github.com/patagonicrune/vraxter/internal/llm"
+	"github.com/patagonicrune/vraxter/internal/prompts"
+	"github.com/patagonicrune/vraxter/internal/utils"
 )
 
 // Plan represents an autonomous execution strategy broken down into observable phases.
@@ -51,34 +53,14 @@ func (p *Planner) BuildPlan(ctx context.Context, query string, existingContext s
 		return nil, fmt.Errorf("no models available for planning")
 	}
 
-	systemPrompt := `
-You are the Vraxter Architect. Your task is to analyze a complex user request and break it down into a multi-phase implementation plan.
-
-Your response MUST follow this exact hybrid format:
-
-# ARCHITECTURAL STRATEGY
-Provide a deep, detailed architectural analysis of the task. Explain trade-offs, file dependencies, and specific logic requirements. Use Markdown formatting, headers, and bullet points.
-
-[MANIFEST]
-{
-  "goal": "Clear summary of the final objective",
-  "reasoning": "Quick technical summary",
-  "phases": [
-    {
-      "title": "Phase name",
-      "description": "What happens here",
-      "tasks": ["step 1", "step 2"],
-      "specialist_id": "ID of specialist to use, or 'supervisor' for general tasks"
-    }
-  ],
-  "estimations": "Rough complexity/time estimate"
-}
-
-IMPORTANT: The [MANIFEST] section must be a VALID JSON object. Do not wrap the JSON in markdown code blocks.
-
-Existing context:
-%s
-`
+	systemPrompt, err := prompts.RenderPlanner(prompts.PlannerParams{
+		Query:               query,
+		GitContext:          utils.CaptureGitContext(""),
+		ExistingSpecialists: existingContext,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to render planner prompt: %w", err)
+	}
 
 	var lastErr error
 	// 2. Iterate through providers until we get a successful plan
@@ -90,7 +72,7 @@ Existing context:
 		req := llm.CompletionRequest{
 			Model: prov.Config.Model,
 			Messages: []llm.Message{
-				{Role: "system", Content: fmt.Sprintf(systemPrompt, existingContext)},
+				{Role: "system", Content: systemPrompt},
 				{Role: "user", Content: fmt.Sprintf("Create a plan for: %s", query)},
 			},
 			Format: "json",

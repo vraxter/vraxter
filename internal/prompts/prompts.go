@@ -8,12 +8,15 @@ import (
 	"text/template"
 )
 
-//go:embed *.md *.vrx
+//go:embed *.vrx
 var promptFiles embed.FS
 
 var (
-	baseSystemTpl *template.Template
-	specialistTpl *template.Template
+	baseSystemTpl   *template.Template
+	specialistTpl   *template.Template
+	plannerTpl      *template.Template
+	GoBoilerplate   string
+	RustBoilerplate string
 )
 
 func init() {
@@ -49,6 +52,28 @@ func init() {
 	if err != nil {
 		panic(fmt.Sprintf("Failed to load specialist.vrx template: %v", err))
 	}
+
+	plannerTpl, err = template.New("planner.vrx").Funcs(template.FuncMap{
+		"prefix": func(p, s string) string {
+			if strings.TrimSpace(s) == "" {
+				return ""
+			}
+			lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+			for i, line := range lines {
+				lines[i] = p + line
+			}
+			return strings.Join(lines, "\n")
+		},
+	}).ParseFS(promptFiles, "planner.vrx")
+	if err != nil {
+		panic(fmt.Sprintf("Failed to load planner.vrx template: %v", err))
+	}
+
+	// Load boilerplates
+	goBytes, _ := promptFiles.ReadFile("boilerplate_go.vrx")
+	GoBoilerplate = string(goBytes)
+	rustBytes, _ := promptFiles.ReadFile("boilerplate_rust.vrx")
+	RustBoilerplate = string(rustBytes)
 }
 
 type BaseSystemParams struct {
@@ -61,6 +86,8 @@ type BaseSystemParams struct {
 	GitContext          string
 	UserProfile         string
 	SemanticMemory      string
+	GoBoilerplate       string
+	RustBoilerplate     string
 }
 
 type SpecialistParams struct {
@@ -74,7 +101,20 @@ type SpecialistParams struct {
 	SemanticMemory      string
 }
 
+type PlannerParams struct {
+	Query               string
+	GitContext          string
+	ExistingSpecialists string
+}
+
 func RenderBaseSystem(params BaseSystemParams) (string, error) {
+	if params.GoBoilerplate == "" {
+		params.GoBoilerplate = GoBoilerplate
+	}
+	if params.RustBoilerplate == "" {
+		params.RustBoilerplate = RustBoilerplate
+	}
+
 	var buf bytes.Buffer
 	if err := baseSystemTpl.Execute(&buf, params); err != nil {
 		return "", fmt.Errorf("failed to execute base system template: %w", err)
@@ -86,6 +126,14 @@ func RenderSpecialist(params SpecialistParams) (string, error) {
 	var buf bytes.Buffer
 	if err := specialistTpl.Execute(&buf, params); err != nil {
 		return "", fmt.Errorf("failed to execute specialist template: %w", err)
+	}
+	return buf.String(), nil
+}
+
+func RenderPlanner(params PlannerParams) (string, error) {
+	var buf bytes.Buffer
+	if err := plannerTpl.Execute(&buf, params); err != nil {
+		return "", fmt.Errorf("failed to execute planner template: %w", err)
 	}
 	return buf.String(), nil
 }
