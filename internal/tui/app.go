@@ -165,9 +165,11 @@ var helpCommand = `
   /specialists [args]		- Proxy: Manage specialists
   /user [args]		- Proxy: Manage profile
   /add [args]		- Proxy: Quickly add skills
+  /start		- Unified startup wizard (Profile ➔ Providers ➔ Models)
   /quit, /exit		- Exits Vraxter
   /help, /?		- Shows this menu
 `
+
 
 type EventMsgWrapper struct {
 	Event llm.StreamEvent
@@ -359,10 +361,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Check for termination based on common patterns or specific messages
 		done := false
-		if s, ok := m.ActiveSetup.(*SetupModel); ok && s.Done {
+		if s, ok := m.ActiveSetup.(*UserWizardModel); ok && s.Done {
 			done = true
 		}
 		if p, ok := m.ActiveSetup.(*ProviderWizard); ok && p.done {
+			done = true
+		}
+		if mw, ok := m.ActiveSetup.(*ModelWizard); ok && mw.done {
+			done = true
+		}
+		if sw, ok := m.ActiveSetup.(*StartupWizard); ok && sw.Done {
 			done = true
 		}
 
@@ -1035,15 +1043,30 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	case "/quit", "/exit":
 		m.appendHistory(BlockComponent, toolStyle.Render("👋 Press Ctrl+C or ESC to exit.\n\n"))
 		return nil
+	case "/start":
+		pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
+		mRepo := db.NewModelRepository(m.appStore, m.appCrypto)
+		pMgr := services.NewProviderManager(pRepo)
+		mMgr := services.NewModelManager(mRepo, pRepo)
+		m.ActiveSetup = NewStartupWizard(pMgr, mMgr)
+		return nil
 	case "/providers", "/models", "/skills", "/add", "/specialists", "/user":
 		if cmd == "/user setup" && len(parts) == 2 && parts[1] == "setup" {
-			m.ActiveSetup = NewSetupModel()
+			m.ActiveSetup = NewUserWizardModel()
 			return nil
 		}
 		if cmd == "/providers setup" && len(parts) == 2 && parts[1] == "setup" {
 			repo := db.NewProviderRepository(m.appStore, m.appCrypto)
 			mgr := services.NewProviderManager(repo)
 			m.ActiveSetup = NewProviderWizard(mgr)
+			return nil
+		}
+		if cmd == "/models setup" && len(parts) == 2 && parts[1] == "setup" {
+			pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
+			mRepo := db.NewModelRepository(m.appStore, m.appCrypto)
+			pMgr := services.NewProviderManager(pRepo)
+			mMgr := services.NewModelManager(mRepo, pRepo)
+			m.ActiveSetup = NewModelWizard(pMgr, mMgr)
 			return nil
 		}
 
@@ -1506,11 +1529,17 @@ func readNextEvent(stream <-chan llm.StreamEvent) tea.Msg {
 
 func (m *Model) View() string {
 	if m.ActiveSetup != nil {
-		if s, ok := m.ActiveSetup.(*SetupModel); ok {
+		if s, ok := m.ActiveSetup.(*UserWizardModel); ok {
 			s.Width = m.width
 		}
 		if p, ok := m.ActiveSetup.(*ProviderWizard); ok {
 			p.width = m.width
+		}
+		if mw, ok := m.ActiveSetup.(*ModelWizard); ok {
+			mw.width = m.width
+		}
+		if sw, ok := m.ActiveSetup.(*StartupWizard); ok {
+			sw.width = m.width
 		}
 		return m.ActiveSetup.View()
 	}
@@ -1877,8 +1906,9 @@ func (m *Model) renderHeader() string {
 	// Right Side: Tips & Model
 	rightSide := []string{
 		lipgloss.NewStyle().Foreground(colorOrange).Bold(true).Render("Tips for getting started"),
+		faintStyle.Render("• /start to configure everything at once"),
 		faintStyle.Render("• /plan <task> for autonomous mode"),
-		faintStyle.Render("• Use Specialists for expert tasks"),
+		faintStyle.Render("• Type ? for quick command help"),
 		"",
 	}
 	if m.BaseModelID != "" && m.BaseModelID != m.ActiveModel {
