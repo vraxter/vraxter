@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 
-	"github.com/mattn/go-runewidth"
 	"github.com/patagonicrune/vraxter/internal/db"
 	"github.com/patagonicrune/vraxter/internal/services"
 	"github.com/spf13/cobra"
@@ -49,27 +49,20 @@ var listModelsCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("\n%-8s | %-15s | %-10s | %-20s | %-8s | %-6s | %-15s\n", "ID", "ALIAS", "PROVIDER", "MODEL", "PRIORITY", "ACTIVE", "USE-CASES")
-		fmt.Println(strings.Repeat("-", 101))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "\nID\tALIAS\tPROVIDER\tMODEL\tPRIORITY\tACTIVE\tUSE-CASES")
+		fmt.Fprintln(w, "──\t─────\t────────\t─────\t────────\t──────\t─────────")
+
 		for _, m := range models {
 			activeStr := "✅"
 			if !m.IsActive {
 				activeStr = "❌"
 			}
 
-			// Cell-aware padding for perfect alignment
-			idStr := runewidth.FillRight(m.ID[:8], 8)
-			aliasStr := runewidth.FillRight(runewidth.Truncate(m.Alias, 15, ".."), 15)
-			providerStr := runewidth.FillRight(m.Provider, 10)
-			modelStr := runewidth.FillRight(runewidth.Truncate(m.Model, 20, ".."), 20)
-			priorityStr := runewidth.FillRight(fmt.Sprintf("%d", m.Priority), 8)
-			activeStatus := runewidth.FillRight(activeStr, 6)
-			useCasesStr := runewidth.FillRight(runewidth.Truncate(m.UseCases, 15, ".."), 15)
-
-			fmt.Printf("%s | %s | %s | %s | %s | %s | %s\n",
-				idStr, aliasStr, providerStr, modelStr, priorityStr, activeStatus, useCasesStr)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+				m.ID, m.Alias, m.Provider, m.Model, m.Priority, activeStr, m.UseCases)
 		}
-		fmt.Println()
+		w.Flush()
 	},
 }
 
