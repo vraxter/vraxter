@@ -193,7 +193,9 @@ func (e *ExecutionEngine) ExecutePipeline(ctx context.Context, in <-chan types.E
 			}
 
 		case types.EventTypeError:
-			// Emit generalized error over logs
+			if err, ok := event.Payload.(error); ok {
+				e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeError, Err: err})
+			}
 			if e.Verbose {
 				slog.Error("Pipeline generated error event", "error", event.Payload)
 			}

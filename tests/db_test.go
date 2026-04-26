@@ -211,15 +211,19 @@ func TestModelsRepo_UpsertAndGetAllModels(t *testing.T) {
 	store := newTestStore(t)
 	cs := newTestCrypto(t)
 	repo := db.NewModelRepository(store, cs)
+	pRepo := db.NewProviderRepository(store, cs)
+	err := pRepo.Create(&db.Provider{
+		ID: "p-gemini", Name: "Google", Type: "gemini", APIKey: "sk-test-key-12345", IsActive: true,
+	})
+	if err != nil { t.Fatal(err) }
 
 	model := types.ModelConfig{
-		ID:       uuid.NewString(),
-		Alias:    "test-gemini",
-		Provider: "gemini",
-		Model:    "gemini-2.0-flash",
-		APIKey:   "sk-test-key-12345",
-		Priority: 1,
-		IsActive: true,
+		ID:         uuid.NewString(),
+		ProviderID: "p-gemini",
+		Alias:      "test-gemini",
+		Model:      "gemini-2.0-flash",
+		Priority:   1,
+		IsActive:   true,
 	}
 
 	if err := repo.UpsertModel(model); err != nil {
@@ -238,9 +242,10 @@ func TestModelsRepo_UpsertAndGetAllModels(t *testing.T) {
 	if found.Alias != model.Alias {
 		t.Errorf("expected alias %q, got %q", model.Alias, found.Alias)
 	}
-	// API key must be transparently decrypted
-	if found.APIKey != model.APIKey {
-		t.Errorf("expected decrypted API key %q, got %q", model.APIKey, found.APIKey)
+	// API key is now at provider level, so we check if hydrated correctly
+	// but Repo.GetAllModels() Hydrates it from Provider
+	if found.APIKey != "sk-test-key-12345" {
+		t.Errorf("expected hydrated API key, got %q", found.APIKey)
 	}
 }
 
@@ -249,13 +254,17 @@ func TestModelsRepo_GetActiveModels_ExcludesInactive(t *testing.T) {
 	cs := newTestCrypto(t)
 	repo := db.NewModelRepository(store, cs)
 
+	pRepo := db.NewProviderRepository(store, cs)
+	_ = pRepo.Create(&db.Provider{ID: "p1", Name: "G", Type: "gemini", APIKey: "key1", IsActive: true})
+	_ = pRepo.Create(&db.Provider{ID: "p2", Name: "O", Type: "openai", APIKey: "key2", IsActive: true})
+
 	repo.UpsertModel(types.ModelConfig{
-		ID: uuid.NewString(), Alias: "active", Provider: "gemini",
-		Model: "gemini-flash", APIKey: "key1", Priority: 1, IsActive: true,
+		ID: uuid.NewString(), ProviderID: "p1", Alias: "active",
+		Model: "gemini-flash", Priority: 1, IsActive: true,
 	})
 	repo.UpsertModel(types.ModelConfig{
-		ID: uuid.NewString(), Alias: "inactive", Provider: "openai",
-		Model: "gpt-4o", APIKey: "key2", Priority: 2, IsActive: false,
+		ID: uuid.NewString(), ProviderID: "p2", Alias: "inactive",
+		Model: "gpt-4o", Priority: 2, IsActive: false,
 	})
 
 	active, err := repo.GetActiveModels()
@@ -275,10 +284,13 @@ func TestModelsRepo_DeleteModel(t *testing.T) {
 	cs := newTestCrypto(t)
 	repo := db.NewModelRepository(store, cs)
 
+	pRepo := db.NewProviderRepository(store, cs)
+	_ = pRepo.Create(&db.Provider{ID: "p1", Name: "G", Type: "gemini", APIKey: "key", IsActive: true})
+
 	id := uuid.NewString()
 	repo.UpsertModel(types.ModelConfig{
-		ID: id, Alias: "to-delete", Provider: "gemini",
-		Model: "gemini-flash", APIKey: "key", Priority: 1, IsActive: true,
+		ID: id, ProviderID: "p1", Alias: "to-delete",
+		Model: "gemini-flash", Priority: 1, IsActive: true,
 	})
 
 	if err := repo.DeleteModel(id[:8]); err != nil {
@@ -307,10 +319,13 @@ func TestModelsRepo_SetActive(t *testing.T) {
 	cs := newTestCrypto(t)
 	repo := db.NewModelRepository(store, cs)
 
+	pRepo := db.NewProviderRepository(store, cs)
+	_ = pRepo.Create(&db.Provider{ID: "p1", Name: "G", Type: "gemini", APIKey: "key", IsActive: true})
+
 	id := uuid.NewString()
 	repo.UpsertModel(types.ModelConfig{
-		ID: id, Alias: "toggle-me", Provider: "gemini",
-		Model: "gemini-flash", APIKey: "key", Priority: 1, IsActive: true,
+		ID: id, ProviderID: "p1", Alias: "toggle-me",
+		Model: "gemini-flash", Priority: 1, IsActive: true,
 	})
 
 	if err := repo.SetActive(id[:8], false); err != nil {
@@ -329,9 +344,12 @@ func TestModelsRepo_GetAllModelsPublic(t *testing.T) {
 	cs := newTestCrypto(t)
 	repo := db.NewModelRepository(store, cs)
 
+	pRepo := db.NewProviderRepository(store, cs)
+	_ = pRepo.Create(&db.Provider{ID: "p1", Name: "O", Type: "openai", APIKey: "sk-secret", IsActive: true})
+
 	repo.UpsertModel(types.ModelConfig{
-		ID: uuid.NewString(), Alias: "pub-model", Provider: "openai",
-		Model: "gpt-4o", APIKey: "sk-secret", Priority: 1, IsActive: true,
+		ID: uuid.NewString(), ProviderID: "p1", Alias: "pub-model",
+		Model: "gpt-4o", Priority: 1, IsActive: true,
 	})
 
 	pub, err := repo.GetAllModelsPublic()
@@ -352,9 +370,12 @@ func TestModelsRepo_HydrateCapabilities_Gemini(t *testing.T) {
 	cs := newTestCrypto(t)
 	repo := db.NewModelRepository(store, cs)
 
+	pRepo := db.NewProviderRepository(store, cs)
+	_ = pRepo.Create(&db.Provider{ID: "p1", Name: "G", Type: "gemini", APIKey: "key", IsActive: true})
+
 	repo.UpsertModel(types.ModelConfig{
-		ID: uuid.NewString(), Alias: "g2", Provider: "gemini",
-		Model: "gemini-2.0-flash", APIKey: "key", Priority: 1, IsActive: true,
+		ID: uuid.NewString(), ProviderID: "p1", Alias: "g2",
+		Model: "gemini-2.0-flash", Priority: 1, IsActive: true,
 	})
 
 	active, _ := repo.GetActiveModels()
@@ -384,30 +405,30 @@ func TestMemoryRepo_SaveAndSearchSimilar(t *testing.T) {
 	chatRepo.CreateConversation(&types.Conversation{ID: convID, Title: "mem test"})
 
 	// Save two embeddings - one semantically "close", one far
+	// Save three embeddings: close (score ~0.99), medium (score ~0.7), far (score 0.0)
 	queryVec := []float32{1.0, 0.0, 0.0, 0.0}
 	closeVec := []float32{0.95, 0.1, 0.0, 0.0}
+	medVec := []float32{0.7, 0.7, 0.0, 0.0}
 	farVec := []float32{0.0, 0.0, 0.0, 1.0}
 
-	if err := repo.SaveEmbedding(convID, "close text", closeVec); err != nil {
-		t.Fatalf("SaveEmbedding (close) failed: %v", err)
-	}
-	if err := repo.SaveEmbedding(convID, "far text", farVec); err != nil {
-		t.Fatalf("SaveEmbedding (far) failed: %v", err)
-	}
+	_ = repo.SaveEmbedding(convID, "close text", closeVec)
+	_ = repo.SaveEmbedding(convID, "med text", medVec)
+	_ = repo.SaveEmbedding(convID, "far text", farVec)
 
 	results, err := repo.SearchSimilar(convID, queryVec, 5)
 	if err != nil {
 		t.Fatalf("SearchSimilar failed: %v", err)
 	}
-	if len(results) == 0 {
-		t.Fatal("expected at least 1 result")
+	// "far text" should be filtered out by > 0.65 threshold
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results (close and med), got %d", len(results))
 	}
-	// The "close" vector should score higher
+	// Sorted descending: close first
 	if results[0].Node.TextContent != "close text" {
 		t.Errorf("expected 'close text' to rank first, got %q", results[0].Node.TextContent)
 	}
-	if results[0].Score <= results[len(results)-1].Score {
-		t.Errorf("results should be sorted descending by score")
+	if results[0].Score <= results[1].Score {
+		t.Errorf("results should be sorted descending by score: close(%f) <= med(%f)", results[0].Score, results[1].Score)
 	}
 }
 

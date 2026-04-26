@@ -16,6 +16,26 @@ service AgentService {
 
   // GetConversation returns all messages for a specific conversation
   rpc GetConversation(GetConversationRequest) returns (GetConversationResponse);
+
+  // --- Provider & Model Management ---
+
+  // GetSupportedProviders returns all registered provider types (google, openai, etc.)
+  rpc GetSupportedProviders(GetSupportedProvidersRequest) returns (GetSupportedProvidersResponse);
+
+  // ConfigureProvider creates or updates a provider configuration
+  rpc ConfigureProvider(ConfigureProviderRequest) returns (ConfigureProviderResponse);
+
+  // ListProviders returns all configured providers
+  rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
+
+  // DiscoverModels fetches available models from the provider's API
+  rpc DiscoverModels(DiscoverModelsRequest) returns (DiscoverModelsResponse);
+
+  // RegisterModel saves a discovered model to the local database
+  rpc RegisterModel(RegisterModelRequest) returns (RegisterModelResponse);
+
+  // ListModels returns all registered models, optionally filtered by provider
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
 }
 
 message GetInfoRequest {}
@@ -81,5 +101,68 @@ message HistoryMessage {
   string role = 1;
   string content = 2;
   string timestamp = 3;
+}
+
+// --- Management Messages ---
+
+message GetSupportedProvidersRequest {}
+message GetSupportedProvidersResponse {
+  repeated string providers = 1;
+}
+
+message ConfigureProviderRequest {
+  string name = 1;
+  string type = 2; // e.g. "google", "openai"
+  string api_key = 3;
+  string base_url = 4;
+}
+message ConfigureProviderResponse {
+  string provider_id = 1;
+  string status = 2;
+}
+
+message ListProvidersRequest {}
+message ListProvidersResponse {
+  repeated ProviderInfo providers = 1;
+}
+
+message ProviderInfo {
+  string id = 1;
+  string name = 2;
+  string type = 3;
+  bool is_configured = 4;
+}
+
+message DiscoverModelsRequest {
+  string provider_id = 1; // Can be name or ID
+}
+message DiscoverModelsResponse {
+  repeated string models = 1;
+}
+
+message RegisterModelRequest {
+  string provider_id = 1;
+  string model_name = 2;
+  string alias = 3;
+  int32 priority = 4;
+}
+message RegisterModelResponse {
+  string model_id = 1;
+}
+
+message ListModelsRequest {
+  string provider_id = 1; // Optional filter
+}
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+}
+
+message ModelInfo {
+  string id = 1;
+  string provider_name = 2;
+  string alias = 3;
+  string model = 4;
+  bool is_active = 5;
+  int32 priority = 6;
 }
 

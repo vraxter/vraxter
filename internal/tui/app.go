@@ -25,8 +25,12 @@ import (
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/patagonicrune/vraxter/internal/client"
+	"github.com/patagonicrune/vraxter/internal/db"
 	"github.com/patagonicrune/vraxter/internal/llm"
+	"github.com/patagonicrune/vraxter/internal/security"
+	"github.com/patagonicrune/vraxter/internal/services"
 	"github.com/patagonicrune/vraxter/internal/utils"
+	"github.com/patagonicrune/vraxter/pkg/interfaces"
 )
 
 const vraxterIconPlaceholder = "[[VRAXTER_IDENTITY]]"
@@ -39,7 +43,7 @@ var (
 	colorOrange    = lipgloss.Color("#FFAA00")
 	colorEmerald   = lipgloss.Color("#00FF41")
 	colorMutedGray = lipgloss.Color("#666666")
-	colorUser      = lipgloss.Color("#88C0D0") // Nord bright blue for user
+	colorUser      = lipgloss.Color("#B0BEC5")
 
 	appStyle = lipgloss.NewStyle().
 			Background(colorOnyx)
@@ -92,7 +96,7 @@ var (
 	userBlockStyle = lipgloss.NewStyle().
 			Border(lipgloss.Border{Left: "┃"}, false, false, false, true).
 			BorderForeground(colorUser).
-			Background(lipgloss.Color("#161C1D")).
+			Background(lipgloss.Color("#111315")).
 			PaddingLeft(1).
 			PaddingRight(1).
 			PaddingTop(1).
@@ -155,13 +159,14 @@ var helpCommand = `
   /clear		- Clears the chat history from the screen
   /new, /reset		- Generates a fresh session ID and clears history
   /session <id>		- Switches your context to a different session ID
-  /models [args]		- Proxy: Run 'vraxter models' directly within TUI
-  /skills [args]		- Proxy: Run 'vraxter skills' directly within TUI
-  /specialists [args]		- Proxy: Manage sub-agents directly within TUI
-  /user [args]		- Proxy: Manage your profile directly within TUI
-  /add [args]		- Proxy: Quickly add a skill or model
-  /quit, /exit		- Exits Vraxter (or press Ctrl+C)
-  /help, /?		- Shows this help menu
+  /providers [args]	- Manage AI providers (/providers setup for wizard)
+  /models [args]		- Manage models linked to providers
+  /skills [args]		- Proxy: Run 'vraxter skills'
+  /specialists [args]		- Proxy: Manage specialists
+  /user [args]		- Proxy: Manage profile
+  /add [args]		- Proxy: Quickly add skills
+  /quit, /exit		- Exits Vraxter
+  /help, /?		- Shows this menu
 `
 
 type EventMsgWrapper struct {
@@ -254,9 +259,13 @@ type Model struct {
 
 	// Chain of Thought
 	isThinking bool
+
+	appStore    *db.Store
+	appCrypto   *security.CryptoService
+	ActiveSetup tea.Model
 }
 
-func NewModel(ctx context.Context, gClient *client.GRPCClient, session, initialQuery string, userName string) *Model {
+func NewModel(ctx context.Context, gClient *client.GRPCClient, store *db.Store, crypto *security.CryptoService, session, initialQuery string, userName string) *Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a command for Vraxter..."
 	ta.Prompt = "❯ "
@@ -295,6 +304,8 @@ func NewModel(ctx context.Context, gClient *client.GRPCClient, session, initialQ
 		Ready:        false,
 		ctx:          ctx,
 		grpcClient:   gClient,
+		appStore:     store,
+		appCrypto:    crypto,
 		Spinner:      s,
 		ActiveModel:  "Detecting LLM...",
 		CurrentFocus: "vraxter",
@@ -341,9 +352,51 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var inputCmd, vpCmd tea.Cmd
 
+	// --- SETUP INTERCEPTION ---
+	if m.ActiveSetup != nil {
+		var setupCmd tea.Cmd
+		m.ActiveSetup, setupCmd = m.ActiveSetup.Update(msg)
+
+		// Check for termination based on common patterns or specific messages
+		done := false
+		if s, ok := m.ActiveSetup.(*SetupModel); ok && s.Done {
+			done = true
+		}
+		if p, ok := m.ActiveSetup.(*ProviderWizard); ok && p.done {
+			done = true
+		}
+
+		if done {
+			m.ActiveSetup = nil
+			if m.Ready {
+				m.Viewport.SetContent(m.renderMarkdown(m.History))
+				m.Viewport.GotoBottom()
+			}
+		}
+		return m, setupCmd
+	}
+
 	switch msg := msg.(type) {
 	case ClearStatusMsg:
 		m.StatusMessage = ""
+		return m, nil
+
+	case SetupFinishedMsg:
+		// Persist the results
+		repo := db.NewUserRepository(m.appStore)
+		user, err := repo.GetDefaultUser(context.Background())
+		if err == nil {
+			user.Name = msg.Result.Name
+			user.Expertise = msg.Result.Expertise
+			user.Interests = msg.Result.Interests
+			user.Bio = msg.Result.Bio
+			_ = repo.UpdateUser(context.Background(), user)
+		}
+		m.ActiveSetup = nil
+		m.appendHistory(BlockComponent, setupDoneStyle.Render("✨ Profile saved! Vraxter is now personalized to your needs.\n\n"))
+		if m.Ready {
+			m.Viewport.SetContent(m.renderMarkdown(m.History))
+		}
 		return m, nil
 
 	case cmdOutputMsg:
@@ -798,8 +851,42 @@ func (m *Model) appendHistory(t BlockType, content string, sender ...SenderType)
 	}
 }
 
+func splitArgs(input string) []string {
+	var args []string
+	var current strings.Builder
+	inQuotes := false
+	quoteChar := rune(0)
+
+	for _, r := range input {
+		switch {
+		case r == '"' || r == '\'':
+			if inQuotes {
+				if r == quoteChar {
+					inQuotes = false
+				} else {
+					current.WriteRune(r)
+				}
+			} else {
+				inQuotes = true
+				quoteChar = r
+			}
+		case r == ' ' && !inQuotes:
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	return args
+}
+
 func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
-	parts := strings.Fields(cmd)
+	parts := splitArgs(cmd)
 	if len(parts) == 0 {
 		return nil
 	}
@@ -948,12 +1035,40 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	case "/quit", "/exit":
 		m.appendHistory(BlockComponent, toolStyle.Render("👋 Press Ctrl+C or ESC to exit.\n\n"))
 		return nil
-	case "/models", "/skills", "/add", "/specialists", "/user":
+	case "/providers", "/models", "/skills", "/add", "/specialists", "/user":
+		if cmd == "/user setup" && len(parts) == 2 && parts[1] == "setup" {
+			m.ActiveSetup = NewSetupModel()
+			return nil
+		}
+		if cmd == "/providers setup" && len(parts) == 2 && parts[1] == "setup" {
+			repo := db.NewProviderRepository(m.appStore, m.appCrypto)
+			mgr := services.NewProviderManager(repo)
+			m.ActiveSetup = NewProviderWizard(mgr)
+			return nil
+		}
+
+		// Intercept /providers <id> discover for native rich rendering
+		if parts[0] == "/providers" && len(parts) == 3 && parts[2] == "discover" {
+			pID := parts[1]
+			return func() tea.Msg {
+				repo := db.NewProviderRepository(m.appStore, m.appCrypto)
+				mgr := services.NewProviderManager(repo)
+				models, err := mgr.DiscoverModels(m.ctx, pID)
+				if err != nil {
+					return cmdOutputMsg{input: cmd, output: fmt.Sprintf("❌ Discovery failed: %v", err)}
+				}
+
+				rendered := m.renderDiscoveryRich(pID, models)
+				return cmdOutputMsg{input: cmd, output: rendered}
+			}
+		}
+
 		execArgs := append([]string{strings.TrimPrefix(parts[0], "/")}, parts[1:]...)
 		cmdInput := cmd
 
 		return func() tea.Msg {
 			goCmd := exec.Command(os.Args[0], execArgs...)
+			goCmd.Env = append(os.Environ(), "VRAXTER_INTERNAL_SESSION=true")
 			out, _ := goCmd.CombinedOutput()
 
 			cleanOut := strings.ReplaceAll(string(out), "Type a command for Vraxter... (Ctrl+C to quit)", "")
@@ -965,6 +1080,139 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		m.appendHistory(BlockComponent, errorStyle.Render(fmt.Sprintf("❌ Unknown command: %s. Type /help for options.\n\n", parts[0])))
 		return nil
 	}
+}
+
+func (m *Model) renderDiscoveryRich(pID string, models []interfaces.ModelMetadata) string {
+	width := m.width - 6
+
+	styleGold := lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+	styleID := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8"))
+	styleMuted := lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	styleHeader := lipgloss.NewStyle().Foreground(lipgloss.Color("#777777"))
+	styleCaps := lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	styleDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2a2a2a"))
+	bracket := lipgloss.NewStyle().Foreground(lipgloss.Color("#1a3a1a")).Render
+	ctxVal := lipgloss.NewStyle().Foreground(colorEmerald).Bold(true)
+
+	ctxBadge := func(ctx int) string {
+		var label string
+		if ctx <= 0 {
+			return styleMuted.Render("[N/A]")
+		} else if ctx >= 1_000_000 {
+			label = fmt.Sprintf("%.0fM", float64(ctx)/1_000_000)
+		} else if ctx >= 1_000 {
+			label = fmt.Sprintf("%dk", ctx/1000)
+		} else {
+			label = fmt.Sprintf("%d", ctx)
+		}
+		return bracket("[") + ctxVal.Render(label) + bracket("]")
+	}
+
+	// Agrupar modelos por tipo
+	groups := make(map[string][]interfaces.ModelMetadata)
+	for _, mod := range models {
+		group := "LLM (Text)"
+		for _, c := range mod.Capabilities {
+			if c == "embedding" {
+				group = "Embedding"
+				break
+			}
+			if c == "audio" {
+				group = "Audio"
+				break
+			}
+			if c == "image" {
+				group = "Image"
+				break
+			}
+		}
+		groups[group] = append(groups[group], mod)
+	}
+
+	var sb strings.Builder
+
+	// Título
+	sb.WriteString(styleGold.Render(
+		fmt.Sprintf("◆ REMOTE MODELS · %s", strings.ToUpper(pID)),
+	) + "\n\n")
+
+	// Header de columnas
+	const idW = 42
+	const ctxW = 8
+	sb.WriteString(
+		styleHeader.Render(fmt.Sprintf(
+			"  %-*s  %-*s  %s",
+			idW, "MODEL ID",
+			ctxW, "CONTEXT",
+			"CAPABILITIES",
+		)) + "\n",
+	)
+	sb.WriteString(styleDivider.Render(strings.Repeat("─", width-3)) + "\n")
+
+	order := []string{"LLM (Text)", "Embedding", "Audio", "Image"}
+	for _, gTitle := range order {
+		ms := groups[gTitle]
+		if len(ms) == 0 {
+			continue
+		}
+
+		// Header de grupo
+		sb.WriteString("\n" + styleMuted.Render(fmt.Sprintf("── %s", gTitle)) + "\n")
+
+		for _, mod := range ms {
+			badge := ctxBadge(mod.ContextWindow)
+
+			// ID — pad manual para alinear columna
+			idRendered := styleID.Render(mod.ID)
+			idPad := idW - len(mod.ID) // usamos len del string raw para el pad
+			if idPad < 0 {
+				idPad = 0
+			}
+
+			// Context badge — ancho fijo
+			// El badge visual es [XY] = 2 brackets + label
+			// Calculamos el raw label width para el pad
+			rawBadgeW := len(fmt.Sprintf("[%s]", func() string {
+				if mod.ContextWindow <= 0 {
+					return "N/A"
+				}
+				if mod.ContextWindow >= 1_000_000 {
+					return fmt.Sprintf("%.0fM", float64(mod.ContextWindow)/1_000_000)
+				}
+				if mod.ContextWindow >= 1_000 {
+					return fmt.Sprintf("%dk", mod.ContextWindow/1000)
+				}
+				return fmt.Sprintf("%d", mod.ContextWindow)
+			}()))
+			ctxPad := ctxW - rawBadgeW
+			if ctxPad < 1 {
+				ctxPad = 1
+			}
+
+			// Capabilities
+			capsSlice := make([]string, len(mod.Capabilities))
+			for i, c := range mod.Capabilities {
+				capsSlice[i] = styleCaps.Render(c)
+			}
+			caps := strings.Join(capsSlice, styleMuted.Render(" · "))
+
+			sb.WriteString(fmt.Sprintf("  %s%s  %s%s  %s\n",
+				idRendered,
+				strings.Repeat(" ", idPad),
+				badge,
+				strings.Repeat(" ", ctxPad),
+				caps,
+			))
+		}
+	}
+
+	// Footer
+	sb.WriteString("\n" + styleDivider.Render(strings.Repeat("─", width-3)) + "\n")
+	sb.WriteString(styleMuted.Render(fmt.Sprintf(
+		"  use /providers %s model <id> --add to insert it into vraxter", pID,
+	)))
+
+	return sb.String()
 }
 
 func (m *Model) renderCmdBlock(input, output string) string {
@@ -1257,6 +1505,16 @@ func readNextEvent(stream <-chan llm.StreamEvent) tea.Msg {
 }
 
 func (m *Model) View() string {
+	if m.ActiveSetup != nil {
+		if s, ok := m.ActiveSetup.(*SetupModel); ok {
+			s.Width = m.width
+		}
+		if p, ok := m.ActiveSetup.(*ProviderWizard); ok {
+			p.width = m.width
+		}
+		return m.ActiveSetup.View()
+	}
+
 	if !m.Ready {
 		return "Initializing Dashboard..."
 	}

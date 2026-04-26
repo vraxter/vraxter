@@ -19,10 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_Execute_FullMethodName         = "/v1.AgentService/Execute"
-	AgentService_GetInfo_FullMethodName         = "/v1.AgentService/GetInfo"
-	AgentService_ListHistory_FullMethodName     = "/v1.AgentService/ListHistory"
-	AgentService_GetConversation_FullMethodName = "/v1.AgentService/GetConversation"
+	AgentService_Execute_FullMethodName               = "/v1.AgentService/Execute"
+	AgentService_GetInfo_FullMethodName               = "/v1.AgentService/GetInfo"
+	AgentService_ListHistory_FullMethodName           = "/v1.AgentService/ListHistory"
+	AgentService_GetConversation_FullMethodName       = "/v1.AgentService/GetConversation"
+	AgentService_GetSupportedProviders_FullMethodName = "/v1.AgentService/GetSupportedProviders"
+	AgentService_ConfigureProvider_FullMethodName     = "/v1.AgentService/ConfigureProvider"
+	AgentService_ListProviders_FullMethodName         = "/v1.AgentService/ListProviders"
+	AgentService_DiscoverModels_FullMethodName        = "/v1.AgentService/DiscoverModels"
+	AgentService_RegisterModel_FullMethodName         = "/v1.AgentService/RegisterModel"
+	AgentService_ListModels_FullMethodName            = "/v1.AgentService/ListModels"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -39,6 +45,18 @@ type AgentServiceClient interface {
 	ListHistory(ctx context.Context, in *ListHistoryRequest, opts ...grpc.CallOption) (*ListHistoryResponse, error)
 	// GetConversation returns all messages for a specific conversation
 	GetConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (*GetConversationResponse, error)
+	// GetSupportedProviders returns all registered provider types (google, openai, etc.)
+	GetSupportedProviders(ctx context.Context, in *GetSupportedProvidersRequest, opts ...grpc.CallOption) (*GetSupportedProvidersResponse, error)
+	// ConfigureProvider creates or updates a provider configuration
+	ConfigureProvider(ctx context.Context, in *ConfigureProviderRequest, opts ...grpc.CallOption) (*ConfigureProviderResponse, error)
+	// ListProviders returns all configured providers
+	ListProviders(ctx context.Context, in *ListProvidersRequest, opts ...grpc.CallOption) (*ListProvidersResponse, error)
+	// DiscoverModels fetches available models from the provider's API
+	DiscoverModels(ctx context.Context, in *DiscoverModelsRequest, opts ...grpc.CallOption) (*DiscoverModelsResponse, error)
+	// RegisterModel saves a discovered model to the local database
+	RegisterModel(ctx context.Context, in *RegisterModelRequest, opts ...grpc.CallOption) (*RegisterModelResponse, error)
+	// ListModels returns all registered models, optionally filtered by provider
+	ListModels(ctx context.Context, in *ListModelsRequest, opts ...grpc.CallOption) (*ListModelsResponse, error)
 }
 
 type agentServiceClient struct {
@@ -98,6 +116,66 @@ func (c *agentServiceClient) GetConversation(ctx context.Context, in *GetConvers
 	return out, nil
 }
 
+func (c *agentServiceClient) GetSupportedProviders(ctx context.Context, in *GetSupportedProvidersRequest, opts ...grpc.CallOption) (*GetSupportedProvidersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSupportedProvidersResponse)
+	err := c.cc.Invoke(ctx, AgentService_GetSupportedProviders_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ConfigureProvider(ctx context.Context, in *ConfigureProviderRequest, opts ...grpc.CallOption) (*ConfigureProviderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigureProviderResponse)
+	err := c.cc.Invoke(ctx, AgentService_ConfigureProvider_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ListProviders(ctx context.Context, in *ListProvidersRequest, opts ...grpc.CallOption) (*ListProvidersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListProvidersResponse)
+	err := c.cc.Invoke(ctx, AgentService_ListProviders_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) DiscoverModels(ctx context.Context, in *DiscoverModelsRequest, opts ...grpc.CallOption) (*DiscoverModelsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiscoverModelsResponse)
+	err := c.cc.Invoke(ctx, AgentService_DiscoverModels_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) RegisterModel(ctx context.Context, in *RegisterModelRequest, opts ...grpc.CallOption) (*RegisterModelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterModelResponse)
+	err := c.cc.Invoke(ctx, AgentService_RegisterModel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ListModels(ctx context.Context, in *ListModelsRequest, opts ...grpc.CallOption) (*ListModelsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListModelsResponse)
+	err := c.cc.Invoke(ctx, AgentService_ListModels_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -112,6 +190,18 @@ type AgentServiceServer interface {
 	ListHistory(context.Context, *ListHistoryRequest) (*ListHistoryResponse, error)
 	// GetConversation returns all messages for a specific conversation
 	GetConversation(context.Context, *GetConversationRequest) (*GetConversationResponse, error)
+	// GetSupportedProviders returns all registered provider types (google, openai, etc.)
+	GetSupportedProviders(context.Context, *GetSupportedProvidersRequest) (*GetSupportedProvidersResponse, error)
+	// ConfigureProvider creates or updates a provider configuration
+	ConfigureProvider(context.Context, *ConfigureProviderRequest) (*ConfigureProviderResponse, error)
+	// ListProviders returns all configured providers
+	ListProviders(context.Context, *ListProvidersRequest) (*ListProvidersResponse, error)
+	// DiscoverModels fetches available models from the provider's API
+	DiscoverModels(context.Context, *DiscoverModelsRequest) (*DiscoverModelsResponse, error)
+	// RegisterModel saves a discovered model to the local database
+	RegisterModel(context.Context, *RegisterModelRequest) (*RegisterModelResponse, error)
+	// ListModels returns all registered models, optionally filtered by provider
+	ListModels(context.Context, *ListModelsRequest) (*ListModelsResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -133,6 +223,24 @@ func (UnimplementedAgentServiceServer) ListHistory(context.Context, *ListHistory
 }
 func (UnimplementedAgentServiceServer) GetConversation(context.Context, *GetConversationRequest) (*GetConversationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetConversation not implemented")
+}
+func (UnimplementedAgentServiceServer) GetSupportedProviders(context.Context, *GetSupportedProvidersRequest) (*GetSupportedProvidersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSupportedProviders not implemented")
+}
+func (UnimplementedAgentServiceServer) ConfigureProvider(context.Context, *ConfigureProviderRequest) (*ConfigureProviderResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfigureProvider not implemented")
+}
+func (UnimplementedAgentServiceServer) ListProviders(context.Context, *ListProvidersRequest) (*ListProvidersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListProviders not implemented")
+}
+func (UnimplementedAgentServiceServer) DiscoverModels(context.Context, *DiscoverModelsRequest) (*DiscoverModelsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiscoverModels not implemented")
+}
+func (UnimplementedAgentServiceServer) RegisterModel(context.Context, *RegisterModelRequest) (*RegisterModelResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterModel not implemented")
+}
+func (UnimplementedAgentServiceServer) ListModels(context.Context, *ListModelsRequest) (*ListModelsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListModels not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -220,6 +328,114 @@ func _AgentService_GetConversation_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_GetSupportedProviders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSupportedProvidersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).GetSupportedProviders(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_GetSupportedProviders_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).GetSupportedProviders(ctx, req.(*GetSupportedProvidersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_ConfigureProvider_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigureProviderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ConfigureProvider(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ConfigureProvider_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ConfigureProvider(ctx, req.(*ConfigureProviderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_ListProviders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListProvidersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ListProviders(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ListProviders_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ListProviders(ctx, req.(*ListProvidersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_DiscoverModels_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiscoverModelsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).DiscoverModels(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_DiscoverModels_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).DiscoverModels(ctx, req.(*DiscoverModelsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_RegisterModel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterModelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).RegisterModel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_RegisterModel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).RegisterModel(ctx, req.(*RegisterModelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_ListModels_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListModelsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ListModels(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ListModels_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ListModels(ctx, req.(*ListModelsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -238,6 +454,30 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetConversation",
 			Handler:    _AgentService_GetConversation_Handler,
+		},
+		{
+			MethodName: "GetSupportedProviders",
+			Handler:    _AgentService_GetSupportedProviders_Handler,
+		},
+		{
+			MethodName: "ConfigureProvider",
+			Handler:    _AgentService_ConfigureProvider_Handler,
+		},
+		{
+			MethodName: "ListProviders",
+			Handler:    _AgentService_ListProviders_Handler,
+		},
+		{
+			MethodName: "DiscoverModels",
+			Handler:    _AgentService_DiscoverModels_Handler,
+		},
+		{
+			MethodName: "RegisterModel",
+			Handler:    _AgentService_RegisterModel_Handler,
+		},
+		{
+			MethodName: "ListModels",
+			Handler:    _AgentService_ListModels_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

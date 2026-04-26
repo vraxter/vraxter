@@ -6,13 +6,14 @@ import (
 
 	v1 "github.com/patagonicrune/vraxter/api/v1"
 	"github.com/patagonicrune/vraxter/internal/core"
+	"github.com/patagonicrune/vraxter/internal/services"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"time"
 )
 
 // Start initiates the gRPC server for the Vraxter Daemon
-func Start(engine *core.Engine, ready chan bool) {
+func Start(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager, ready chan bool) {
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
 		fmt.Printf("Failed to listen on port: %v\n", err)
@@ -32,7 +33,7 @@ func Start(engine *core.Engine, ready chan bool) {
 	)
 
 	// Register the Core Agent Service
-	handler := NewAgentHandler(engine)
+	handler := NewAgentHandler(engine, pm, mm)
 	v1.RegisterAgentServiceServer(s, handler)
 
 	fmt.Println("🚀 Vraxter Daemon listening on :50051 (gRPC)")

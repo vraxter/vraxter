@@ -19,6 +19,7 @@ func newTestRouter(t *testing.T, providers ...struct {
 			Provider: item.p,
 			Config: types.ModelConfig{
 				ID:           "mock-model-" + string(rune('a'+i)),
+				ProviderID:   "p-mock-" + string(rune('a'+i)),
 				Alias:        "mock-" + string(rune('a'+i)),
 				Provider:     "mock",
 				Model:        "mock-v1",
@@ -112,10 +113,10 @@ func TestRouter_GetProvider_EmptyReturnsError(t *testing.T) {
 
 func TestRouter_Register_AddsDynamically(t *testing.T) {
 	router := llm.NewRouter([]types.ModelConfig{
-		{ID: "dynamic-1", Alias: "dyn", Provider: "mock", Model: "mock", Priority: 1, IsActive: true},
+		{ID: "dynamic-1", ProviderID: "p-dyn", Alias: "dyn", Provider: "mock", Model: "mock", Priority: 1, IsActive: true},
 	})
 	p := &MockProvider{}
-	router.Register("dynamic-1", p)
+	router.Register("p-dyn", p)
 
 	ordered := router.GetOrderedProviders()
 	if len(ordered) != 1 {

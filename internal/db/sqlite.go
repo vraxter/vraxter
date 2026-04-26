@@ -116,18 +116,28 @@ func (s *Store) initSchema() error {
 		FOREIGN KEY(skill_id) REFERENCES skills(id)
 	);
 
-	CREATE TABLE IF NOT EXISTS models (
+	CREATE TABLE IF NOT EXISTS providers (
 		id TEXT PRIMARY KEY,
-		alias TEXT NOT NULL,
-		provider TEXT NOT NULL,
-		model TEXT NOT NULL,
+		name TEXT UNIQUE NOT NULL,
+		type TEXT NOT NULL, -- openai, google, anthropic, ollama
 		api_key TEXT,
 		base_url TEXT,
+		is_active BOOLEAN DEFAULT 1,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS models (
+		id TEXT PRIMARY KEY,
+		provider_id TEXT NOT NULL,
+		alias TEXT NOT NULL,
+		model TEXT NOT NULL,
 		priority INTEGER DEFAULT 99,
 		is_active BOOLEAN DEFAULT 1,
 		capabilities TEXT DEFAULT '',
 		context_window INTEGER DEFAULT 8192,
-		use_cases TEXT DEFAULT ''
+		use_cases TEXT DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(provider_id) REFERENCES providers(id)
 	);
 
 	CREATE TABLE IF NOT EXISTS specialists (
@@ -174,13 +184,17 @@ func (s *Store) initSchema() error {
 	_, _ = s.Conn.Exec("ALTER TABLE users ADD COLUMN expertise TEXT DEFAULT ''")
 	_, _ = s.Conn.Exec("ALTER TABLE users ADD COLUMN interests TEXT DEFAULT ''")
 	_, _ = s.Conn.Exec("ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''")
-	
-	// Migration: Skills metadata (Phase 20)
-	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN keywords TEXT NOT NULL DEFAULT '[]'")
-	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN examples TEXT NOT NULL DEFAULT '[]'")
-	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+
 	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN param_regex TEXT NOT NULL DEFAULT ''")
 	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN vector BLOB DEFAULT NULL")
+
+	// Migration for Provider-First Architecture
+	_, _ = s.Conn.Exec("ALTER TABLE models ADD COLUMN provider_id TEXT")
+	_, _ = s.Conn.Exec("ALTER TABLE models DROP COLUMN provider")
+	_, _ = s.Conn.Exec("ALTER TABLE models ADD COLUMN is_active BOOLEAN DEFAULT 1")
+
+	// Migration for Provider naming (gemini -> google)
+	_, _ = s.Conn.Exec("UPDATE providers SET type = 'google' WHERE type = 'gemini'")
 
 	return err
 }

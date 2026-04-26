@@ -81,16 +81,17 @@ func NewOrchestrator(
 	}
 
 	router := llm.NewRouter(models)
+	bootedProviders := make(map[string]bool)
 	for _, m := range models {
-		switch m.Provider {
-		case "ollama":
-			router.Register(m.ID, llm.NewOllamaAdapter(m.BaseURL))
-		case "openai":
-			router.Register(m.ID, llm.NewOpenAIAdapter(m.APIKey))
-		case "anthropic":
-			router.Register(m.ID, llm.NewAnthropicAdapter(m.APIKey))
-		case "gemini":
-			router.Register(m.ID, llm.NewGeminiAdapter(m.APIKey))
+		if bootedProviders[m.ProviderID] {
+			continue
+		}
+		adapter, err := llm.Create(m.Provider, m.APIKey, m.BaseURL)
+		if err == nil {
+			router.Register(m.ProviderID, adapter)
+			bootedProviders[m.ProviderID] = true
+		} else {
+			slog.Warn("Failed to boot model provider", "provider_id", m.ProviderID, "type", m.Provider, "err", err)
 		}
 	}
 
@@ -163,10 +164,8 @@ func (o *Orchestrator) refreshCache() error {
 	var mCtx strings.Builder
 	for _, m := range models {
 		status := "READY"
-		if m.Provider == "ollama" && m.BaseURL == "" {
-			status = "MISSING_CONFIG (Base URL Required)"
-		} else if (m.Provider == "openai" || m.Provider == "gemini" || m.Provider == "anthropic") && m.APIKey == "" {
-			status = "MISSING_CONFIG (API Key Required)"
+		if !m.IsConfigured {
+			status = "MISSING_CONFIG (Provider setup required)"
 		} else if !m.IsActive {
 			status = "INACTIVE"
 		}
