@@ -76,8 +76,9 @@ func TestVraxError_IsRecoverable_UnknownError(t *testing.T) {
 
 func TestVraxError_ImplementsErrorInterface(t *testing.T) {
 	var err error = vraxerror.New(vraxerror.ErrTypeInternal, "test", false, nil)
-	if err == nil {
-		t.Fatal("EngineError must satisfy error interface")
+	// We check if it properly implements the error interface by trying to call Error()
+	if err.Error() == "" {
+		t.Fatal("EngineError must satisfy error interface and return non-empty string")
 	}
 }
 

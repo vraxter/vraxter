@@ -53,8 +53,16 @@ func (p *StreamParser) ProcessToken(token string) (chatContent string) {
 		// Only hold back if the tail strictly looks like a Vraxter marker [VRAX_...
 		// This prevents holding back simple conversational [ brackets.
 		tail := accumulated[p.chatPos:]
-		if strings.HasSuffix(tail, "[V") || strings.HasSuffix(tail, "[VR") || strings.HasSuffix(tail, "[VRA") || strings.HasSuffix(tail, "[VRAX") {
-			return ""
+		if strings.Contains(tail, "[") {
+			// Find the last '['
+			lastBracket := strings.LastIndex(tail, "[")
+			possibleMarker := tail[lastBracket:]
+			// If it's a prefix of any marker, hold it back
+			for _, m := range []string{p.markerChat, p.markerTool, p.markerCode} {
+				if strings.HasPrefix(m, possibleMarker) {
+					return ""
+				}
+			}
 		}
 	}
 

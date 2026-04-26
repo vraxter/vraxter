@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/patagonicrune/vraxter/internal/llm"
+	"github.com/patagonicrune/vraxter/pkg/interfaces"
 )
 
 // MockProvider is a deterministic LLM stub for offline testing.
@@ -64,4 +65,15 @@ func (m *MockProvider) Embed(_ context.Context, _ string, texts []string) ([][]f
 
 func (m *MockProvider) CheckHealth(_ context.Context) error {
 	return m.HealthErr
+}
+
+func (m *MockProvider) Discover(_ context.Context) ([]interfaces.ModelMetadata, error) {
+	return []interfaces.ModelMetadata{
+		{ID: "mock-model-v1", DisplayName: "Mock Model V1", Capabilities: []string{"text"}},
+		{ID: "mock-model-v2", DisplayName: "Mock Model V2", Capabilities: []string{"text", "vision"}},
+	}, nil
+}
+
+func (m *MockProvider) GetModelDetails(_ context.Context, modelID string) (map[string]interface{}, error) {
+	return map[string]interface{}{"id": modelID, "mock": true}, nil
 }

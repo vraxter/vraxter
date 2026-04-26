@@ -1,4 +1,4 @@
-package llm
+package ollama
 
 import (
 	"bytes"
@@ -10,7 +10,16 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/patagonicrune/vraxter/internal/llm/registry"
+	"github.com/patagonicrune/vraxter/pkg/interfaces"
 )
+
+func init() {
+	registry.Register("ollama", func(apiKey, baseURL string) interfaces.LLMProvider {
+		return NewAdapter(baseURL)
+	})
+}
 
 type ollamaMessage struct {
 	Role    string `json:"role"`
@@ -29,32 +38,30 @@ type ollamaChatRes struct {
 	} `json:"message"`
 }
 
-// OllamaAdapter implements Provider for local Ollama instances
-type OllamaAdapter struct {
+type Adapter struct {
 	baseURL    string
 	httpClient *http.Client
 }
 
-func NewOllamaAdapter(host string) *OllamaAdapter {
+func NewAdapter(host string) *Adapter {
 	if host == "" {
 		host = "http://localhost:11434"
 	}
-	// Ensure protocol scheme
 	if !strings.Contains(host, "://") {
 		host = "http://" + host
 	}
-	return &OllamaAdapter{
+	return &Adapter{
 		baseURL: host + "/api/chat",
 		httpClient: &http.Client{
 			Timeout: 20 * time.Minute,
 			Transport: &http.Transport{
-				ResponseHeaderTimeout: 60 * time.Second, // More time for large model load
+				ResponseHeaderTimeout: 60 * time.Second,
 			},
 		},
 	}
 }
 
-func (a *OllamaAdapter) Generate(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
+func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest) (interfaces.CompletionResponse, error) {
 	model := req.Model
 	if !strings.Contains(model, ":") {
 		model += ":latest"
@@ -75,34 +82,34 @@ func (a *OllamaAdapter) Generate(ctx context.Context, req CompletionRequest) (Co
 
 	b, err := json.Marshal(payload)
 	if err != nil {
-		return CompletionResponse{}, err
+		return interfaces.CompletionResponse{}, err
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.baseURL, bytes.NewReader(b))
 	if err != nil {
-		return CompletionResponse{}, err
+		return interfaces.CompletionResponse{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
-		return CompletionResponse{}, err
+		return interfaces.CompletionResponse{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return CompletionResponse{}, fmt.Errorf("Ollama returned status: %d", resp.StatusCode)
+		return interfaces.CompletionResponse{}, fmt.Errorf("Ollama returned status: %d", resp.StatusCode)
 	}
 
 	var parsed ollamaChatRes
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return CompletionResponse{}, err
+		return interfaces.CompletionResponse{}, err
 	}
 
-	return CompletionResponse{Content: parsed.Message.Content}, nil
+	return interfaces.CompletionResponse{Content: parsed.Message.Content}, nil
 }
 
-func (a *OllamaAdapter) StreamGenerate(ctx context.Context, req CompletionRequest) (<-chan StreamEvent, error) {
+func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionRequest) (<-chan interfaces.StreamEvent, error) {
 	model := req.Model
 	if !strings.Contains(model, ":") {
 		model += ":latest"
@@ -138,13 +145,13 @@ func (a *OllamaAdapter) StreamGenerate(ctx context.Context, req CompletionReques
 		return nil, err
 	}
 
-	ch := make(chan StreamEvent)
+	ch := make(chan interfaces.StreamEvent)
 	go func() {
 		defer resp.Body.Close()
 		defer close(ch)
 
 		if resp.StatusCode != http.StatusOK {
-			ch <- StreamEvent{Type: EventTypeError, Err: fmt.Errorf("Ollama returned status: %d", resp.StatusCode)}
+			ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: fmt.Errorf("Ollama returned status: %d", resp.StatusCode)}
 			return
 		}
 
@@ -156,19 +163,19 @@ func (a *OllamaAdapter) StreamGenerate(ctx context.Context, req CompletionReques
 					Content string `json:"content"`
 				} `json:"message"`
 				Done bool   `json:"done"`
-				Eval bool   `json:"eval"` // Some ollama versions use this
+				Eval bool   `json:"eval"`
 				Error string `json:"error"`
 			}
 			if err := decoder.Decode(&chunk); err != nil {
 				if err == io.EOF {
-					ch <- StreamEvent{Type: EventTypeDone}
+					ch <- interfaces.StreamEvent{Type: interfaces.EventTypeDone}
 					return
 				}
-				ch <- StreamEvent{Type: EventTypeError, Err: fmt.Errorf("ollama stream decode error: %w", err)}
+				ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: fmt.Errorf("ollama stream decode error: %w", err)}
 				return
 			}
 			if chunk.Error != "" {
-				ch <- StreamEvent{Type: EventTypeError, Err: fmt.Errorf("ollama reported error: %s", chunk.Error)}
+				ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: fmt.Errorf("ollama reported error: %s", chunk.Error)}
 				return
 			}
 			if chunk.Message.Content != "" {
@@ -176,10 +183,10 @@ func (a *OllamaAdapter) StreamGenerate(ctx context.Context, req CompletionReques
 					slog.Info("Ollama first token arrived", "content", chunk.Message.Content)
 					firstToken = false
 				}
-				ch <- StreamEvent{Type: EventTypeToken, Content: chunk.Message.Content}
+				ch <- interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: chunk.Message.Content}
 			}
 			if chunk.Done {
-				ch <- StreamEvent{Type: EventTypeDone}
+				ch <- interfaces.StreamEvent{Type: interfaces.EventTypeDone}
 				return
 			}
 		}
@@ -188,7 +195,7 @@ func (a *OllamaAdapter) StreamGenerate(ctx context.Context, req CompletionReques
 	return ch, nil
 }
 
-func (a *OllamaAdapter) CheckHealth(ctx context.Context) error {
+func (a *Adapter) CheckHealth(ctx context.Context) error {
 	host := a.baseURL[:len(a.baseURL)-9]
 	req, err := http.NewRequestWithContext(ctx, "GET", host, nil)
 	if err != nil {
@@ -202,8 +209,7 @@ func (a *OllamaAdapter) CheckHealth(ctx context.Context) error {
 	return nil
 }
 
-func (a *OllamaAdapter) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
-	// Ollama /api/embed takes {"model": "...", "input": ["..."]}
+func (a *Adapter) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
 	host := a.baseURL[:len(a.baseURL)-9]
 	embedURL := host + "/api/embed"
 	
@@ -241,4 +247,66 @@ func (a *OllamaAdapter) Embed(ctx context.Context, model string, texts []string)
 	}
 	
 	return parsed.Embeddings, nil
+}
+
+func (a *Adapter) Discover(ctx context.Context) ([]interfaces.ModelMetadata, error) {
+	host := a.baseURL[:len(a.baseURL)-9]
+	tagsURL := host + "/api/tags"
+
+	req, err := http.NewRequestWithContext(ctx, "GET", tagsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Ollama tags returned status: %d", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+
+	var models []interfaces.ModelMetadata
+	for _, m := range parsed.Models {
+		caps := []string{"text"}
+		if strings.Contains(m.Name, "embed") {
+			caps = []string{"embedding"}
+		}
+		models = append(models, interfaces.ModelMetadata{
+			ID:           m.Name,
+			DisplayName:  m.Name,
+			Capabilities: caps,
+		})
+	}
+	return models, nil
+}
+
+func (a *Adapter) GetModelDetails(ctx context.Context, modelID string) (map[string]interface{}, error) {
+	host := a.baseURL[:len(a.baseURL)-9]
+	showURL := host + "/api/show"
+
+	payload := map[string]string{"name": modelID}
+	b, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequestWithContext(ctx, "POST", showURL, bytes.NewReader(b))
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var parsed map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&parsed)
+	return parsed, nil
 }

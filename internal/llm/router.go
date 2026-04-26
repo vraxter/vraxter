@@ -7,11 +7,17 @@ import (
 	"sync"
 
 	"github.com/patagonicrune/vraxter/pkg/types"
+
+	// Trigger side-effect registration of LLM adapters
+	_ "github.com/patagonicrune/vraxter/internal/llm/anthropic"
+	_ "github.com/patagonicrune/vraxter/internal/llm/google"
+	_ "github.com/patagonicrune/vraxter/internal/llm/ollama"
+	_ "github.com/patagonicrune/vraxter/internal/llm/openai"
 )
 
 type Router struct {
 	mu        sync.RWMutex
-	providers map[string]Provider
+	providers map[string]Provider // now map providerID → Provider
 	models    []types.ModelConfig
 
 	// routingCfg is an optional use-case routing table (see config.RoutingConfig).
@@ -42,15 +48,15 @@ func NewRouterFromEntries(entries []RouterEntry) *Router {
 	}
 	for _, e := range entries {
 		r.models = append(r.models, e.Config)
-		r.providers[e.Config.ID] = e.Provider
+		r.providers[e.Config.ProviderID] = e.Provider
 	}
 	return r
 }
 
-func (r *Router) Register(modelID string, p Provider) {
+func (r *Router) Register(providerID string, p Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.providers[modelID] = p
+	r.providers[providerID] = p
 }
 
 // SetUseCaseOverride tells the Router that queries classified as useCase should
@@ -71,7 +77,7 @@ func (r *Router) GetProviderByID(id string) (types.ModelConfig, Provider, error)
 
 	for _, config := range r.models {
 		if config.ID == id || strings.ToLower(config.Alias) == searchID || strings.ToLower(config.Model) == searchID {
-			if p, ok := r.providers[config.ID]; ok {
+			if p, ok := r.providers[config.ProviderID]; ok {
 				return config, p, nil
 			}
 		}
@@ -96,7 +102,7 @@ func (r *Router) GetProviderForUseCase(useCase string) (types.ModelConfig, Provi
 	if overrideID, ok := r.routingOverrides[ucLower]; ok && overrideID != "" {
 		for _, config := range r.models {
 			if config.ID == overrideID {
-				if p, ok := r.providers[config.ID]; ok {
+				if p, ok := r.providers[config.ProviderID]; ok {
 					return config, p, nil
 				}
 			}
@@ -111,7 +117,7 @@ func (r *Router) GetProviderForUseCase(useCase string) (types.ModelConfig, Provi
 		}
 		for _, uc := range strings.Split(strings.ToLower(config.UseCases), ",") {
 			if strings.TrimSpace(uc) == ucLower {
-				if p, ok := r.providers[config.ID]; ok {
+				if p, ok := r.providers[config.ProviderID]; ok {
 					return config, p, nil
 				}
 			}
@@ -141,7 +147,7 @@ func (r *Router) GetOrderedProviders() []struct {
 		Provider Provider
 	}
 	for _, config := range r.models {
-		if p, ok := r.providers[config.ID]; ok {
+		if p, ok := r.providers[config.ProviderID]; ok {
 			ordered = append(ordered, struct {
 				Config   types.ModelConfig
 				Provider Provider
@@ -191,7 +197,7 @@ func (r *Router) GetEmbeddingProvider() (types.ModelConfig, Provider, error) {
 	defer r.mu.RUnlock()
 	for _, config := range r.models {
 		if strings.Contains(strings.ToLower(config.Capabilities), "embedding") {
-			if p, ok := r.providers[config.ID]; ok {
+			if p, ok := r.providers[config.ProviderID]; ok {
 				return config, p, nil
 			}
 		}
@@ -202,7 +208,7 @@ func (r *Router) GetEmbeddingProvider() (types.ModelConfig, Provider, error) {
 // firstAvailable returns the first registered model in priority order.
 func (r *Router) firstAvailable() (types.ModelConfig, Provider, error) {
 	for _, config := range r.models {
-		if p, ok := r.providers[config.ID]; ok {
+		if p, ok := r.providers[config.ProviderID]; ok {
 			return config, p, nil
 		}
 	}

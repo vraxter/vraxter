@@ -36,7 +36,8 @@ func TestStreamParser_VraxChatExtraction(t *testing.T) {
 	}
 	fullAccumulated += parser.Flush()
 
-	expected := " I am building a skill for you."
+	// The parser skips the leading space after the marker to handle model idiosyncrasies
+	expected := "I am building a skill for you."
 	if fullAccumulated != expected {
 		t.Errorf("Expected chat '%s', got '%s'", expected, fullAccumulated)
 	}
@@ -80,17 +81,18 @@ func TestStreamParser_HoldingBracket(t *testing.T) {
 	parser := core.NewStreamParser("[VRAX_CHAT]", "[VRAX_TOOL]", "[VRAX_CODE]")
 
 	// Native mode with brackets
-	parser.ProcessToken("Look at this array ")
+	out := ""
+	out += parser.ProcessToken("Look at this array ")
 	chunk2 := parser.ProcessToken("[")
 	if chunk2 != "" {
 		t.Errorf("Parser should hold open bracket, got %s", chunk2)
 	}
 	
-	parser.ProcessToken("1, 2, 3]")
-	// Should release bracket + rest only when flushed
-	flushed := parser.Flush()
-	expected := "[1, 2, 3]"
-	if flushed != expected {
-		t.Errorf("Expected released bracket chunk '%s', got '%s'", expected, flushed)
+	out += parser.ProcessToken("1, 2, 3]")
+	// Should release bracket + rest only when flushed or clearly not a marker
+	out += parser.Flush()
+	expected := "Look at this array [1, 2, 3]"
+	if out != expected {
+		t.Errorf("Expected released bracket chunk '%s', got '%s'", expected, out)
 	}
 }

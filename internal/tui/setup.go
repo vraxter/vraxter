@@ -9,6 +9,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+var (
+	setupTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#d4af37")).Bold(true) // colorGold
+	setupFaintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))            // colorMutedGray
+	setupDoneStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#50fa7b"))            // colorEmerald
+)
+
+type SetupFinishedMsg struct {
+	Result OnboardingResult
+}
+
 type OnboardingResult struct {
 	Name      string
 	Expertise string
@@ -22,6 +32,7 @@ type SetupModel struct {
 	quitting bool
 	Done     bool
 	Result   OnboardingResult
+	Width    int
 }
 
 func NewSetupModel() *SetupModel {
@@ -61,9 +72,9 @@ func (m *SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyEsc:
 			m.quitting = true
-			return m, tea.Quit
+			return m, nil
 		case tea.KeyEnter:
 			if m.step == len(m.inputs)-1 {
 				m.Done = true
@@ -73,7 +84,7 @@ func (m *SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Interests: m.inputs[2].Value(),
 					Bio:       m.inputs[3].Value(),
 				}
-				return m, tea.Quit
+				return m, func() tea.Msg { return SetupFinishedMsg{Result: m.Result} }
 			}
 			m.step++
 			m.inputs[m.step].Focus()
@@ -87,20 +98,31 @@ func (m *SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *SetupModel) View() string {
+	width := m.Width
+	if width <= 0 {
+		width = 80
+	}
 	if m.quitting {
-		return "Setup cancelled.\n"
+		return "Setup cancelled."
 	}
 	if m.Done {
-		return "Setup complete! Persisting profile...\n"
+		return "Setup complete! Persisting profile..."
 	}
 
 	var s strings.Builder
 
-	header := titleStyle.Render("Vraxter User Setup")
-	s.WriteString(header + "\n\n")
+	headerLeft := setupTitleStyle.Render("◈ USER SETUP")
+	headerRight := setupFaintStyle.Render(fmt.Sprintf("%d / %d", m.step+1, len(m.inputs)))
+
+	pad := width - 6 - lipgloss.Width(headerLeft) - lipgloss.Width(headerRight)
+	if pad < 1 {
+		pad = 1
+	}
+	s.WriteString(headerLeft + strings.Repeat(" ", pad) + headerRight + "\n")
+	s.WriteString(setupFaintStyle.Render(strings.Repeat("─", width-6)) + "\n\n")
 
 	steps := []string{"Name", "Expertise", "Interests", "Bio"}
-	
+
 	// Progress indicator
 	for i := 0; i < len(steps); i++ {
 		dot := "○ "
@@ -109,14 +131,14 @@ func (m *SetupModel) View() string {
 		} else if i < m.step {
 			dot = "✓ "
 		}
-		
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
+
+		style := setupFaintStyle
 		if i == m.step {
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFAA00")).Bold(true)
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#d4af37")).Bold(true)
 		} else if i < m.step {
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF41"))
+			style = setupDoneStyle
 		}
-		
+
 		s.WriteString(style.Render(dot + steps[i]))
 		if i < len(steps)-1 {
 			s.WriteString("  ")
@@ -125,10 +147,16 @@ func (m *SetupModel) View() string {
 	s.WriteString("\n\n")
 
 	// Current Input
-	s.WriteString(fmt.Sprintf("%s\n", steps[m.step]))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8")).Bold(true)
+	s.WriteString(fmt.Sprintf("%s\n", labelStyle.Render(steps[m.step])))
 	s.WriteString(m.inputs[m.step].View() + "\n\n")
 
-	s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#777777")).Render("(Press Enter to continue, Ctrl+C to cancel)"))
+	s.WriteString(setupFaintStyle.Italic(true).Render("(Press Enter to continue, Esc to cancel)"))
 
-	return appStyle.Render(s.String())
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("#2a2a2a")).
+		Padding(1, 2).
+		Width(width).
+		Render(s.String())
 }

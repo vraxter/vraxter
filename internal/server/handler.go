@@ -9,17 +9,23 @@ import (
 	v1 "github.com/patagonicrune/vraxter/api/v1"
 	"github.com/patagonicrune/vraxter/internal/core"
 	"github.com/patagonicrune/vraxter/internal/llm"
+	"github.com/patagonicrune/vraxter/internal/services"
 	"google.golang.org/grpc/metadata"
 )
 
-// AgentHandler implements the gRPC AgentService defined in agent.proto
 type AgentHandler struct {
 	v1.UnimplementedAgentServiceServer
-	engine *core.Engine
+	engine          *core.Engine
+	providerManager *services.ProviderManager
+	modelManager    *services.ModelManager
 }
 
-func NewAgentHandler(engine *core.Engine) *AgentHandler {
-	return &AgentHandler{engine: engine}
+func NewAgentHandler(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager) *AgentHandler {
+	return &AgentHandler{
+		engine:          engine,
+		providerManager: pm,
+		modelManager:    mm,
+	}
 }
 
 // Execute handles the gRPC stream for a natural language intent
@@ -138,6 +144,89 @@ func (h *AgentHandler) GetConversation(ctx context.Context, req *v1.GetConversat
 			Role:      m.Role,
 			Content:   m.Content,
 			Timestamp: m.Timestamp.Format(time.RFC3339),
+		})
+	}
+	return resp, nil
+}
+
+// --- Management RPC Implementations ---
+
+func (h *AgentHandler) GetSupportedProviders(ctx context.Context, req *v1.GetSupportedProvidersRequest) (*v1.GetSupportedProvidersResponse, error) {
+	return &v1.GetSupportedProvidersResponse{
+		Providers: llm.GetSupportedProviders(),
+	}, nil
+}
+
+func (h *AgentHandler) ConfigureProvider(ctx context.Context, req *v1.ConfigureProviderRequest) (*v1.ConfigureProviderResponse, error) {
+	id, err := h.providerManager.AddProvider(ctx, req.Name, req.Type, req.ApiKey, req.BaseUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to configure provider: %w", err)
+	}
+	return &v1.ConfigureProviderResponse{
+		ProviderId: id,
+		Status:     "CONFIGURED",
+	}, nil
+}
+
+func (h *AgentHandler) ListProviders(ctx context.Context, req *v1.ListProvidersRequest) (*v1.ListProvidersResponse, error) {
+	providers, err := h.providerManager.ListProviders()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list providers: %w", err)
+	}
+
+	resp := &v1.ListProvidersResponse{}
+	for _, p := range providers {
+		resp.Providers = append(resp.Providers, &v1.ProviderInfo{
+			Id:           p.ID,
+			Name:         p.Name,
+			Type:         p.Type,
+			IsConfigured: p.APIKey != "",
+		})
+	}
+	return resp, nil
+}
+
+func (h *AgentHandler) DiscoverModels(ctx context.Context, req *v1.DiscoverModelsRequest) (*v1.DiscoverModelsResponse, error) {
+	models, err := h.providerManager.DiscoverModels(ctx, req.ProviderId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover models: %w", err)
+	}
+
+	var ids []string
+	for _, m := range models {
+		ids = append(ids, m.ID)
+	}
+	return &v1.DiscoverModelsResponse{Models: ids}, nil
+}
+
+func (h *AgentHandler) RegisterModel(ctx context.Context, req *v1.RegisterModelRequest) (*v1.RegisterModelResponse, error) {
+	id, err := h.modelManager.AddModel(ctx, req.ProviderId, req.ModelName, int(req.Priority), req.Alias)
+	if err != nil {
+		return nil, fmt.Errorf("failed to register model: %w", err)
+	}
+	return &v1.RegisterModelResponse{ModelId: id}, nil
+}
+
+func (h *AgentHandler) ListModels(ctx context.Context, req *v1.ListModelsRequest) (*v1.ListModelsResponse, error) {
+	models, err := h.modelManager.ListModels()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list models: %w", err)
+	}
+
+	resp := &v1.ListModelsResponse{}
+	for _, m := range models {
+		// filter by provider if requested
+		if req.ProviderId != "" && m.ProviderID != req.ProviderId {
+			continue
+		}
+
+		resp.Models = append(resp.Models, &v1.ModelInfo{
+			Id:           m.ID,
+			ProviderName: m.Provider,
+			Alias:        m.Alias,
+			Model:        m.Model,
+			IsActive:     m.IsActive,
+			Priority:     int32(m.Priority),
 		})
 	}
 	return resp, nil

@@ -22,8 +22,7 @@ $Context.Query
 | {{.Query}}
 
 -> Output.Plan
-# ARCHITECTURAL STRATEGY
-[Detailed narrative analysis in mirrored language]
+[Detailed narrative analysis in mirrored language, DO NOT SEND "ARCHITECTURAL STRATEGY" as a field, this section will not have a title]
 
 [MANIFEST]
 {

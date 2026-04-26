@@ -31,6 +31,8 @@ var (
 	appStore    *db.Store
 	appCrypto   *security.CryptoService
 	appEngine   *core.Engine
+	appProviderManager *services.ProviderManager
+	appModelManager    *services.ModelManager
 	agentFlag   string
 	sessionFlag string
 	modelFlag   string
@@ -83,6 +85,17 @@ func bootstrap() {
 		if err != nil {
 			fmt.Printf("Fatal: Core Engine initialization failed: %v\n", err)
 			os.Exit(1)
+		}
+
+		providerRepo := db.NewProviderRepository(appStore, appCrypto)
+		modelRepo := db.NewModelRepository(appStore, appCrypto)
+
+		appProviderManager = services.NewProviderManager(providerRepo)
+		appModelManager = services.NewModelManager(modelRepo, providerRepo)
+
+		// 3. Automigrations
+		if err := db.RenameProviderType(appStore, "gemini", "google"); err != nil {
+			log.Printf("Warning: gemini->google migration failed: %v", err)
 		}
 	})
 }
@@ -175,7 +188,7 @@ var rootCmd = &cobra.Command{
 			}
 
 			defer gClient.Close()
-			app := tui.NewModel(ctx, gClient, sessionID, "", userName)
+			app := tui.NewModel(ctx, gClient, appStore, appCrypto, sessionID, "", userName)
 			p := tea.NewProgram(app, tea.WithAltScreen())
 			if _, err := p.Run(); err != nil {
 				fmt.Printf("❌ Failed to start UI: %v\n", err)
@@ -280,7 +293,7 @@ func spawnEphemeralDaemon() {
 	bootstrap()
 	ready := make(chan bool)
 	go func() {
-		server.Start(appEngine, ready)
+		server.Start(appEngine, appProviderManager, appModelManager, ready)
 	}()
 	<-ready
 }
@@ -293,7 +306,7 @@ var serverCmd = &cobra.Command{
 
 		ready := make(chan bool)
 		go func() {
-			server.Start(appEngine, ready)
+			server.Start(appEngine, appProviderManager, appModelManager, ready)
 		}()
 
 		<-ready

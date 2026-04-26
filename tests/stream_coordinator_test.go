@@ -17,12 +17,13 @@ func mockRouter(t *testing.T, providers ...*MockProvider) *llm.Router {
 		entries = append(entries, llm.RouterEntry{
 			Provider: p,
 			Config: types.ModelConfig{
-				ID:       "mock-model",
-				Alias:    "mock",
-				Provider: "mock",
-				Model:    "mock-v1",
-				Priority: i + 1,
-				IsActive: true,
+				ID:         "mock-model",
+				ProviderID: "p-mock",
+				Alias:      "mock",
+				Provider:   "mock",
+				Model:      "mock-v1",
+				Priority:   i + 1,
+				IsActive:   true,
 			},
 		})
 	}

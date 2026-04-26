@@ -1,52 +1,37 @@
 package llm
 
-import "context"
-
-// Message represents a single conversational turn or system instruction
-type Message struct {
-	Role    string `json:"role"` // "system", "user", "assistant"
-	Content string `json:"content"`
-}
-
-// CompletionRequest is the standard struct to decouple Vraxter logic from specific APIs
-type CompletionRequest struct {
-	Model    string
-	Messages []Message
-	Format   string // Format "json" if structured output is needed
-}
-
-// StreamEventType defines what's coming through the channel (token, tool-call, error)
-type StreamEventType string
-
-const (
-	EventTypeToken       StreamEventType = "token"
-	EventTypeError       StreamEventType = "error"
-	EventTypeDone        StreamEventType = "done"
-	EventTypeSkillCall   StreamEventType = "skill_call"
-	EventTypeCommandCall StreamEventType = "command_call"
-	EventTypePlanProposal StreamEventType = "plan_proposal"
-	EventTypeStatus       StreamEventType = "status"
-	EventTypeSpecialistResult StreamEventType = "specialist_result"
+import (
+	"github.com/patagonicrune/vraxter/internal/llm/registry"
+	"github.com/patagonicrune/vraxter/pkg/interfaces"
 )
 
-// StreamEvent is the unit of communication for Vraxter's reactive architecture
-type StreamEvent struct {
-	Type          StreamEventType
-	Content       string
-	Err           error
-	ActiveModelID string // The model ID currently driving the session
+// Type aliases to preserve backward compatibility for existing consumers
+// while moving the canonical definitions to pkg/interfaces to avoid circularity.
+
+type Message = interfaces.Message
+type CompletionRequest = interfaces.CompletionRequest
+type StreamEventType = interfaces.StreamEventType
+
+const (
+	EventTypeToken       = interfaces.EventTypeToken
+	EventTypeError       = interfaces.EventTypeError
+	EventTypeDone        = interfaces.EventTypeDone
+	EventTypeSkillCall   = interfaces.EventTypeSkillCall
+	EventTypeCommandCall = interfaces.EventTypeCommandCall
+	EventTypePlanProposal = interfaces.EventTypePlanProposal
+	EventTypeStatus       = interfaces.EventTypeStatus
+	EventTypeSpecialistResult = interfaces.EventTypeSpecialistResult
+)
+
+type StreamEvent = interfaces.StreamEvent
+type CompletionResponse = interfaces.CompletionResponse
+type Provider = interfaces.LLMProvider
+
+// Registry wrappers to avoid cross-package imports for core logic
+func Create(pType, apiKey, baseURL string) (Provider, error) {
+	return registry.Create(pType, apiKey, baseURL)
 }
 
-// CompletionResponse encapsulates what an LLM responds
-type CompletionResponse struct {
-	Content string
-}
-
-// Provider represents a generic LLM API connection (Ollama, OpenAI, Anthropic)
-
-type Provider interface {
-	Generate(ctx context.Context, req CompletionRequest) (CompletionResponse, error)
-	StreamGenerate(ctx context.Context, req CompletionRequest) (<-chan StreamEvent, error)
-	Embed(ctx context.Context, model string, texts []string) ([][]float32, error)
-	CheckHealth(ctx context.Context) error
+func GetSupportedProviders() []string {
+	return registry.GetSupportedProviders()
 }
