@@ -3,103 +3,197 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/patagonicrune/vraxter/internal/services"
 )
 
 type ProviderWizard struct {
-	manager *services.ProviderManager
-	step    int
-	name    string
-	pType   string
-	apiKey  string
-	baseURL string
-	err     error
-	width   int
-	done    bool
+	manager   *services.ProviderManager
+	step      int
+	inputs    []textinput.Model
+	err       error
+	width     int
+	done      bool
+	quitting  bool
+	ProviderID string
 }
 
 func NewProviderWizard(mgr *services.ProviderManager) *ProviderWizard {
-	return &ProviderWizard{manager: mgr, step: 0}
+	inputs := make([]textinput.Model, 4)
+
+	inputs[0] = textinput.New()
+	inputs[0].Placeholder = "Provider Name (e.g. My Google Account)"
+	inputs[0].Focus()
+	inputs[0].CharLimit = 64
+	inputs[0].Width = 64
+
+	inputs[1] = textinput.New()
+	inputs[1].Placeholder = "Type (google, openai, anthropic, ollama)"
+	inputs[1].CharLimit = 32
+	inputs[1].Width = 32
+
+	inputs[2] = textinput.New()
+	inputs[2].Placeholder = "API Key"
+	inputs[2].EchoMode = textinput.EchoPassword
+	inputs[2].EchoCharacter = '◈'
+	inputs[2].CharLimit = 256
+	inputs[2].Width = 64
+
+	inputs[3] = textinput.New()
+	inputs[3].Placeholder = "Base URL (Optional, defaults to official for cloud)"
+	inputs[3].CharLimit = 256
+	inputs[3].Width = 64
+
+	return &ProviderWizard{
+		manager: mgr,
+		inputs:  inputs,
+	}
 }
 
 func (m *ProviderWizard) Init() tea.Cmd {
-	return nil
+	return textinput.Blink
 }
 
 func (m *ProviderWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "esc":
+		switch msg.Type {
+		case tea.KeyEsc:
+			m.quitting = true
 			m.done = true
 			return m, nil
-		case "enter":
-			m.step++
-			if m.step > 3 || (m.pType == "ollama" && m.step == 2) {
+		case tea.KeyEnter:
+			// Special handling for Ollama - skip API Key
+			if m.step == 1 && strings.ToLower(m.inputs[1].Value()) == "ollama" {
+				m.step = 3
+				m.inputs[3].Focus()
+				return m, nil
+			}
+
+			if m.step == len(m.inputs)-1 {
 				// Finalize
-				id, err := m.manager.AddProvider(context.Background(), m.name, m.pType, m.apiKey, m.baseURL)
+				name := m.inputs[0].Value()
+				pType := strings.ToLower(m.inputs[1].Value())
+				apiKey := m.inputs[2].Value()
+				baseURL := m.inputs[3].Value()
+
+				id, err := m.manager.AddProvider(context.Background(), name, pType, apiKey, baseURL)
 				if err != nil {
 					m.err = err
-					m.step-- // Go back to fix
 					return m, nil
 				}
-				fmt.Printf("\n✅ Provider added with ID: %s\n", id)
+				m.ProviderID = id
 				m.done = true
+				return m, nil
 			}
-		case "backspace":
-			// Simple backspace for current field
-			switch m.step {
-			case 0: if len(m.name) > 0 { m.name = m.name[:len(m.name)-1] }
-			case 1: if len(m.pType) > 0 { m.pType = m.pType[:len(m.pType)-1] }
-			case 2: if len(m.apiKey) > 0 { m.apiKey = m.apiKey[:len(m.apiKey)-1] }
-			case 3: if len(m.baseURL) > 0 { m.baseURL = m.baseURL[:len(m.baseURL)-1] }
-			}
-		default:
-			if len(msg.String()) == 1 {
-				switch m.step {
-				case 0: m.name += msg.String()
-				case 1: m.pType += msg.String()
-				case 2: m.apiKey += msg.String()
-				case 3: m.baseURL += msg.String()
-				}
-			}
+
+			m.step++
+			m.inputs[m.step].Focus()
+			return m, nil
 		}
 	}
-	return m, nil
+
+	var cmd tea.Cmd
+	m.inputs[m.step], cmd = m.inputs[m.step].Update(msg)
+	return m, cmd
 }
 
 func (m *ProviderWizard) View() string {
+	if m.quitting {
+		return "Setup cancelled."
+	}
 	if m.done {
-		return ""
+		return fmt.Sprintf("✅ Provider configured successfully (ID: %s)", m.ProviderID)
 	}
-	
-	header := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("196")).
-		Render("◈ PROVIDER SETUP WIZARD")
 
-	var body string
-	switch m.step {
-	case 0:
-		body = fmt.Sprintf("Step 1: Enter Provider Name (e.g., Google Personal)\n> %s", m.name)
-	case 1:
-		body = fmt.Sprintf("Step 2: Enter Type (google, openai, anthropic, ollama)\n> %s", m.pType)
-	case 2:
-		body = fmt.Sprintf("Step 3: Enter API Key\n> %s", m.apiKey)
-	case 3:
-		body = fmt.Sprintf("Step 4: Enter Base URL (Optional)\n> %s", m.baseURL)
+	var s strings.Builder
+
+	width := m.width
+	if width <= 0 {
+		width = 80
 	}
+
+	headerLeft := setupTitleStyle.Render("◈ PROVIDER CONFIGURATION")
+	headerRight := setupFaintStyle.Render(fmt.Sprintf("%d / %d", m.step+1, len(m.inputs)))
+
+	pad := width - 6 - lipgloss.Width(headerLeft) - lipgloss.Width(headerRight)
+	if pad < 1 {
+		pad = 1
+	}
+	s.WriteString(headerLeft + strings.Repeat(" ", pad) + headerRight + "\n")
+	ruleWidth := width - 6
+	if ruleWidth < 0 { ruleWidth = 0 }
+	s.WriteString(setupFaintStyle.Render(strings.Repeat("─", ruleWidth)) + "\n\n")
+
+	steps := []string{"Identity", "Selection", "Credentials", "Endpoint"}
+	// Progress
+	for i := 0; i < len(steps); i++ {
+		dot := "○ "
+		if i == m.step {
+			dot = "● "
+		} else if i < m.step {
+			dot = "✓ "
+		}
+
+		style := setupFaintStyle
+		if i == m.step {
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#d4af37")).Bold(true)
+		} else if i < m.step {
+			style = setupDoneStyle
+		}
+
+		s.WriteString(style.Render(dot + steps[i]))
+		if i < len(steps)-1 {
+			s.WriteString("  ")
+		}
+	}
+	s.WriteString("\n\n")
+
+	// Help Text area
+	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Italic(true)
+	helpText := ""
+	switch m.step {
+	case 1:
+		helpText = "Vraxter supports Google (Gemini), OpenAI, Anthropic (Claude), and Ollama."
+	case 2:
+		pType := strings.ToLower(m.inputs[1].Value())
+		switch pType {
+		case "google":
+			helpText = "Get your API Key at: https://aistudio.google.com/app/apikey"
+		case "openai":
+			helpText = "Get your API Key at: https://platform.openai.com/api-keys"
+		case "anthropic":
+			helpText = "Get your API Key at: https://console.anthropic.com/settings/keys"
+		case "ollama":
+			helpText = "Ollama traditionally runs locally; no API Key is required."
+		}
+	case 3:
+		helpText = "Leave empty to use official APIs, or specify a custom proxy/endpoint."
+	}
+
+	if helpText != "" {
+		s.WriteString(helpStyle.Render("💡 ") + helpStyle.Render(helpText) + "\n\n")
+	}
+
+	// Input
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8")).Bold(true)
+	s.WriteString(fmt.Sprintf("%s\n", labelStyle.Render(steps[m.step])))
+	s.WriteString(m.inputs[m.step].View() + "\n")
 
 	if m.err != nil {
-		body += lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(fmt.Sprintf("\n\n❌ Error: %v", m.err))
+		s.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5252")).Render("❌ Error: "+m.err.Error()) + "\n")
 	}
 
-	footer := "\n\n(Enter: Next | Esc: Cancel)"
-	
-	return lipgloss.Place(m.width, 10, lipgloss.Center, lipgloss.Center, 
-		lipgloss.JoinVertical(lipgloss.Center, header, body, footer))
+	s.WriteString("\n" + setupFaintStyle.Render("(Enter: Next | Esc: Cancel)"))
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("#2a2a2a")).
+		Padding(1, 2).
+		Width(width).
+		Render(s.String())
 }

@@ -6,9 +6,7 @@ import (
 	"os"
 
 	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/tui"
 	"github.com/spf13/cobra"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 var userCmd = &cobra.Command{
@@ -84,20 +82,27 @@ var userUpdateCmd = &cobra.Command{
 
 var userSetupCmd = &cobra.Command{
 	Use:   "setup",
-	Short: "Guided interactive profile setup",
+	Short: "Interactive profile setup",
 	Run: func(cmd *cobra.Command, args []string) {
-		m := tui.NewSetupModel()
-		p := tea.NewProgram(m)
+		var name, expertise, interests, bio string
 
-		finalModel, err := p.Run()
-		if err != nil {
-			fmt.Printf("❌ Critical TUI Error: %v\n", err)
-			os.Exit(1)
-		}
+		fmt.Println("\n◈ VRAXTER USER SETUP")
+		fmt.Println("--------------------------------------------------------------------------------")
 
-		setup := finalModel.(*tui.SetupModel)
-		if !setup.Done {
-			fmt.Println("❌ Setup cancelled.")
+		fmt.Print("1. What's your name? ")
+		fmt.Scanln(&name)
+
+		fmt.Print("2. Level of expertise (e.g. Senior Go Dev): ")
+		fmt.Scanln(&expertise)
+
+		fmt.Print("3. Interests (e.g. NATS, Kubernetes): ")
+		fmt.Scanln(&interests)
+
+		fmt.Print("4. Bio (Tell Vraxter about yourself): ")
+		fmt.Scanln(&bio)
+
+		if name == "" {
+			fmt.Println("❌ Error: Name is mandatory.")
 			return
 		}
 
@@ -108,10 +113,10 @@ var userSetupCmd = &cobra.Command{
 			return
 		}
 
-		user.Name = setup.Result.Name
-		user.Expertise = setup.Result.Expertise
-		user.Interests = setup.Result.Interests
-		user.Bio = setup.Result.Bio
+		user.Name = name
+		user.Expertise = expertise
+		user.Interests = interests
+		user.Bio = bio
 
 		if err := repo.UpdateUser(context.Background(), user); err != nil {
 			fmt.Printf("❌ Failed to save profile: %v\n", err)

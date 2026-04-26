@@ -26,7 +26,7 @@ type OnboardingResult struct {
 	Bio       string
 }
 
-type SetupModel struct {
+type UserWizardModel struct {
 	step     int
 	inputs   []textinput.Model
 	quitting bool
@@ -35,7 +35,7 @@ type SetupModel struct {
 	Width    int
 }
 
-func NewSetupModel() *SetupModel {
+func NewUserWizardModel() *UserWizardModel {
 	inputs := make([]textinput.Model, 4)
 	
 	inputs[0] = textinput.New()
@@ -59,16 +59,16 @@ func NewSetupModel() *SetupModel {
 	inputs[3].CharLimit = 256
 	inputs[3].Width = 64
 
-	return &SetupModel{
+	return &UserWizardModel{
 		inputs: inputs,
 	}
 }
 
-func (m *SetupModel) Init() tea.Cmd {
+func (m *UserWizardModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-func (m *SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *UserWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
@@ -97,7 +97,7 @@ func (m *SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *SetupModel) View() string {
+func (m *UserWizardModel) View() string {
 	width := m.Width
 	if width <= 0 {
 		width = 80
@@ -111,7 +111,7 @@ func (m *SetupModel) View() string {
 
 	var s strings.Builder
 
-	headerLeft := setupTitleStyle.Render("◈ USER SETUP")
+	headerLeft := setupTitleStyle.Render("◈ USER PROFILE")
 	headerRight := setupFaintStyle.Render(fmt.Sprintf("%d / %d", m.step+1, len(m.inputs)))
 
 	pad := width - 6 - lipgloss.Width(headerLeft) - lipgloss.Width(headerRight)
@@ -119,7 +119,9 @@ func (m *SetupModel) View() string {
 		pad = 1
 	}
 	s.WriteString(headerLeft + strings.Repeat(" ", pad) + headerRight + "\n")
-	s.WriteString(setupFaintStyle.Render(strings.Repeat("─", width-6)) + "\n\n")
+	ruleWidth := width - 6
+	if ruleWidth < 0 { ruleWidth = 0 }
+	s.WriteString(setupFaintStyle.Render(strings.Repeat("─", ruleWidth)) + "\n\n")
 
 	steps := []string{"Name", "Expertise", "Interests", "Bio"}
 
