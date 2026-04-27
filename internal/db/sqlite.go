@@ -87,6 +87,7 @@ func (s *Store) initSchema() error {
 	CREATE TABLE IF NOT EXISTS conversations (
 		id TEXT PRIMARY KEY,
 		title TEXT NOT NULL,
+		summary TEXT DEFAULT '',
 		specialist_id TEXT DEFAULT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -165,55 +166,6 @@ func (s *Store) initSchema() error {
 		log.Printf("DB Schema Init error: %v", err)
 	}
 
-	// Simple migrations for existing databases (Phase 12.10 & 12.11)
-	// These will fail safely if the columns already exist
-	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN permissions TEXT NOT NULL DEFAULT ''")
-	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN downloads INTEGER NOT NULL DEFAULT 0")
-
-	// Migration for Phase 16 (Specialists)
-	_, _ = s.Conn.Exec("ALTER TABLE conversations ADD COLUMN specialist_id TEXT DEFAULT NULL")
-
-	// Migration for Phase 16.2 (Model Capabilities)
-	_, _ = s.Conn.Exec("ALTER TABLE models ADD COLUMN capabilities TEXT DEFAULT ''")
-	_, _ = s.Conn.Exec("ALTER TABLE models ADD COLUMN context_window INTEGER DEFAULT 0")
-
-	// Migration for Context Summarization
-	_, _ = s.Conn.Exec("ALTER TABLE conversations ADD COLUMN summary TEXT DEFAULT ''")
-
-	// Migration: User Profile fields (Phase 18)
-	_, _ = s.Conn.Exec("ALTER TABLE users ADD COLUMN expertise TEXT DEFAULT ''")
-	_, _ = s.Conn.Exec("ALTER TABLE users ADD COLUMN interests TEXT DEFAULT ''")
-	_, _ = s.Conn.Exec("ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''")
-
-	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN param_regex TEXT NOT NULL DEFAULT ''")
-	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN vector BLOB DEFAULT NULL")
-
-	// Migration for Provider-First Architecture
-	_, _ = s.Conn.Exec("ALTER TABLE models ADD COLUMN provider_id TEXT")
-	_, _ = s.Conn.Exec("ALTER TABLE models DROP COLUMN provider")
-	_, _ = s.Conn.Exec("ALTER TABLE models ADD COLUMN is_active BOOLEAN DEFAULT 1")
-
-	// Migration for Provider naming (gemini -> google)
-	_, _ = s.Conn.Exec("UPDATE providers SET type = 'google' WHERE type = 'gemini'")
-
-	return err
-}
-
-func (s *Store) BootstrapDefaultUser() error {
-	var count int
-	err := s.Conn.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-
-	_, err = s.Conn.Exec(`
-		INSERT INTO users (id, name, language, theme_preference, expertise, interests, bio)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"default", "Vraxter User", "en", "system", "Software Engineer", "Artificial Intelligence, Automation", "A power user looking for automated efficiency.",
-	)
 	return err
 }
 

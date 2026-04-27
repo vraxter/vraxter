@@ -170,7 +170,6 @@ var helpCommand = `
   /help, /?		- Shows this menu
 `
 
-
 type EventMsgWrapper struct {
 	Event llm.StreamEvent
 	Next  func() tea.Msg
@@ -1541,11 +1540,11 @@ func (m *Model) View() string {
 		if sw, ok := m.ActiveSetup.(*StartupWizard); ok {
 			sw.width = m.width
 		}
-		return m.ActiveSetup.View()
+		return "\033]0;Vraxter Workstation\007" + m.ActiveSetup.View()
 	}
 
 	if !m.Ready {
-		return "Initializing Dashboard..."
+		return "\033]0;Vraxter Workstation\007Initializing Dashboard..."
 	}
 
 	header := m.renderHeader()
@@ -1604,7 +1603,7 @@ func (m *Model) View() string {
 	// 3. Bottom Rail
 	bottomRail := faintStyle.Render(strings.Repeat("─", footerWidth))
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	return "\033]0;Vraxter Workstation\007" + lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		chatArea,
 		topLine,

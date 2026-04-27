@@ -19,21 +19,21 @@ const (
 )
 
 type StartupWizard struct {
-	state       StartupWizardState
-	width       int
-	height      int
-	
+	state  StartupWizardState
+	width  int
+	height int
+
 	// Sub-Wizards
-	userWizard   *UserWizardModel
-	provWizard   *ProviderWizard
-	modelWizard  *ModelWizard
-	
+	userWizard  *UserWizardModel
+	provWizard  *ProviderWizard
+	modelWizard *ModelWizard
+
 	// Dependencies for child creation
-	provMgr      *services.ProviderManager
-	modelMgr     *services.ModelManager
-	
-	quitting     bool
-	Done         bool
+	provMgr  *services.ProviderManager
+	modelMgr *services.ModelManager
+
+	quitting bool
+	Done     bool
 }
 
 func NewStartupWizard(pMgr *services.ProviderManager, mMgr *services.ModelManager) *StartupWizard {
@@ -142,20 +142,22 @@ func (m *StartupWizard) View() string {
 
 func (m *StartupWizard) renderSplash() string {
 	width := m.width
-	if width <= 0 { width = 80 }
+	if width <= 0 {
+		width = 80
+	}
 
 	var s strings.Builder
 	s.WriteString("\n\n")
 	s.WriteString(lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("    ◈ WELCOME TO VRAXTER") + "\n")
 	s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("    The autonomous workstation for the modern engineer.") + "\n\n")
-	
+
 	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Width(width - 8).Render(
 		"This wizard will guide you through the initial configuration:\n\n" +
-		" 1. Create your Identity\n" +
-		" 2. Connect a Provider (OpenAI, Google, etc.)\n" +
-		" 3. Register your first Model\n",
+			" 1. Create your Identity\n" +
+			" 2. Connect a Provider (OpenAI, Google, etc.)\n" +
+			" 3. Register your first Model\n",
 	))
-	
+
 	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorGold).Render("Press ENTER to begin your journey..."))
 
 	return lipgloss.NewStyle().
@@ -168,20 +170,22 @@ func (m *StartupWizard) renderSplash() string {
 
 func (m *StartupWizard) renderFinished() string {
 	width := m.width
-	if width <= 0 { width = 80 }
+	if width <= 0 {
+		width = 80
+	}
 
 	var s strings.Builder
 	s.WriteString("\n\n")
 	s.WriteString(lipgloss.NewStyle().Foreground(setupDoneStyle.GetForeground()).Bold(true).Render("    ◈ CONFIGURATION COMPLETE") + "\n")
 	s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("    Vraxter has been initialized and is ready for action.") + "\n\n")
-	
+
 	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Width(width - 8).Render(
 		"You can now start chatting with your models. Simply type your request \n" +
-		"in the console after exiting this wizard.\n\n" +
-		"To modify these settings later, use:\n" +
-		" /user setup      /providers setup      /models setup",
+			"in the console after exiting this wizard.\n\n" +
+			"To modify these settings later, use:\n" +
+			" /user setup      /providers setup      /models setup",
 	))
-	
+
 	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorGold).Render("Press ENTER to enter the workstation..."))
 
 	return lipgloss.NewStyle().
