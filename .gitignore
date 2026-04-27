@@ -36,4 +36,5 @@ go.work.sum
 
 # Binaries
 bin/*
+*.rc
 output.log

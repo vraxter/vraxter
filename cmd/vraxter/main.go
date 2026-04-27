@@ -59,9 +59,7 @@ func bootstrap() {
 			os.Exit(1)
 		}
 
-		if err := appStore.BootstrapDefaultUser(); err != nil {
-			fmt.Printf("Warning: Default user bootstrap failed: %v\n", err)
-		}
+		// appStore has been initialized above
 
 		appCrypto, err = security.NewCryptoService(appConfig.KeyPath)
 		if err != nil {

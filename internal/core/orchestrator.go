@@ -45,7 +45,6 @@ type Orchestrator struct {
 	UserRepo    *db.UserRepository
 	MemorySvc   *services.MemoryService
 
-
 	// Performance Cache
 	mu                sync.RWMutex
 	cachedModels      []types.ModelConfig
@@ -354,7 +353,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 		conversationID := o.resolveConversationContext(sessionID, specialistID)
 
 		trimmedText := strings.TrimSpace(text)
-		
+
 		// FAST PATH 1: Exact Command Match
 		explicitMatch, _ := o.IdentifyIntent(ctx, trimmedText)
 		if explicitMatch.Confidence == 1.0 {
@@ -417,7 +416,9 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 			var plan Plan
 			if err := json.Unmarshal([]byte(planJSON), &plan); err == nil {
 				for i, phase := range plan.Phases {
-					if ctx.Err() != nil { return }
+					if ctx.Err() != nil {
+						return
+					}
 					out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n\n[▶️ Phase %d: %s]\n", i+1, phase.Title)}
 					phaseQuery := fmt.Sprintf("TASK: %s\nDESCRIPTION: %s", phase.Title, phase.Description)
 					_ = o.executeSubTask(ctx, phaseQuery, phase.Specialist, out)
@@ -445,16 +446,20 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 
 		maxRetries := 2
 		for iteration := 0; iteration < maxRetries; iteration++ {
-			if ctx.Err() != nil { break }
+			if ctx.Err() != nil {
+				break
+			}
 
 			history, _ := o.ChatRepo.GetMessagesByConversation(conversationID, 12)
 			toolsContext := o.buildToolsContext(specialistID)
 			systemPrompt, enf := o.buildSystemPrompt(specialistID, specsCtxStr, modelsCtxStr, toolsContext, userProfilePool, memoryContextPool, &modelCfg)
-			
+
 			msgs := []llm.Message{{Role: "system", Content: systemPrompt}}
 			for idx, h := range history {
 				content := h.Content
-				if idx == len(history)-1 && h.Role == "user" { content += enf }
+				if idx == len(history)-1 && h.Role == "user" {
+					content += enf
+				}
 				msgs = append(msgs, llm.Message{Role: h.Role, Content: content})
 			}
 
@@ -466,10 +471,14 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 			}()
 
 			feedback := o.ExecEngine.ExecutePipeline(ctx, queue, out, conversationID)
-			if feedback == "" { break }
+			if feedback == "" {
+				break
+			}
 
 			if iteration < maxRetries-1 {
-				if strings.Contains(feedback, "CONTROL RETURNED") { specialistID = "" }
+				if strings.Contains(feedback, "CONTROL RETURNED") {
+					specialistID = ""
+				}
 				o.ChatRepo.SaveMessage(&types.Message{
 					ID: uuid.New().String(), ConversationID: conversationID,
 					Role: "system", Content: feedback, Timestamp: time.Now(),
@@ -500,7 +509,7 @@ func (o *Orchestrator) buildToolsContext(specialistID string) string {
 	}
 
 	addOfficial("vraxter-coder", "CREATE NEW TOOLS. Use this when the user needs a tool that doesn't exist. Params: name, description, logic (Go code).")
-	
+
 	if specialistID == "" {
 		addOfficial("vraxter-create-specialist", "Create a Sub-Agent specialist. Params: name, expertise, model_id (optional).")
 		addOfficial("vraxter-delete-specialist", "Delete a specialist sub-agent. First parameter must be 'identifier' spanning either ID or Name.")
@@ -516,7 +525,7 @@ func (o *Orchestrator) buildToolsContext(specialistID string) string {
 		if addedOfficial[sl.ID] {
 			continue // Skip duplicate/legacy descriptions from DB
 		}
-		
+
 		if sl.IsOfficial {
 			officialSkills = append(officialSkills, fmt.Sprintf("- ID: %s [OFFICIAL] | Description: %s", sl.ID, sl.Description))
 		} else {
@@ -662,7 +671,7 @@ func (o *Orchestrator) DelegateSwarmTask(ctx context.Context, out chan<- llm.Str
 
 	// FALLBACK: If the stream was tool-only (no tokens), pull the latest result from the sub-session history.
 	finalResp := strings.TrimSpace(accumulatedResp.String())
-	
+
 	if finalResp == "" {
 		messages, err := o.ChatRepo.GetMessagesByConversation(subSessionID, 5)
 		if err == nil && len(messages) > 0 {
@@ -726,4 +735,3 @@ func (o *Orchestrator) ClearSessionOverride(sessionID string) {
 	defer o.mu.Unlock()
 	delete(o.sessionOverrides, sessionID)
 }
-
