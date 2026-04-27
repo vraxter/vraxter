@@ -1,69 +1,102 @@
-# 👁️ VRAXTER
+# VRAXTER
 
->**The Sovereign Agent Engine.**
->
-> High-performance, local-first orchestrator built in Go.
->
-> Engineered for tactical autonomy and neural reasoning.
+### **The Autonomous Engineering Workstation**
+*Engineering Autonomy. Standardizing Intelligence.*
 
-## PatagonicRune | Logic. Power. Autonomy.
-
-Vraxter is not a chatbot. It is a persistent **Daemon** and **Execution Engine** designed to bridge the gap between high-level LLM reasoning and native system execution. Built by **PatagonicRune**, it focuses on three core pillars:
-
-* **Sovereignty:** Your data, your keys, your local execution.
-* **Resilience:** Multi-model priority failover (Local + Cloud).
-* **Action:** A native "Intent Router" designed to trigger real-world skills, not just generate text.
+Vraxter is a **Local-First, Autonomous Agent Workstation** designed to bridge the gap between high-level LLM reasoning and native system execution. It is a persistent engine that interprets intent, orchestrates specialized sub-agents, and automates technical workflows within a hardened, privacy-centric environment.
 
 
-## 🛠️ Architecture Overview
+## Core Architecture
 
-Vraxter operates as a **Headless Daemon** (`vraxterd`) with a high-speed gRPC interface, allowing for multiple frontends (CLI, Web, Voice) to share a single "source of truth" and persistent memory.
+Vraxter is built on the **Sovereign-Agent Model**, ensuring that your data, logic, and execution stay within your infrastructure.
 
+### 1. The Autonomous Execution Loop
+Vraxter doesn't just generate text; it solves problems by iterating through an autonomous cycle:
+- **Analyze & Plan**: Decomposes complex queries into actionable phases using its internal **Planner**.
+- **Resolve Intent**: Routes tasks either to local scripts or specialized LLM instructions.
+- **WASM Skill Execution**: Runs highly performant, sandboxed tools compiled to WebAssembly (WASM).
+- **Self-Recursion (The Coder)**: If a tool is missing, Vraxter can write, compile, and register a new Skill in real-time.
 
+### 2. Specialist Swarm
+Vraxter manages a roster of **Specialists**, domain-specific sub-agents (e.g., Security Auditor, Frontend Architect) that can be delegated to for hyper-focused reasoning. The Supervisor engine orchestrates handoffs and consolidates results seamlessly.
 
-### Core Features (Phase 1: The Skeleton)
-* **Dual-Core Brain:** Native Go engine with SQLite-backed long-term memory.
-* **Failover Logic:** Automatic model switching based on priority (0: Fav, 1: Fallback, etc.).
-* **Agnostic Provider:** Support for OpenAI, Anthropic, and Local LLMs (Ollama/Whisper.cpp).
-* **Tactical TUI:** A sophisticated terminal interface built with Bubble Tea for real-time monitoring.
+### 3. Multi-Model Intelligence
+Stop being locked into a single provider. Vraxter features dynamic, priority-based routing across:
+- **Cloud**: OpenAI, Anthropic, Google.
+- **Local**: Ollama.
+- **Failover**: Automatic fallback to secondary models if a provider is unreachable.
 
 
 ## 🚀 Getting Started
 
-### 1. Requirements
-* Go 1.21+
-* SQLite3
+### Installation
+Vraxter is distributed as a single high-performance binary.
 
-### 2. Installation
 ```bash
-git clone [https://github.com/PatagonicRune/vraxter.git](https://github.com/PatagonicRune/vraxter.git)
+# Clone the repository
+git clone https://github.com/PatagonicRune/vraxter.git
 cd vraxter
-go mod download
+
+# Build the workstation
+go build -o bin/vraxter ./cmd/vraxter/main.go
 ```
 
-### 3. Initialize the core
+### The Onboarding Wizard
+The first time you run Vraxter, or by typing `/start`, you will enter the **Premium Onboarding Flow**. This TUI-native wizard handles:
+1. **User Profile**: Defining your expertise and preferred interaction style.
+2. **Provider Setup**: Securely managing API keys and base URLs.
+3. **Model Registration**: Configuring your reasoning engines and use-case priorities.
+
 ```bash
-go run cmd/vraxter/main.go
+./bin/vraxter
+# Once inside the TUI, type:
+/start
 ```
 
-## The Intent Pipeline
+## Technical Stack
 
-Vraxter doesn't just "talk". Every input passes through a Tactical Router that decides the best course of action:
+| Component | Technology | Rationale |
+| :--- | :--- | :--- |
+| **Language** | Go (1.21+) | High-speed concurrency and single-binary portability. |
+| **Sandbox** | Wazero (WASM) | Hardened, sandboxed tool execution without local dependencies. |
+| **Persistence** | SQLite | Local-first, relational storage for memory and configuration. |
+| **TUI Interface** | Bubble Tea | Premium, fluid terminal ecosystem for professional engineers. |
+| **Internal Comms** | gRPC / Protobuf | High-speed, type-safe daemon/client communication. |
 
-* Direct Match: Fast-path execution for registered Skills.
-* Intent Classification: Neural analysis to determine the Operator's goal.
-* Neural Reasoning: LLM-driven response for complex queries.
+## Command Reference
 
-## Aesthetic & Status
+Vraxter features a sophisticated "Slash Command" system for workstation management:
 
-Vraxter uses a visual language of light to communicate its state:
+| Command | Description |
+| :--- | :--- |
+| `/start` | Launches the unified onboarding/setup wizard. |
+| `/help` | Displays the interactive command documentation. |
+| `/plan <query>` | Forces Vraxter to generate a structured implementation strategy. |
+| `/specialists` | Manages the roster of domain-specific sub-agents. |
+| `/providers` | Adds or modifies LLM provider configurations. |
+| `/models` | Registers and prioritizes specific reasoning models. |
+| `/clear` | Resets the current session context while maintaining memory. |
 
-* Gold (Idle/Stable): Ready for orders.
-* Amber (Processing): Executing neural reasoning.
-* Crimson (Alert): System error or unauthorized access detected.
+## Full Documentation
 
-## License
+For deep dives into Vraxter's internals, development guides, and security model, explore our complete documentation suite:
 
-Distributed under the MIT License. Built with precision in the Patagonia.
+- [**Architecture Guide**](docs/ARCHITECTURE.md): Distributed systems and gRPC data flow.
+- [**VRX Protocol Spec**](docs/VRX_PROTOCOL.md): Mastery of neural prompt templating.
+- [**Skills Development**](docs/SKILLS_GUIDE.md): Building and registering WASM-based tools.
+- [**Specialist Swarm**](docs/SPECIALISTS.md): Managing autonomous sub-agents and delegation.
+- [**Vraxter Shield**](docs/SECURITY.md): Security, isolation, and data sovereignty.
 
-Developed by [Diego Rodriguez](https://github.com/drcode-rune) from [Patagonic Rune](https://github.com/PatagonicRune)
+
+
+## 🛡️ Vraxter Shield (Security Architecture)
+
+Vraxter implements a **Secure-by-Design** philosophy:
+- **Sandbox Isolation**: The WASM runtime restricts tool access to specific file paths using strict capabilities-based security.
+- **Checksum Verification**: Every Skill binary is hashed (SHA-256) to prevent local tampering or hijacking.
+- **Local Sovereignty**: All API keys are encrypted at rest using AES-256-GCM.
+
+---
+
+### Developed with Precision by [Patagonic Rune](https://github.com/PatagonicRune)
+*Built for the transition to the Autonomous Era.*
