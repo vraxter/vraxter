@@ -6,7 +6,7 @@ import (
 )
 
 type SkillCoder interface {
-	Compile(name, description, code string) error
+	Compile(name, description, paramsSchema, code string) error
 	Language() string
 }
 

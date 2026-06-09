@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/patagonicrune/vraxter/internal/services"
 )
 
@@ -29,24 +29,24 @@ func NewProviderWizard(mgr *services.ProviderManager) *ProviderWizard {
 	inputs[0].Placeholder = "Provider Name (e.g. My Google Account)"
 	inputs[0].Focus()
 	inputs[0].CharLimit = 64
-	inputs[0].Width = 64
+	inputs[0].SetWidth(64)
 
 	inputs[1] = textinput.New()
 	inputs[1].Placeholder = "Type (google, openai, anthropic, ollama)"
 	inputs[1].CharLimit = 32
-	inputs[1].Width = 32
+	inputs[1].SetWidth(32)
 
 	inputs[2] = textinput.New()
 	inputs[2].Placeholder = "API Key"
 	inputs[2].EchoMode = textinput.EchoPassword
 	inputs[2].EchoCharacter = '◈'
 	inputs[2].CharLimit = 256
-	inputs[2].Width = 64
+	inputs[2].SetWidth(64)
 
 	inputs[3] = textinput.New()
 	inputs[3].Placeholder = "Base URL (Optional, defaults to official for cloud)"
 	inputs[3].CharLimit = 256
-	inputs[3].Width = 64
+	inputs[3].SetWidth(64)
 
 	return &ProviderWizard{
 		manager: mgr,
@@ -60,13 +60,13 @@ func (m *ProviderWizard) Init() tea.Cmd {
 
 func (m *ProviderWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyEsc:
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "esc":
 			m.quitting = true
 			m.done = true
 			return m, nil
-		case tea.KeyEnter:
+		case "enter":
 			// Special handling for Ollama - skip API Key
 			if m.step == 1 && strings.ToLower(m.inputs[1].Value()) == "ollama" {
 				m.step = 3
@@ -102,12 +102,12 @@ func (m *ProviderWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *ProviderWizard) View() string {
+func (m *ProviderWizard) View() tea.View {
 	if m.quitting {
-		return "Setup cancelled."
+		return tea.NewView("Setup cancelled.")
 	}
 	if m.done {
-		return fmt.Sprintf("✅ Provider configured successfully (ID: %s)", m.ProviderID)
+		return tea.NewView(fmt.Sprintf("✅ Provider configured successfully (ID: %s)", m.ProviderID))
 	}
 
 	var s strings.Builder
@@ -190,10 +190,10 @@ func (m *ProviderWizard) View() string {
 
 	s.WriteString("\n" + setupFaintStyle.Render("(Enter: Next | Esc: Cancel)"))
 
-	return lipgloss.NewStyle().
+	return tea.NewView(lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("#2a2a2a")).
 		Padding(1, 2).
 		Width(width).
-		Render(s.String())
+		Render(s.String()))
 }

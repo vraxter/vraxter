@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ var (
 	modelFilterProv  string
 	modelUpdatePrio  int
 	modelUpdateActive string
+	modelUseCasePrios string
 )
 
 var modelsCmd = &cobra.Command{
@@ -172,8 +174,17 @@ var updateModelCmd = &cobra.Command{
 		if cmd.Flags().Changed("model") {
 			modelName = &modelIDRemote
 		}
+		
+		var useCasePriorities map[string]int
+		if cmd.Flags().Changed("use-case-priorities") {
+			useCasePriorities = make(map[string]int)
+			if err := json.Unmarshal([]byte(modelUseCasePrios), &useCasePriorities); err != nil {
+				fmt.Fprintf(os.Stderr, "❌ Invalid JSON format for --use-case-priorities: %v\n", err)
+				os.Exit(1)
+			}
+		}
 
-		if err := manager.UpdateModel(id, prio, active, alias, modelName); err != nil {
+		if err := manager.UpdateModel(id, prio, active, alias, modelName, useCasePriorities); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Error updating model: %v\n", err)
 			os.Exit(1)
 		}
@@ -211,6 +222,7 @@ func init() {
 	updateModelCmd.Flags().StringVar(&modelUpdateActive, "active", "true", "Set model active status (true/false)")
 	updateModelCmd.Flags().StringVar(&modelAliasVal, "alias", "", "New friendly alias")
 	updateModelCmd.Flags().StringVarP(&modelIDRemote, "model", "m", "", "New remote model name (technical ID)")
+	updateModelCmd.Flags().StringVar(&modelUseCasePrios, "use-case-priorities", "", "JSON map of use case priorities (e.g. '{\"coding\":1}')")
 
 	modelsCmd.AddCommand(listModelsCmd)
 	modelsCmd.AddCommand(addModelCmd)

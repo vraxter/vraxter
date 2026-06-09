@@ -36,6 +36,15 @@ service AgentService {
 
   // ListModels returns all registered models, optionally filtered by provider
   rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+
+  // --- Event Bus ---
+
+  // SubscribeEvents opens a persistent, one-way stream from the engine to the client
+  // used to push asynchronous background jobs and swarm notifications.
+  rpc SubscribeEvents(SubscribeEventsRequest) returns (stream SystemEvent);
+
+  // GetActiveJobs returns all currently tracked background daemons
+  rpc GetActiveJobs(GetActiveJobsRequest) returns (GetActiveJobsResponse);
 }
 
 message GetInfoRequest {}
@@ -69,6 +78,42 @@ message ExecuteResponse {
   string content = 2;      // Text content or JSON for tools
   string skill_id = 3;     // ID if it's a tool-related event
   string active_model_id = 4; // The model ID currently driving the execution
+}
+
+// --- Event Bus Messages ---
+
+message SubscribeEventsRequest {
+  string client_id = 1; // Optional identifier for the subscribing client
+}
+
+message SystemEvent {
+  enum EventType {
+    JOB_STARTED = 0;
+    JOB_COMPLETED = 1;
+    JOB_FAILED = 2;
+    SWARM_PROGRESS = 3;
+    SYSTEM_ALERT = 4;
+    PLAN_PROPOSED = 5;
+  }
+  
+  EventType type = 1;
+  string job_id = 2;
+  string title = 3;
+  string payload = 4; // JSON or text output
+  string timestamp = 5;
+}
+
+message JobStatus {
+  string id = 1;
+  string title = 2;
+  string status = 3;
+  string start_time = 4;
+}
+
+message GetActiveJobsRequest {}
+
+message GetActiveJobsResponse {
+  repeated JobStatus jobs = 1;
 }
 
 // --- History RPCs ---

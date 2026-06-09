@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -51,30 +52,60 @@ func NewRunner() *Runner {
 	return rn
 }
 
+type ctxKey string
+const manifestKey ctxKey = "vrax_manifest"
+
+func httpGetFn(ctx context.Context, mod api.Module, urlPtr, urlLen, outPtr, outMax uint32) uint32 {
+	// Retrieve the manifest from the context to verify capabilities
+	manifestVal := ctx.Value(manifestKey)
+	if manifestVal == nil {
+		// Secure by default: Abort if manifest is not propagated
+		return 0
+	}
+	manifest, ok := manifestVal.(types.SkillManifest)
+	if !ok {
+		return 0
+	}
+
+	// Verify the "network" capability exists in permissions
+	hasNetwork := false
+	for _, perm := range manifest.Permissions {
+		if perm == "network" {
+			hasNetwork = true
+			break
+		}
+	}
+
+	if !hasNetwork {
+		fmt.Printf("\n[SHIELD SECURITY ALERT] Skill '%s' tried to make an outbound HTTP request but lacks the 'network' permission capability. Blocked.\n", manifest.ID)
+		return 0
+	}
+
+	urlBytes, ok := mod.Memory().Read(urlPtr, urlLen)
+	if !ok {
+		return 0
+	}
+	url := string(urlBytes)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if uint32(len(body)) > outMax {
+		body = body[:outMax]
+	}
+	mod.Memory().Write(outPtr, body)
+	return uint32(len(body))
+}
+
 func createHostBuilder(rt wazero.Runtime, ctx context.Context) error {
 	_, err := rt.NewHostModuleBuilder("vrax_sandbox").
 		NewFunctionBuilder().
-		WithFunc(func(ctx context.Context, mod api.Module, urlPtr, urlLen, outPtr, outMax uint32) uint32 {
-			urlBytes, ok := mod.Memory().Read(urlPtr, urlLen)
-			if !ok {
-				return 0
-			}
-			url := string(urlBytes)
-
-			client := &http.Client{Timeout: 10 * time.Second}
-			resp, err := client.Get(url)
-			if err != nil {
-				return 0
-			}
-			defer resp.Body.Close()
-
-			body, _ := io.ReadAll(resp.Body)
-			if uint32(len(body)) > outMax {
-				body = body[:outMax]
-			}
-			mod.Memory().Write(outPtr, body)
-			return uint32(len(body))
-		}).
+		WithFunc(httpGetFn).
 		Export("http_get").
 		Instantiate(ctx)
 
@@ -159,6 +190,7 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	execCtx = context.WithValue(execCtx, manifestKey, manifest)
 
 	currentHash, err := rn.calculateHash(manifest.Command)
 	if err != nil {
@@ -217,10 +249,16 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 	for _, perm := range manifest.Permissions {
 		if strings.HasPrefix(perm, "fs_read:") {
 			dir := strings.TrimPrefix(perm, "fs_read:")
-			fsConfig = fsConfig.WithReadOnlyDirMount(dir, dir)
+			resolvedDir := resolveMountPath(dir)
+			if resolvedDir != "" {
+				fsConfig = fsConfig.WithReadOnlyDirMount(resolvedDir, resolvedDir)
+			}
 		} else if strings.HasPrefix(perm, "fs_write:") {
 			dir := strings.TrimPrefix(perm, "fs_write:")
-			fsConfig = fsConfig.WithDirMount(dir, dir)
+			resolvedDir := resolveMountPath(dir)
+			if resolvedDir != "" {
+				fsConfig = fsConfig.WithDirMount(resolvedDir, resolvedDir)
+			}
 		}
 	}
 
@@ -292,4 +330,33 @@ func (rn *Runner) calculateHash(path string) (string, error) {
 	}
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:]), nil
+}
+
+func resolveMountPath(path string) string {
+	cleaned := strings.TrimSpace(path)
+	if cleaned == "" {
+		return ""
+	}
+
+	// 1. Expand environment variables
+	cleaned = os.ExpandEnv(cleaned)
+
+	// 2. Expand home directory shortcuts in a cross-platform manner
+	home, err := os.UserHomeDir()
+	if err == nil {
+		if strings.HasPrefix(cleaned, "~") {
+			cleaned = filepath.Join(home, strings.TrimPrefix(cleaned, "~"))
+		} else if strings.HasPrefix(cleaned, "$HOME") {
+			cleaned = filepath.Join(home, strings.TrimPrefix(cleaned, "$HOME"))
+		} else if strings.HasPrefix(cleaned, "%USERPROFILE%") {
+			cleaned = filepath.Join(home, strings.TrimPrefix(cleaned, "%USERPROFILE%"))
+		}
+	}
+
+	// 3. Obtain native absolute path
+	abs, err := filepath.Abs(cleaned)
+	if err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(cleaned)
 }

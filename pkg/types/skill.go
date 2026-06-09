@@ -1,5 +1,10 @@
 package types
 
+import (
+	"encoding/json"
+	"strings"
+)
+
 // SkillTier defines the level of trust for a skill
 type SkillTier int
 
@@ -32,6 +37,7 @@ type SkillManifest struct {
 	Examples   []string `json:"examples"`    // Semantic or UI examples
 	Tags       []string `json:"tags"`        // Broad categorization
 	ParamRegex string   `json:"param_regex"` // Regex pattern with named capture groups
+	ParamsSchema string `json:"params_schema"` // JSON Schema or descriptive string of required parameters
 	Vector     []float32 `json:"vector,omitempty"` // Runtime cached embedding vector
 }
 
@@ -73,4 +79,79 @@ type SkillResponse struct {
 type RPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// ToolCall represents a strictly typed parsed tool invocation from the LLM.
+type ToolCall struct {
+	SkillID  string                 `json:"skill_id"`
+	IsDaemon bool                   `json:"is_daemon,omitempty"`
+	Params   map[string]interface{} `json:"params"`
+}
+
+// UnmarshalJSON implements custom logic to safely extract SkillID and unify params,
+// regardless of whether the LLM nested them or flattened them.
+func (t *ToolCall) UnmarshalJSON(data []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	t.Params = make(map[string]interface{})
+
+	for k, v := range raw {
+		switch k {
+		case "skill_id", "name", "tool_name", "action":
+			if s, ok := v.(string); ok && t.SkillID == "" {
+				t.SkillID = s
+			}
+		case "is_daemon":
+			if b, ok := v.(bool); ok {
+				t.IsDaemon = b
+			}
+		case "params", "parameters":
+			if nestedMap, ok := v.(map[string]interface{}); ok {
+				for nk, nv := range nestedMap {
+					t.Params[nk] = nv
+				}
+			}
+		default:
+			// Flat parameter, put it in Params
+			t.Params[k] = v
+		}
+	}
+
+	// Normalize common LLM alias patterns to canonical skill IDs.
+	t.SkillID = normalizeSkillID(t.SkillID)
+
+	return nil
+}
+
+// skillAliases maps common LLM-hallucinated IDs to canonical Vraxter skill IDs.
+var skillAliases = map[string]string{
+	"read_file":          "vraxter-read-file",
+	"read-file":          "vraxter-read-file",
+	"readfile":           "vraxter-read-file",
+	"vraxter-readfile":   "vraxter-read-file",
+	"list_dir":           "vraxter-list-dir",
+	"list-dir":           "vraxter-list-dir",
+	"listdir":            "vraxter-list-dir",
+	"vraxter-listdir":    "vraxter-list-dir",
+	"list_files":         "vraxter-list-dir",
+	"list-files":         "vraxter-list-dir",
+	"listfiles":          "vraxter-list-dir",
+	"vraxter-list-files": "vraxter-list-dir",
+	"vraxter-listfiles":  "vraxter-list-dir",
+	"coder":              "vraxter-coder",
+	"patch_code":         "vraxter-patch-code",
+	"patch-code":         "vraxter-patch-code",
+}
+
+// normalizeSkillID maps known aliases to their canonical form.
+// Always checks the alias map first (even for "vraxter-" prefixed IDs)
+// because the LLM may hallucinate valid-looking but wrong prefixed names.
+func normalizeSkillID(id string) string {
+	if canonical, ok := skillAliases[strings.ToLower(id)]; ok {
+		return canonical
+	}
+	return id
 }

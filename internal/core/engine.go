@@ -59,8 +59,13 @@ func NewEngine(
 		SpecialistRepo: orch.SpecialistRepo,
 		ModelsRepo:     orch.ModelsRepo,
 		ChatRepo:       orch.ChatRepo,
-		Verbose:        verbose,
+		Verbose:        orch.Verbose,
 	}, nil
+}
+
+// JobManager returns the underlying JobManager for handling global events
+func (e *Engine) JobManager() *JobManager {
+	return e.orch.JobManager
 }
 
 // GetResolver exposes the orchestrator's resolver
@@ -75,4 +80,8 @@ func (e *Engine) ProcessRawIntent(ctx context.Context, sessionID, text, speciali
 
 func (e *Engine) GetActiveModelID(sessionID string) string {
 	return e.orch.GetActiveModelID(sessionID)
+}
+
+func (e *Engine) GetCodeGen() *CodeGenService {
+	return e.orch.ExecEngine.CodeGen
 }

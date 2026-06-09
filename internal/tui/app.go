@@ -13,17 +13,20 @@ import (
 	"strings"
 	"time"
 
+	"image/color"
+
 	"github.com/google/uuid"
 
 	"github.com/alecthomas/chroma/v2/quick"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/glamour/styles"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
+	"charm.land/glamour/v2/styles"
+	"charm.land/lipgloss/v2"
+	v1 "github.com/patagonicrune/vraxter/api/v1"
 	"github.com/patagonicrune/vraxter/internal/client"
 	"github.com/patagonicrune/vraxter/internal/db"
 	"github.com/patagonicrune/vraxter/internal/llm"
@@ -146,7 +149,7 @@ var (
 		FPS: time.Millisecond * 300,
 	}
 
-	ansibg      = regexp.MustCompile(`\x1b\[(4[0-9]|10[0-9]|48;[0-9];[0-9;]+)m`)
+	ansibg      = regexp.MustCompile("\x1b\\[(4[0-9]|10[0-9]|48;[0-9];[0-9;]+)m")
 	codeBlockRe = regexp.MustCompile("(?s)```(\\w+)?\n(.*?)\n```")
 )
 
@@ -159,6 +162,7 @@ var helpCommand = `
   /clear		- Clears the chat history from the screen
   /new, /reset		- Generates a fresh session ID and clears history
   /session <id>		- Switches your context to a different session ID
+  /jobs			- List all background tasks currently running
   /providers [args]	- Manage AI providers (/providers setup for wizard)
   /models [args]		- Manage models linked to providers
   /skills [args]		- Proxy: Run 'vraxter skills'
@@ -170,9 +174,19 @@ var helpCommand = `
   /help, /?		- Shows this menu
 `
 
+var slashCommandsList = []string{
+	"/activate", "/restore", "/auto", "/plan", "/history", "/load", "/clear",
+	"/new", "/reset", "/session", "/jobs", "/providers", "/models", "/skills",
+	"/specialists", "/user", "/add", "/start", "/quit", "/exit", "/help",
+}
+
 type EventMsgWrapper struct {
 	Event llm.StreamEvent
 	Next  func() tea.Msg
+}
+
+type SystemEventMsgWrapper struct {
+	Event *v1.SystemEvent
 }
 
 type InfoMsg struct {
@@ -216,6 +230,14 @@ type cmdOutputMsg struct {
 	output string
 }
 
+type AutocompleteState struct {
+	IsActive bool
+	Type     string // "command" or "specialist"
+	Items    []string
+	Cursor   int
+	Prefix   string
+}
+
 type Model struct {
 	SessionID            string
 	History              []HistoryBlock
@@ -233,6 +255,8 @@ type Model struct {
 	ctx                  context.Context
 	ActiveSpecialistID   string // The specialist currently 'latched' to the session
 	SpecialistBanner     string // The display name for the active specialist banner
+	systemEvents         <-chan *v1.SystemEvent
+	ActiveJobs           []*v1.JobStatus // Currently running background daemons
 
 	// Rendering
 	renderer *glamour.TermRenderer
@@ -240,13 +264,23 @@ type Model struct {
 	// Feedback & Selection
 	MouseSelectionMode bool
 	StatusMessage      string
+
+	// Autocomplete
+	Autocomplete         AutocompleteState
+	AvailableSpecialists []string
+
+	// Input History
+	InputHistory    []string
+	InputHistoryIdx int
+
 	viewportY          int // Dynamic top-offset for hit detection
 
-	// Planning
+	// Planning & Manual Execution
 	IsWaitingForApproval bool
 	ProposedPlan         string // JSON content of the proposed plan
 	PlanActionIndex      int    // 0:Proceed, 1:Reject, 2:Amend
 	ShowAmendInput       bool
+	PendingRunSkill      string // Name of skill awaiting manual run prompt
 
 	// History browsing
 	lastHistoryResults []client.ConversationSummary
@@ -275,17 +309,19 @@ func NewModel(ctx context.Context, gClient *client.GRPCClient, store *db.Store, 
 	ta.SetHeight(1) // Start at one row
 
 	// Match background exactly to the TUI (Ensure no black blocks)
-	ta.FocusedStyle.Base = lipgloss.NewStyle().Background(nil)
-	ta.BlurredStyle.Base = lipgloss.NewStyle().Background(nil)
+	tas := ta.Styles()
+	tas.Focused.Base = lipgloss.NewStyle().Background(nil)
+	tas.Blurred.Base = lipgloss.NewStyle().Background(nil)
 
 	// Styled prompt: Bold Gold
-	ta.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-	ta.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(colorMutedGray)
+	tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+	tas.Blurred.Prompt = lipgloss.NewStyle().Foreground(colorMutedGray)
 
 	// Ensure cursor and styling is clean
-	ta.Cursor.Style = lipgloss.NewStyle().Foreground(colorGold)
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle().Background(nil)
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(colorMutedGray)
+	tas.Cursor.Color = colorGold
+	tas.Focused.CursorLine = lipgloss.NewStyle().Background(nil)
+	tas.Focused.Placeholder = lipgloss.NewStyle().Foreground(colorMutedGray)
+	ta.SetStyles(tas)
 	ta.ShowLineNumbers = false
 	ta.MaxHeight = 5
 
@@ -314,6 +350,22 @@ func NewModel(ctx context.Context, gClient *client.GRPCClient, store *db.Store, 
 		UserName:     strings.ToUpper(userName),
 	}
 
+	// Pre-load specialists for autocomplete
+	var specList []string
+	if store != nil {
+		specRepo := db.NewSpecialistRepository(store)
+		specs, err := specRepo.GetAllSpecialists()
+		if err == nil {
+			for _, sp := range specs {
+				specList = append(specList, sp.Name)
+			}
+		}
+	}
+	m.AvailableSpecialists = specList
+
+	sysChan, _ := gClient.SubscribeEvents(ctx, "tui-"+session)
+	m.systemEvents = sysChan
+
 	if initialQuery != "" {
 		m.appendHistory(BlockMarkdown, initialQuery, SenderUser)
 		m.appendHistory(BlockMarkdown, vraxterIconPlaceholder+"  ", SenderVraxter)
@@ -333,19 +385,44 @@ func (m *Model) fetchInfo() tea.Cmd {
 	}
 }
 
+type fetchJobsMsg struct {
+	jobs []*v1.JobStatus
+}
+
+func (m *Model) fetchJobs() tea.Cmd {
+	return func() tea.Msg {
+		jobs, err := m.grpcClient.GetActiveJobs(m.ctx)
+		if err != nil {
+			return fetchJobsMsg{jobs: nil}
+		}
+		// Filter only running jobs
+		var running []*v1.JobStatus
+		for _, j := range jobs {
+			if j.Status == "running" {
+				running = append(running, j)
+			}
+		}
+		return fetchJobsMsg{jobs: running}
+	}
+}
+
 func (m *Model) Init() tea.Cmd {
 	if m.IsStreaming {
 		return tea.Batch(
 			textarea.Blink,
 			m.Spinner.Tick,
 			m.fetchInfo(),
+			m.fetchJobs(),
 			m.fireExecution(m.Input.Value()),
+			m.listenForSystemEvents(m.systemEvents),
 		)
 	}
 	return tea.Batch(
 		textarea.Blink,
 		m.Spinner.Tick,
 		m.fetchInfo(),
+		m.fetchJobs(),
+		m.listenForSystemEvents(m.systemEvents),
 	)
 }
 
@@ -384,6 +461,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case fetchJobsMsg:
+		m.ActiveJobs = msg.jobs
+		return m, nil
+
 	case ClearStatusMsg:
 		m.StatusMessage = ""
 		return m, nil
@@ -415,7 +496,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// 0. Immediate priority: Help Toggle
 		if msg.String() == "?" && m.Input.Value() == "" {
 			m.ShowHelp = !m.ShowHelp
@@ -458,7 +539,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Shift+Enter: most terminals send Ctrl+J (Line Feed) for Shift+Enter.
 		// Alt+Enter: universally distinguishable across all terminals.
 		// Both insert a newline and grow the textarea.
-		isNewlineShortcut := (msg.Alt && msg.Type == tea.KeyEnter) || msg.Type == tea.KeyCtrlJ
+		isNewlineShortcut := msg.String() == "alt+enter" || msg.String() == "ctrl+j"
 		if isNewlineShortcut {
 			if !m.IsStreaming {
 				// Manually insert newline and grow visible height
@@ -487,7 +568,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "end":
 			m.Viewport.GotoBottom()
 			return m, nil
-		case "up", "down":
+		case "up":
+			if m.Input.Line() == 0 && len(m.InputHistory) > 0 {
+				if m.InputHistoryIdx > 0 {
+					m.InputHistoryIdx--
+					m.Input.SetValue(m.InputHistory[m.InputHistoryIdx])
+					m.Input.CursorEnd()
+				}
+				return m, nil
+			}
+			if m.Input.Value() == "" {
+				m.Viewport, vpCmd = m.Viewport.Update(msg)
+				return m, vpCmd
+			}
+		case "down":
+			if m.Input.Line() == m.Input.LineCount()-1 && len(m.InputHistory) > 0 && m.InputHistoryIdx < len(m.InputHistory) {
+				if m.InputHistoryIdx < len(m.InputHistory)-1 {
+					m.InputHistoryIdx++
+					m.Input.SetValue(m.InputHistory[m.InputHistoryIdx])
+					m.Input.CursorEnd()
+				} else {
+					m.InputHistoryIdx = len(m.InputHistory)
+					m.Input.SetValue("")
+				}
+				return m, nil
+			}
 			if m.Input.Value() == "" {
 				m.Viewport, vpCmd = m.Viewport.Update(msg)
 				return m, vpCmd
@@ -495,12 +600,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// 3. Handle Submissions (Plain Enter only)
-		isPlainEnter := msg.String() == "enter" && !msg.Alt &&
-			!strings.Contains(msg.String(), "ctrl+") &&
-			!strings.Contains(msg.String(), "shift+")
+		isPlainEnter := msg.String() == "enter"
 
 		if isPlainEnter && !m.IsStreaming {
 			if m.IsWaitingForApproval && !m.ShowAmendInput {
+				if m.PendingRunSkill != "" {
+					switch m.PlanActionIndex {
+					case 0: // RUN
+						skill := m.PendingRunSkill
+						m.PendingRunSkill = ""
+						m.IsWaitingForApproval = false
+						m.Input.Focus()
+						return m, m.fireExecution(fmt.Sprintf("!RUN_SKILL %s", skill))
+					case 1: // DISMISS (Done)
+						m.PendingRunSkill = ""
+						m.IsWaitingForApproval = false
+						m.appendHistory(BlockComponent, lipgloss.NewStyle().Foreground(colorMutedGray).Render("  (Skill added to registry. Execution dismissed.)\n"))
+						m.Input.Focus()
+						return m, nil
+					}
+				}
+
 				switch m.PlanActionIndex {
 				case 0: // PROCEED
 					cmd := m.handleSlashCommand("/accept")
@@ -533,6 +653,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Input.SetValue("")
 			m.Input.SetHeight(1)
 
+			// Add to Input History
+			if messageToSend != "" {
+				m.InputHistory = append(m.InputHistory, messageToSend)
+				m.InputHistoryIdx = len(m.InputHistory)
+			}
+
 			if strings.HasPrefix(messageToSend, "/") {
 				cmd := m.handleSlashCommand(messageToSend)
 				if m.Ready {
@@ -561,9 +687,114 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.fireExecution(messageToSend)
 		}
 
-		// 4. Default: Update Component (Ensures single update path)
+		// 4. Autocomplete Interception & Default Input Update
 		if !m.IsStreaming {
+			// A. Intercept autocomplete navigation keys
+			if m.Autocomplete.IsActive {
+				if msg.String() == "up" {
+					if m.Autocomplete.Cursor > 0 {
+						m.Autocomplete.Cursor--
+					}
+					return m, nil
+				} else if msg.String() == "down" {
+					if m.Autocomplete.Cursor < len(m.Autocomplete.Items)-1 {
+						m.Autocomplete.Cursor++
+					}
+					return m, nil
+				} else if msg.String() == "tab" || msg.String() == "enter" {
+					if len(m.Autocomplete.Items) > 0 && m.Autocomplete.Cursor >= 0 && m.Autocomplete.Cursor < len(m.Autocomplete.Items) {
+						selected := m.Autocomplete.Items[m.Autocomplete.Cursor]
+						// Replace the prefix with the selected item
+						val := m.Input.Value()
+						lastSpace := strings.LastIndexAny(val, " \n\t")
+						var newVal string
+						if lastSpace == -1 {
+							newVal = selected + " "
+						} else {
+							newVal = val[:lastSpace+1] + selected + " "
+						}
+						m.Input.SetValue(newVal)
+						m.Input.SetCursorColumn(len(newVal))
+						m.Autocomplete.IsActive = false
+					}
+					return m, nil
+				} else if msg.String() == "esc" {
+					m.Autocomplete.IsActive = false
+					return m, nil
+				}
+			}
+
+			// B. Let textarea handle normal typing
 			m.Input, inputCmd = m.Input.Update(msg)
+
+			// C. Recalculate Autocomplete state based on new input value
+			val := m.Input.Value()
+			lastSpace := strings.LastIndexAny(val, " \n\t")
+			var lastWord string
+			if lastSpace == -1 {
+				lastWord = val
+			} else {
+				lastWord = val[lastSpace+1:]
+			}
+
+			m.Autocomplete.Prefix = lastWord
+			if strings.HasPrefix(lastWord, "/") && len(lastWord) >= 1 {
+				m.Autocomplete.Type = "command"
+				m.Autocomplete.Items = []string{}
+				for _, cmd := range slashCommandsList {
+					if strings.HasPrefix(cmd, lastWord) {
+						m.Autocomplete.Items = append(m.Autocomplete.Items, cmd)
+					}
+				}
+				m.Autocomplete.IsActive = len(m.Autocomplete.Items) > 0
+				if m.Autocomplete.Cursor >= len(m.Autocomplete.Items) {
+					m.Autocomplete.Cursor = 0
+				}
+			} else if strings.HasPrefix(lastWord, "@") && len(lastWord) >= 1 {
+				m.Autocomplete.Type = "specialist"
+				m.Autocomplete.Items = []string{}
+				search := strings.TrimPrefix(lastWord, "@")
+				for _, sp := range m.AvailableSpecialists {
+					if strings.HasPrefix(strings.ToLower(sp), strings.ToLower(search)) {
+						m.Autocomplete.Items = append(m.Autocomplete.Items, "@"+sp)
+					}
+				}
+				m.Autocomplete.IsActive = len(m.Autocomplete.Items) > 0
+				if m.Autocomplete.Cursor >= len(m.Autocomplete.Items) {
+					m.Autocomplete.Cursor = 0
+				}
+			} else {
+				m.Autocomplete.IsActive = false
+			}
+
+			// Auto-grow: recalculate height after every keystroke to account for word-wrap.
+			availableWidth := m.width - 6
+			if availableWidth < 10 {
+				availableWidth = 10 // Safety fallback
+			}
+
+			visualLines := 0
+			for _, hardLine := range strings.Split(val, "\n") {
+				if len(hardLine) == 0 {
+					visualLines++
+					continue
+				}
+				// Calculate how many visual lines this hard line takes up.
+				// This robustly handles both soft-wrapping and long unbroken words.
+				visualLines += (len(hardLine) / availableWidth)
+				if len(hardLine)%availableWidth != 0 {
+					visualLines++
+				}
+			}
+
+			if visualLines > m.Input.MaxHeight {
+				visualLines = m.Input.MaxHeight
+			}
+			if visualLines < 1 {
+				visualLines = 1
+			}
+			m.Input.SetHeight(visualLines)
+
 			return m, inputCmd
 		}
 
@@ -582,35 +813,37 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		verticalMarginHeight := headerHeight + 10
 
 		if !m.Ready {
-			m.Viewport = viewport.New(msg.Width-4, msg.Height-verticalMarginHeight)
-			m.Viewport.Width = msg.Width - 4
+			m.Viewport = viewport.New()
+			m.Viewport.SetWidth(msg.Width - 4)
+			m.Viewport.SetHeight(msg.Height - verticalMarginHeight)
 			m.Ready = true
+		} else {
+			m.Viewport.SetWidth(msg.Width - 4)
+			m.Viewport.SetHeight(msg.Height - verticalMarginHeight)
 		}
 
 		// 3. Update Content AFTER renderer is ready
 		m.Viewport.SetContent(m.renderMarkdown(m.History))
 		m.Input.SetWidth(msg.Width - 6)
 
-	case tea.MouseMsg:
-		// 1. Always ignore motion/drag events to allow native terminal selection
-		if msg.Type == tea.MouseMotion {
-			return m, nil
-		}
+	case tea.MouseMotionMsg:
+		return m, nil
 
-		// 2. Perform hit-detection for interaction
+	case tea.MouseMsg:
+		mMsg := msg.Mouse()
 		// We check if the mouse is within the viewport's vertical bounds
-		inBounds := msg.Y >= m.viewportY && msg.Y < m.viewportY+m.Viewport.Height
+		inBounds := mMsg.Y >= m.viewportY && mMsg.Y < m.viewportY+m.Viewport.Height()
 
 		if inBounds {
 			// Capture scroll wheel events and clicks
-			if msg.Type == tea.MouseWheelUp || msg.Type == tea.MouseWheelDown || msg.Type == tea.MouseLeft {
+			if mMsg.Button == tea.MouseWheelUp || mMsg.Button == tea.MouseWheelDown || mMsg.Button == tea.MouseLeft {
 				m.Viewport, vpCmd = m.Viewport.Update(msg)
 				return m, vpCmd
 			}
 		}
 
 		// Button Hit Detection
-		if m.IsWaitingForApproval && msg.Type == tea.MouseLeft {
+		if m.IsWaitingForApproval && mMsg.Button == tea.MouseLeft {
 			// Footer buttons are typically in the last 10 rows
 			// We iterate through button X/Y bounds
 			// Approximated for now based on renderDecisionBridge
@@ -619,16 +852,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				footerHeight = 8
 			}
 			buttonRow := m.height - footerHeight - 1
-			if msg.Y >= buttonRow && msg.Y <= buttonRow+2 {
+			if mMsg.Y >= buttonRow && mMsg.Y <= buttonRow+2 {
 				// 3 buttons across footerWidth
 				btnWidth := (m.width - 4) / 3
-				if msg.X >= 2 && msg.X < 2+btnWidth {
+				if mMsg.X >= 2 && mMsg.X < 2+btnWidth {
 					m.PlanActionIndex = 0
-					return m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-				} else if msg.X >= 2+btnWidth && msg.X < 2+(btnWidth*2) {
+					return m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+				} else if mMsg.X >= 2+btnWidth && mMsg.X < 2+(btnWidth*2) {
 					m.PlanActionIndex = 1
-					return m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-				} else if msg.X >= 2+(btnWidth*2) && msg.X < m.width-2 {
+					return m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+				} else if mMsg.X >= 2+(btnWidth*2) && mMsg.X < m.width-2 {
 					m.PlanActionIndex = 2
 					m.ShowAmendInput = true
 					m.Input.Focus()
@@ -679,6 +912,45 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Viewport.GotoBottom()
 		}
 		return m, nil
+
+	case SystemEventMsgWrapper:
+		if msg.Event == nil {
+			return m, nil
+		}
+
+		var block string
+		switch msg.Event.Type {
+		case v1.SystemEvent_JOB_STARTED:
+			block = fmt.Sprintf("\n⏳ **Background Job Started:** %s (ID: %s)\n", msg.Event.Title, msg.Event.JobId)
+		case v1.SystemEvent_JOB_COMPLETED:
+			block = fmt.Sprintf("\n✅ **Job Completed:** %s\n```\n%s\n```\n", msg.Event.Title, msg.Event.Payload)
+			// TODO: If this was a plan generation, we should intercept and show the UI!
+		case v1.SystemEvent_JOB_FAILED:
+			block = fmt.Sprintf("\n❌ **Job Failed:** %s\n```\n%s\n```\n", msg.Event.Title, msg.Event.Payload)
+		case v1.SystemEvent_SWARM_PROGRESS:
+			block = fmt.Sprintf("\n🐝 **Swarm:** %s\n", msg.Event.Payload)
+		case v1.SystemEvent_PLAN_PROPOSED:
+			m.IsWaitingForApproval = true
+			m.ProposedPlan = msg.Event.Payload
+			m.PlanActionIndex = 0 // Default to PROCEED
+			m.ShowAmendInput = false
+			m.Input.Blur()
+			m.appendHistory(BlockComponent, m.renderPlan(msg.Event.Payload, m.width, "")+"\n")
+		}
+
+		if block != "" {
+			m.appendHistory(BlockMarkdown, block, SenderSystem)
+			if m.Ready {
+				m.Viewport.SetContent(m.renderMarkdown(m.History))
+				m.Viewport.GotoBottom()
+			}
+		}
+
+		if msg.Event.Type == v1.SystemEvent_JOB_STARTED || msg.Event.Type == v1.SystemEvent_JOB_COMPLETED || msg.Event.Type == v1.SystemEvent_JOB_FAILED {
+			return m, tea.Batch(m.listenForSystemEvents(m.systemEvents), m.fetchJobs())
+		}
+
+		return m, m.listenForSystemEvents(m.systemEvents)
 
 	case EventMsgWrapper:
 		// Real-time Model Sync: Update the header if the server's driving model changed
@@ -732,15 +1004,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.HasSentVraxterBanner = true
 			}
 
-			if m.isThinking {
-				m.appendHistory(BlockThought, content)
-			} else {
-				sender := SenderVraxter
-				if m.CurrentFocus == "specialist" {
-					sender = SenderSpecialist
+			// Intercept PROMPT_RUN control signal
+			if strings.Contains(content, "[PROMPT_RUN:") {
+				parts := strings.Split(content, ":")
+				if len(parts) >= 2 {
+					skillID := strings.TrimSuffix(parts[1], "]")
+					m.PendingRunSkill = skillID
+					m.IsWaitingForApproval = true
+					m.PlanActionIndex = 0 // Default to RUN
+					m.ShowAmendInput = false
+					m.Input.Blur()
+					content = strings.ReplaceAll(content, "[PROMPT_RUN:"+skillID+"]", "")
 				}
-				// Trim incoming tokens to avoid early newline drift
-				m.appendHistory(BlockMarkdown, content, sender)
+			}
+
+			if content != "" {
+				if m.isThinking {
+					m.appendHistory(BlockThought, content)
+				} else {
+					sender := SenderVraxter
+					if m.CurrentFocus == "specialist" {
+						sender = SenderSpecialist
+					}
+					m.appendHistory(BlockMarkdown, content, sender)
+				}
 			}
 		case llm.EventTypeStatus:
 			m.StatusMessage = msg.Event.Content
@@ -899,6 +1186,25 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	}
 
 	switch parts[0] {
+	case "/jobs":
+		if len(m.ActiveJobs) == 0 {
+			m.appendHistory(BlockComponent, toolStyle.Render("📭 No background jobs are currently running.\n\n"))
+			return nil
+		}
+		var sb strings.Builder
+		sb.WriteString("\n⚙️ **Active Background Jobs**\n\n")
+		sb.WriteString("| ID | Title | Status | Started |\n")
+		sb.WriteString("|---|-------|--------|---------|\n")
+		for _, j := range m.ActiveJobs {
+			started := j.StartTime
+			if t, err := time.Parse(time.RFC3339, j.StartTime); err == nil {
+				started = t.Format("15:04:05")
+			}
+			sb.WriteString(fmt.Sprintf("| `%s` | %s | %s | %s |\n", j.Id, j.Title, j.Status, started))
+		}
+		sb.WriteString("\n")
+		m.appendHistory(BlockMarkdown, sb.String())
+		return nil
 	case "/clear":
 		m.History = []HistoryBlock{}
 		return nil
@@ -991,6 +1297,33 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 
 			return EventMsgWrapper{Event: llm.StreamEvent{Type: llm.EventTypeToken, Content: sb.String()}}
 		}
+	case "/skills":
+		if len(parts) >= 3 && parts[1] == "add" {
+			name := parts[2]
+			desc := strings.Join(parts[3:], " ")
+			m.IsStreaming = true
+			m.appendHistory(BlockComponent, toolStyle.Render(fmt.Sprintf("🔨 Manually triggering creation of skill '%s'...\n\n", name)))
+
+			// We send a direct tool call payload to the server.
+			// The server's ProcessRawIntent will see the [VRAX_TOOL] prefix and route it to DispatchToolPayload.
+			payload := fmt.Sprintf(`[VRAX_TOOL] {"skill_id": "vraxter-coder", "params": {"name": "%s", "description": "%s", "spec": "%s", "prompt_run": true}}`, name, desc, desc)
+			return m.fireExecution(payload)
+		}
+
+		// Sub-command proxy: forward everything else to the CLI
+		execArgs := append([]string{"skills"}, parts[1:]...)
+		cmdInput := cmd
+
+		return func() tea.Msg {
+			goCmd := exec.Command(os.Args[0], execArgs...)
+			goCmd.Env = append(os.Environ(), "VRAXTER_INTERNAL_SESSION=true")
+			out, _ := goCmd.CombinedOutput()
+
+			cleanOut := strings.ReplaceAll(string(out), "Type a command for Vraxter... (Ctrl+C to quit)", "")
+			cleanOut = stripANSI(strings.TrimSpace(cleanOut))
+
+			return cmdOutputMsg{input: cmdInput, output: cleanOut}
+		}
 	case "/plan":
 		if len(parts) < 2 {
 			m.appendHistory(BlockComponent, errorStyle.Render("❌ Usage: /plan <task details>\n\n"))
@@ -1020,7 +1353,9 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 
 		// Restore Input State
 		m.Input.Prompt = "❯ "
-		m.Input.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+		tas := m.Input.Styles()
+		tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+		m.Input.SetStyles(tas)
 		m.Input.Focus()
 
 		return m.fireExecution("!EXECUTE_PLAN " + m.ProposedPlan)
@@ -1035,7 +1370,9 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 
 		// Restore Input State
 		m.Input.Prompt = "❯ "
-		m.Input.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+		tas := m.Input.Styles()
+		tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+		m.Input.SetStyles(tas)
 		m.Input.Focus()
 
 		return nil
@@ -1049,7 +1386,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		mMgr := services.NewModelManager(mRepo, pRepo)
 		m.ActiveSetup = NewStartupWizard(pMgr, mMgr)
 		return nil
-	case "/providers", "/models", "/skills", "/add", "/specialists", "/user":
+	case "/providers", "/models", "/specialists", "/user":
 		if cmd == "/user setup" && len(parts) == 2 && parts[1] == "setup" {
 			m.ActiveSetup = NewUserWizardModel()
 			return nil
@@ -1337,9 +1674,9 @@ func (m *Model) renderPlan(jsonStr string, width int, status string) string {
 	if plan.Narrative != "" {
 		empty := ""
 		zero := uint(0)
-		gold := string(colorGold)
-		emerald := string(colorEmerald)
-		orange := string(colorOrange)
+		gold := "#FFD700"
+		emerald := "#00FF41"
+		orange := "#FFAA00"
 
 		ns := styles.DarkStyleConfig
 		ns.Document.BackgroundColor = &empty
@@ -1366,8 +1703,7 @@ func (m *Model) renderPlan(jsonStr string, width int, status string) string {
 			glamour.WithWordWrap(boxWidth-6),
 		)
 		rendered, _ := r.Render(plan.Narrative)
-		rendered = ansibg.ReplaceAllString(rendered, "")
-		rendered = strings.ReplaceAll(rendered, "\x1b[0m", "\x1b[39m")
+		rendered = utils.StripANSIBackgrounds(rendered)
 		doc.WriteString(rendered)
 		doc.WriteString(divider + "\n")
 	}
@@ -1434,7 +1770,7 @@ func (m *Model) renderPlan(jsonStr string, width int, status string) string {
 		doc.WriteString("\n" + divider + "\n")
 
 		labels := []string{"PROCEED", "REJECT", "AMEND"}
-		colors := []lipgloss.Color{
+		colors := []color.Color{
 			colorEmerald,
 			lipgloss.Color("#FF5252"),
 			colorGold,
@@ -1464,6 +1800,9 @@ func (m *Model) renderPlan(jsonStr string, width int, status string) string {
 }
 
 func (m *Model) renderDecisionBridge(width int) string {
+	if m.PendingRunSkill != "" {
+		return m.renderSkillRunPrompt(width)
+	}
 	btnStyle := lipgloss.NewStyle().Bold(true).Padding(0, 3).MarginRight(1)
 
 	proceedBase := btnStyle.Copy().Border(lipgloss.NormalBorder()).
@@ -1493,7 +1832,9 @@ func (m *Model) renderDecisionBridge(width int) string {
 	content := buttons
 	if m.ShowAmendInput {
 		m.Input.Prompt = "❯ FEEDBACK: "
-		m.Input.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(colorOrange).Bold(true)
+		tas := m.Input.Styles()
+		tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorOrange).Bold(true)
+		m.Input.SetStyles(tas)
 		content = lipgloss.JoinVertical(lipgloss.Left,
 			buttons,
 			lipgloss.NewStyle().PaddingTop(1).Render(m.Input.View()),
@@ -1503,6 +1844,39 @@ func (m *Model) renderDecisionBridge(width int) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder(), true, false, false, false).
 		BorderForeground(lipgloss.Color("#2a2a2a")). // más sutil que gold
+		Padding(1, 0).
+		Width(width).
+		Render(content)
+}
+
+func (m *Model) renderSkillRunPrompt(width int) string {
+	btnStyle := lipgloss.NewStyle().Bold(true).Padding(0, 3).MarginRight(1)
+
+	runBase := btnStyle.Copy().Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("#1B5E20")).Foreground(lipgloss.Color("#1B5E20"))
+	dismissBase := btnStyle.Copy().Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("#555555")).Foreground(lipgloss.Color("#555555"))
+
+	if m.PlanActionIndex == 0 {
+		runBase = runBase.Copy().Background(colorEmerald).
+			Foreground(colorOnyx).BorderForeground(colorEmerald)
+	} else if m.PlanActionIndex == 1 {
+		dismissBase = dismissBase.Copy().Background(lipgloss.Color("#888888")).
+			Foreground(colorOnyx).BorderForeground(lipgloss.Color("#888888"))
+	}
+
+	buttons := lipgloss.JoinHorizontal(lipgloss.Top,
+		runBase.Render("RUN NOW"),
+		dismissBase.Render("DONE"),
+	)
+
+	label := lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render(fmt.Sprintf("◈ SKILL READY: %s ", m.PendingRunSkill))
+
+	content := lipgloss.JoinHorizontal(lipgloss.Center, label, buttons)
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), true, false, false, false).
+		BorderForeground(lipgloss.Color("#2a2a2a")).
 		Padding(1, 0).
 		Width(width).
 		Render(content)
@@ -1526,7 +1900,17 @@ func readNextEvent(stream <-chan llm.StreamEvent) tea.Msg {
 	return EventMsgWrapper{Event: event, Next: func() tea.Msg { return readNextEvent(stream) }}
 }
 
-func (m *Model) View() string {
+func (m Model) listenForSystemEvents(ch <-chan *v1.SystemEvent) tea.Cmd {
+	return func() tea.Msg {
+		event, ok := <-ch
+		if !ok {
+			return nil // Stream closed
+		}
+		return SystemEventMsgWrapper{Event: event}
+	}
+}
+
+func (m *Model) View() tea.View {
 	if m.ActiveSetup != nil {
 		if s, ok := m.ActiveSetup.(*UserWizardModel); ok {
 			s.Width = m.width
@@ -1540,11 +1924,18 @@ func (m *Model) View() string {
 		if sw, ok := m.ActiveSetup.(*StartupWizard); ok {
 			sw.width = m.width
 		}
-		return "\033]0;Vraxter Workstation\007" + m.ActiveSetup.View()
+		content := "\033]0;Vraxter Workstation\007" + m.ActiveSetup.View().Content
+		v := tea.NewView(content)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
 	}
 
 	if !m.Ready {
-		return "\033]0;Vraxter Workstation\007Initializing Dashboard..."
+		v := tea.NewView("\033]0;Vraxter Workstation\007Initializing Dashboard...")
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
 	}
 
 	header := m.renderHeader()
@@ -1580,10 +1971,36 @@ func (m *Model) View() string {
 		Bold(true).
 		Render(identityLabel)
 
+	// Build the active jobs indicator
+	activeJobsStr := ""
+	if len(m.ActiveJobs) > 0 {
+		var titles []string
+		for _, j := range m.ActiveJobs {
+			titles = append(titles, j.Title)
+		}
+		label := fmt.Sprintf(" ⚙️ %d RUNNING: %s ", len(m.ActiveJobs), strings.Join(titles, ", "))
+		if len(label) > 40 {
+			label = label[:37] + "... "
+		}
+		activeJobsStr = lipgloss.NewStyle().
+			Background(colorGold).
+			Foreground(colorOnyx).
+			Bold(true).
+			Render(label)
+	}
+
 	// Build the line with the shortcuts embedded at the start and identity at the end
 	railTotalWidth := footerWidth - 2
-	lineBg := strings.Repeat("─", railTotalWidth-lipgloss.Width(shortcutPills)-lipgloss.Width(identityPill)-2)
-	topLine := faintStyle.Render("──") + shortcutPills + faintStyle.Render("─"+lineBg+"─") + identityPill + faintStyle.Render("──")
+	var topLine string
+	
+	// Deduct widths of all components
+	usedSpace := lipgloss.Width(shortcutPills) + lipgloss.Width(identityPill) + lipgloss.Width(activeJobsStr) + 2
+	if usedSpace < railTotalWidth {
+		lineBg := strings.Repeat("─", railTotalWidth-usedSpace)
+		topLine = faintStyle.Render("──") + shortcutPills + activeJobsStr + faintStyle.Render("─"+lineBg+"─") + identityPill + faintStyle.Render("──")
+	} else {
+		topLine = faintStyle.Render("──") + shortcutPills + activeJobsStr + identityPill + faintStyle.Render("──")
+	}
 
 	// 2. Input Area
 	var inputShelf string
@@ -1597,20 +2014,68 @@ func (m *Model) View() string {
 
 		inputShelf = inputShelfStyle.
 			Width(footerWidth).
+			MaxWidth(footerWidth).
 			Render(inputContent)
 	}
 
 	// 3. Bottom Rail
 	bottomRail := faintStyle.Render(strings.Repeat("─", footerWidth))
 
-	return "\033]0;Vraxter Workstation\007" + lipgloss.JoinVertical(lipgloss.Left,
+	// 4. Sticky Status Bar (System Feedback)
+	var statusBar string
+	if m.StatusMessage != "" {
+		statusBar = "\n" + statusBarStyle.Width(m.width).Render(" 💡 "+m.StatusMessage)
+	}
+
+	// 5. Autocomplete Overlay
+	var autocompleteBlock string
+	if m.Autocomplete.IsActive && len(m.Autocomplete.Items) > 0 {
+		autocompleteBlock = m.renderAutocomplete()
+	} else {
+		autocompleteBlock = "" // Subtle Air Spacer
+	}
+
+	content := "\033]0;Vraxter Workstation\007" + lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		chatArea,
 		topLine,
-		"", // Subtle Air Spacer
+		autocompleteBlock, // Replace Subtle Air Spacer with Autocomplete or empty string
 		inputShelf,
 		bottomRail,
+		statusBar,
 	)
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
+}
+
+func (m *Model) renderAutocomplete() string {
+	if !m.Autocomplete.IsActive || len(m.Autocomplete.Items) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	maxItems := 5
+	startIdx := 0
+	if m.Autocomplete.Cursor >= maxItems {
+		startIdx = m.Autocomplete.Cursor - maxItems + 1
+	}
+
+	for i := startIdx; i < len(m.Autocomplete.Items) && i < startIdx+maxItems; i++ {
+		item := m.Autocomplete.Items[i]
+		if i == m.Autocomplete.Cursor {
+			sb.WriteString(lipgloss.NewStyle().Background(colorDeepGray).Foreground(colorGold).Bold(true).Render(" ❯ "+item+" ") + "\n")
+		} else {
+			sb.WriteString(lipgloss.NewStyle().Foreground(colorMutedGray).Render("   "+item+" ") + "\n")
+		}
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDeepGray).
+		Padding(0, 1).
+		Render(strings.TrimRight(sb.String(), "\n"))
 }
 
 func (m *Model) renderMarkdown(history []HistoryBlock) string {
@@ -1622,6 +2087,7 @@ func (m *Model) renderMarkdown(history []HistoryBlock) string {
 		case BlockMarkdown:
 			content = block.Content
 			content = stripANSI(content)
+			content = sanitizePromptLeaks(content)
 
 			// --- PRO-CODE SPLITTER LOGIC ---
 			lastIndex := 0
@@ -1711,11 +2177,14 @@ func (m *Model) renderMarkdownString(content string) string {
 		return content
 	}
 
-	out = ansibg.ReplaceAllString(out, "")
-	// Replace Global Reset (\x1b[0m) with Foreground Reset (\x1b[39m)
-	// to avoid clearing the Lipgloss block's background color.
-	out = strings.ReplaceAll(out, "\x1b[0m", "\x1b[39m")
+	out = utils.StripANSIBackgrounds(out)
 	return out
+}
+
+var promptLeakRe = regexp.MustCompile(`(?s)\[(?:PROMPT LOCK|PROTOCOL LOCK|CRITICAL|TOOL USAGE|CAPABILITY LOCK|RETRY LOCK).*?\]`)
+
+func sanitizePromptLeaks(content string) string {
+	return promptLeakRe.ReplaceAllString(content, "")
 }
 
 func (m *Model) renderCodeBlock(lang, code string, width int) string {
@@ -1724,7 +2193,7 @@ func (m *Model) renderCodeBlock(lang, code string, width int) string {
 	}
 
 	// 1. Clean the lang string of any rogue ANSI to prevent background corruption in the header
-	reANSI := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	reANSI := regexp.MustCompile("\x1b\\[[0-9;]*m")
 	lang = reANSI.ReplaceAllString(lang, "")
 	lang = strings.ToUpper(lang)
 
@@ -1746,9 +2215,10 @@ func (m *Model) renderCodeBlock(lang, code string, width int) string {
 			inner = utils.StripANSIBackgrounds(inner)
 
 			// Prevent global reset from clearing Lipgloss's background color mid-line.
-			// We replace Chroma's reset (\x1b[0m) with a full reset followed by the default
+			// We replace Chroma's reset (\x1b[m / \x1b[0m) with a full reset followed by the default
 			// foreground (#abb2bf) and background (#080b0f) of the code block.
 			restoreSeq := "\x1b[0m\x1b[38;2;171;178;191m\x1b[48;2;8;11;15m"
+			inner = strings.ReplaceAll(inner, "\x1b[m", restoreSeq)
 			inner = strings.ReplaceAll(inner, "\x1b[0m", restoreSeq)
 		} else {
 			inner = strings.TrimSpace(code)
@@ -1773,6 +2243,7 @@ func (m *Model) renderCodeBlock(lang, code string, width int) string {
 	// 3. Header strictly padded without using Width() to prevent Lipgloss reflow bugs
 	headerText := dotStyle.Render("◆ ") + langStyle.Render(lang)
 	// Replace internal resets so the header's #0a0d12 background isn't prematurely cleared
+	headerText = strings.ReplaceAll(headerText, "\x1b[m", "\x1b[39m\x1b[48;2;10;13;18m")
 	headerText = strings.ReplaceAll(headerText, "\x1b[0m", "\x1b[39m\x1b[48;2;10;13;18m")
 
 	headerVisibleLen := lipgloss.Width(headerText)

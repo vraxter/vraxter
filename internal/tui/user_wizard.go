@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 var (
@@ -42,22 +42,22 @@ func NewUserWizardModel() *UserWizardModel {
 	inputs[0].Placeholder = "What's your name?"
 	inputs[0].Focus()
 	inputs[0].CharLimit = 32
-	inputs[0].Width = 32
+	inputs[0].SetWidth(32)
 
 	inputs[1] = textinput.New()
 	inputs[1].Placeholder = "Level of expertise (e.g. Senior Go Dev, Beginner)"
 	inputs[1].CharLimit = 64
-	inputs[1].Width = 64
+	inputs[1].SetWidth(64)
 
 	inputs[2] = textinput.New()
 	inputs[2].Placeholder = "Interests (e.g. NATS, Kubernetes, Fitness)"
 	inputs[2].CharLimit = 128
-	inputs[2].Width = 64
+	inputs[2].SetWidth(64)
 
 	inputs[3] = textinput.New()
 	inputs[3].Placeholder = "Bio (Tell Vraxter a bit about yourself)"
 	inputs[3].CharLimit = 256
-	inputs[3].Width = 64
+	inputs[3].SetWidth(64)
 
 	return &UserWizardModel{
 		inputs: inputs,
@@ -70,12 +70,12 @@ func (m *UserWizardModel) Init() tea.Cmd {
 
 func (m *UserWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyEsc:
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "esc":
 			m.quitting = true
 			return m, nil
-		case tea.KeyEnter:
+		case "enter":
 			if m.step == len(m.inputs)-1 {
 				m.Done = true
 				m.Result = OnboardingResult{
@@ -97,16 +97,16 @@ func (m *UserWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *UserWizardModel) View() string {
+func (m *UserWizardModel) View() tea.View {
 	width := m.Width
 	if width <= 0 {
 		width = 80
 	}
 	if m.quitting {
-		return "Setup cancelled."
+		return tea.NewView("Setup cancelled.")
 	}
 	if m.Done {
-		return "Setup complete! Persisting profile..."
+		return tea.NewView("Setup complete! Persisting profile...")
 	}
 
 	var s strings.Builder
@@ -155,10 +155,10 @@ func (m *UserWizardModel) View() string {
 
 	s.WriteString(setupFaintStyle.Italic(true).Render("(Press Enter to continue, Esc to cancel)"))
 
-	return lipgloss.NewStyle().
+	return tea.NewView(lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("#2a2a2a")).
 		Padding(1, 2).
 		Width(width).
-		Render(s.String())
+		Render(s.String()))
 }

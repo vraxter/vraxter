@@ -26,7 +26,7 @@ type geminiPart struct {
 }
 
 type geminiContent struct {
-	Role  string       `json:"role"`
+	Role  string       `json:"role,omitempty"`
 	Parts []geminiPart `json:"parts"`
 }
 
@@ -83,8 +83,12 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 	for _, m := range req.Messages {
 		role := m.Role
 		if role == "system" {
-			systemMsg = &geminiContent{
-				Parts: []geminiPart{{Text: m.Content}},
+			if systemMsg == nil {
+				systemMsg = &geminiContent{
+					Parts: []geminiPart{{Text: m.Content}},
+				}
+			} else {
+				systemMsg.Parts[0].Text += "\n\n" + m.Content
 			}
 			continue
 		}
@@ -159,7 +163,11 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 	for _, m := range req.Messages {
 		switch m.Role {
 		case "system":
-			systemMsg = &geminiContent{Parts: []geminiPart{{Text: m.Content}}}
+			if systemMsg == nil {
+				systemMsg = &geminiContent{Parts: []geminiPart{{Text: m.Content}}}
+			} else {
+				systemMsg.Parts[0].Text += "\n\n" + m.Content
+			}
 		case "user":
 			contents = append(contents, geminiContent{
 				Role:  "user",

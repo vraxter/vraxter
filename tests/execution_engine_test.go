@@ -26,7 +26,7 @@ func newTestExecEngine(t *testing.T) (*core.ExecutionEngine, *db.Store) {
 	runner := skills.NewRunner()
 	t.Cleanup(func() { runner.Close(context.Background()) })
 
-	engine := core.NewExecutionEngine(reg, runner, nil, chatRepo, specRepo, false)
+	engine := core.NewExecutionEngine(reg, runner, nil, chatRepo, specRepo, core.NewJobManager(), nil, false)
 	return engine, store
 }
 
@@ -156,7 +156,7 @@ func TestNewExecutionEngine_NotNil(t *testing.T) {
 	runner := skills.NewRunner()
 	defer runner.Close(context.Background())
 
-	engine := core.NewExecutionEngine(reg, runner, nil, chatRepo, specRepo, false)
+	engine := core.NewExecutionEngine(reg, runner, nil, chatRepo, specRepo, core.NewJobManager(), nil, false)
 	if engine == nil {
 		t.Fatal("expected non-nil ExecutionEngine")
 	}
@@ -170,7 +170,7 @@ func TestNewExecutionEngine_VerboseFlag(t *testing.T) {
 	runner := skills.NewRunner()
 	defer runner.Close(context.Background())
 
-	engine := core.NewExecutionEngine(reg, runner, nil, chatRepo, specRepo, true)
+	engine := core.NewExecutionEngine(reg, runner, nil, chatRepo, specRepo, core.NewJobManager(), nil, true)
 	if engine == nil {
 		t.Fatal("expected non-nil engine with verbose=true")
 	}

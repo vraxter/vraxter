@@ -6,8 +6,20 @@ import (
 	"strings"
 )
 
+// expandPath replaces ~ with the user's home directory
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return strings.Replace(path, "~", home, 1)
+		}
+	}
+	return path
+}
+
 // ReadFile reads the absolute or relative file content safely up to a 64kb limit.
 func ReadFile(path string) string {
+	path = expandPath(path)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Sprintf("vraxter-read-file ERROR: %v", err)
@@ -25,6 +37,7 @@ func ListDir(path string) string {
 	if path == "" {
 		path = "."
 	}
+	path = expandPath(path)
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return fmt.Sprintf("vraxter-list-dir ERROR: %v", err)

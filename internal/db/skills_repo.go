@@ -20,7 +20,7 @@ func NewSkillRepository(store *Store) *SkillRepository {
 // GetAllSkills fetches all installed skills from the local DB
 func (r *SkillRepository) GetAllSkills() ([]types.SkillManifest, error) {
 	query := `SELECT id, name, description, version, command, language, engine, tier, score, is_official, checksum, permissions, downloads, 
-	                 keywords, examples, tags, param_regex, vector
+	                 keywords, examples, tags, param_regex, params_schema, vector
 	          FROM skills ORDER BY name ASC`
 	rows, err := r.store.Conn.Query(query)
 	if err != nil {
@@ -36,7 +36,7 @@ func (r *SkillRepository) GetAllSkills() ([]types.SkillManifest, error) {
 
 		err := rows.Scan(
 			&s.ID, &s.Name, &s.Description, &s.Version, &s.Command, &s.Language, &s.Engine, &s.Tier, &s.Score, &s.IsOfficial, &s.Checksum, &permissionsJSON, &s.Downloads,
-			&keywordsJSON, &examplesJSON, &tagsJSON, &s.ParamRegex, &vectorBlob,
+			&keywordsJSON, &examplesJSON, &tagsJSON, &s.ParamRegex, &s.ParamsSchema, &vectorBlob,
 		)
 		if err != nil {
 			log.Printf("DB: Failed to scan skill: %v", err)
@@ -66,19 +66,19 @@ func (r *SkillRepository) UpsertSkill(s types.SkillManifest) error {
 	vectorBlob := floatsToBytes(s.Vector)
 
 	query := `INSERT INTO skills (id, name, description, version, command, language, engine, tier, score, is_official, checksum, permissions, downloads, 
-	                             keywords, examples, tags, param_regex, vector)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	                             keywords, examples, tags, param_regex, params_schema, vector)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	          ON CONFLICT(id) DO UPDATE SET
 	          name=excluded.name, description=excluded.description, version=excluded.version, 
 	          command=excluded.command, language=excluded.language, engine=excluded.engine, 
 	          tier=excluded.tier, score=excluded.score, is_official=excluded.is_official, 
 	          checksum=excluded.checksum, permissions=excluded.permissions, downloads=excluded.downloads,
 	          keywords=excluded.keywords, examples=excluded.examples, tags=excluded.tags, 
-	          param_regex=excluded.param_regex, vector=excluded.vector`
+	          param_regex=excluded.param_regex, params_schema=excluded.params_schema, vector=excluded.vector`
 
 	_, err := r.store.Conn.Exec(query, 
 		s.ID, s.Name, s.Description, s.Version, s.Command, s.Language, s.Engine, s.Tier, s.Score, s.IsOfficial, s.Checksum, string(permissionsJSON), s.Downloads,
-		string(keywordsJSON), string(examplesJSON), string(tagsJSON), s.ParamRegex, vectorBlob,
+		string(keywordsJSON), string(examplesJSON), string(tagsJSON), s.ParamRegex, s.ParamsSchema, vectorBlob,
 	)
 	return err
 }
@@ -112,6 +112,36 @@ func bytesToFloats(b []byte) []float32 {
 		floats[i] = math.Float32frombits(u)
 	}
 	return floats
+}
+
+func (r *SkillRepository) FindSkill(id string) (*types.SkillManifest, error) {
+	query := `SELECT id, name, description, version, command, language, engine, tier, score, is_official, checksum, permissions, downloads, 
+	                 keywords, examples, tags, param_regex, params_schema, vector
+	          FROM skills WHERE id = ?`
+	row := r.store.Conn.QueryRow(query, id)
+
+	var s types.SkillManifest
+	var permissionsJSON, keywordsJSON, examplesJSON, tagsJSON string
+	var vectorBlob []byte
+
+	err := row.Scan(
+		&s.ID, &s.Name, &s.Description, &s.Version, &s.Command, &s.Language, &s.Engine, &s.Tier, &s.Score, &s.IsOfficial, &s.Checksum, &permissionsJSON, &s.Downloads,
+		&keywordsJSON, &examplesJSON, &tagsJSON, &s.ParamRegex, &s.ParamsSchema, &vectorBlob,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = json.Unmarshal([]byte(permissionsJSON), &s.Permissions)
+	_ = json.Unmarshal([]byte(keywordsJSON), &s.Keywords)
+	_ = json.Unmarshal([]byte(examplesJSON), &s.Examples)
+	_ = json.Unmarshal([]byte(tagsJSON), &s.Tags)
+
+	if len(vectorBlob) > 0 {
+		s.Vector = bytesToFloats(vectorBlob)
+	}
+
+	return &s, nil
 }
 
 func (r *SkillRepository) DeleteSkill(id string) error {

@@ -43,7 +43,7 @@ func main() {
 }`
 
 	fmt.Println("\n🛠️  Probando GoCoder...")
-	err = coder.CreateSkill("go", "TestGo", "A test go skill", goCode)
+	err = coder.CreateSkill("go", "TestGo", "A test go skill", "", goCode)
 	if err != nil {
 		fmt.Printf("❌ Error en GoCoder: %v\n", err)
 	} else {
@@ -59,7 +59,7 @@ func main() {
 		rustCode := `fn main() {
     println!("{{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{{\"status\":\"completed\",\"output\":\"RUST_SUCCESS\"}}}}");
 }`
-		err = coder.CreateSkill("rust", "TestRust", "A test rust skill", rustCode)
+		err = coder.CreateSkill("rust", "TestRust", "A test rust skill", "", rustCode)
 		if err != nil {
 			fmt.Printf("❌ Error en RustCoder: %v\n", err)
 		} else {

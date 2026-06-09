@@ -163,14 +163,26 @@ func (p *StreamParser) Flush() string {
 		p.chatPos = from
 	}
 
-	if p.chatPos < len(full) {
-		remaining := full[p.chatPos:]
-		p.chatPos = len(full)
-		// Strip any VRAX markers that sneaked in at the tail
-		if idx := strings.Index(remaining, "[VRAX"); idx != -1 {
-			remaining = remaining[:idx]
-		}
-		return remaining
+	// Calculate stop position: earliest of any marker boundary
+	stopAt := len(full)
+	if idx := strings.Index(full, p.markerTool); idx != -1 && idx < stopAt {
+		stopAt = idx
 	}
-	return ""
+	if idx := strings.Index(full, p.markerCode); idx != -1 && idx < stopAt {
+		stopAt = idx
+	}
+
+	// If we are already past the stopAt (because we are inside a tool/code block), return empty
+	if p.chatPos >= stopAt {
+		return ""
+	}
+
+	remaining := full[p.chatPos:stopAt]
+	p.chatPos = stopAt
+	return remaining
+}
+
+// HasToolMarker returns true if the tool marker is present anywhere in the stream.
+func (p *StreamParser) HasToolMarker() bool {
+	return strings.Contains(p.fullBuffer.String(), p.markerTool)
 }

@@ -36,6 +36,8 @@ type Orchestrator struct {
 	ChatRepo       *db.ChatRepository
 	SpecialistRepo *db.SpecialistRepository
 	MemoryRepo     *db.MemoryRepository
+	ContextMgr     *ContextManager
+	JobManager     *JobManager
 
 	// Sub-controllers
 	Resolver    *IntentResolver
@@ -44,6 +46,7 @@ type Orchestrator struct {
 	Planner     *Planner
 	UserRepo    *db.UserRepository
 	MemorySvc   *services.MemoryService
+	Swarm       *SwarmDispatcher
 
 	// Performance Cache
 	mu                sync.RWMutex
@@ -100,20 +103,31 @@ func NewOrchestrator(
 	}
 
 	skillRepo := db.NewSkillRepository(store)
+	codegen := &CodeGenService{
+		Router:  router,
+		Coder:   coder,
+		Verbose: verbose,
+	}
+	jobMgr := NewJobManager()
+
 	o := &Orchestrator{
 		ModelsRepo:       modelsRepo,
 		ChatRepo:         chatRepo,
 		SpecialistRepo:   specRepo,
 		MemoryRepo:       memoryRepo,
+		ContextMgr:       NewContextManager(chatRepo),
+		JobManager:       jobMgr,
 		UserRepo:         db.NewUserRepository(store),
 		Resolver:         NewIntentResolver(reg, router, skillRepo, specRepo),
-		ExecEngine:       NewExecutionEngine(reg, run, coder, chatRepo, specRepo, verbose),
+		ExecEngine:       NewExecutionEngine(reg, run, coder, chatRepo, specRepo, jobMgr, codegen, verbose),
 		StreamCoord:      NewStreamCoordinator(router, verbose),
 		Planner:          NewPlanner(chatRepo, router),
 		MemorySvc:        services.NewMemoryService(memoryRepo, router),
 		Verbose:          verbose,
 		sessionOverrides: make(map[string]string),
 	}
+
+	o.Swarm = NewSwarmDispatcher(o.ExecEngine, jobMgr, o.Resolver)
 
 	// Register System Skills for Semantic Matching/Fast Path
 	reg.Register(types.SkillManifest{
@@ -128,6 +142,37 @@ func NewOrchestrator(
 		Name:        "Restore Model",
 		Description: "Unlock model routing and restore automatic selection. Usage: restore model",
 		ParamRegex:  `(restore|auto)\s+model`,
+		IsOfficial:  true,
+	})
+
+	// Filesystem Tools — Semantic Matching Registration
+	reg.Register(types.SkillManifest{
+		ID:          "vraxter-read-file",
+		Name:        "Read File",
+		Description: "Read the contents of a local file from the workspace or filesystem. Returns the file text content.",
+		Keywords:    []string{"read", "file", "cat", "show", "content", "contents", "open", "view", "leer", "archivo", "contenido", "mostrar"},
+		Tags:        []string{"filesystem", "io", "workspace"},
+		Examples:    []string{"read this file /path/to/file", "show me the contents of config.yaml", "lee este archivo", "what does this file contain"},
+		ParamRegex:  `(?:read|cat|show|open|view|lee|muestra|leer)\s+(?:the\s+)?(?:file\s+|contents?\s+(?:of\s+)?)?(?P<path>[^\s]+\.[a-zA-Z0-9]+)`,
+		IsOfficial:  true,
+	})
+	reg.Register(types.SkillManifest{
+		ID:          "vraxter-list-dir",
+		Name:        "List Directory",
+		Description: "List the contents of a local directory to explore files and folders in the workspace.",
+		Keywords:    []string{"list", "ls", "dir", "directory", "folder", "files", "tree", "explore", "listar", "directorio", "carpeta", "archivos"},
+		Tags:        []string{"filesystem", "io", "workspace"},
+		Examples:    []string{"list the files in /home", "what's in the src directory", "ls /tmp", "lista los archivos en /home", "explore the workspace"},
+		ParamRegex:  `(?:list|ls|dir|explore|listar|lista)\s+(?:the\s+)?(?:files?\s+(?:in|from)\s+|contents?\s+(?:of\s+)?|directory\s+)?(?P<path>(?:\/|~|\.)[^\s]*)`,
+		IsOfficial:  true,
+	})
+	reg.Register(types.SkillManifest{
+		ID:          "vraxter-patch-code",
+		Name:        "Patch Code",
+		Description: "Perform an exact search-and-replace edit on a target file. Requires path, search block, and replace block.",
+		Keywords:    []string{"patch", "replace", "edit", "modify", "fix", "cambiar", "reemplazar", "editar", "refactor"},
+		Tags:        []string{"filesystem", "code", "refactor"},
+		Examples:    []string{"patch this file", "replace this code block", "edit the function", "fix this line"},
 		IsOfficial:  true,
 	})
 
@@ -178,11 +223,11 @@ func (o *Orchestrator) refreshCache() error {
 
 	var sCtx strings.Builder
 	for _, s := range specs {
-		sCtx.WriteString(fmt.Sprintf("- ID: '%s' | Name: %s | Expertise: %s\n", s.ID, s.Name, s.Expertise))
+		sCtx.WriteString(fmt.Sprintf("- Specialist: %s\n  Expertise: %s\n", s.Name, s.Expertise))
 	}
-	o.cachedSpecsCtx = sCtx.String()
-	if o.cachedSpecsCtx == "" {
-		o.cachedSpecsCtx = "None.\n"
+	o.cachedSpecsCtx = strings.TrimSpace(sCtx.String())
+	if len(specs) == 0 {
+		o.cachedSpecsCtx = "None."
 	}
 
 	o.cacheExpiry = time.Now().Add(30 * time.Second)
@@ -234,6 +279,50 @@ func (o *Orchestrator) IdentifyIntent(ctx context.Context, text string) (types.I
 	return types.IntentMatch{}, nil
 }
 
+// resolveMention scans for structural @mention signals in the query.
+// This is language-agnostic: it only matches the @ prefix, not any natural language verbs.
+// Returns the match and the remaining task text (everything after the @mention).
+func (o *Orchestrator) resolveMention(query string) (types.IntentMatch, string) {
+	lowerQuery := strings.ToLower(query)
+
+	// Check for @Vraxter (return-control signal)
+	if idx := strings.Index(lowerQuery, "@vraxter"); idx != -1 {
+		remaining := strings.TrimSpace(query[idx+len("@vraxter"):])
+		return types.IntentMatch{
+			Type:       types.IntentTypeReturnControl,
+			ID:         "vraxter-return-control",
+			Confidence: types.SignalReturnControl.Confidence(),
+			Signal:     types.SignalReturnControl,
+			Params:     map[string]interface{}{"task": remaining},
+		}, remaining
+	}
+
+	// Check for @SpecialistName
+	if o.SpecialistRepo != nil {
+		allSpecs, err := o.SpecialistRepo.GetAllSpecialists()
+		if err == nil {
+			for _, s := range allSpecs {
+				mention := "@" + strings.ToLower(s.Name)
+				if idx := strings.Index(lowerQuery, mention); idx != -1 {
+					remaining := strings.TrimSpace(query[idx+len(mention):])
+					if remaining == "" {
+						remaining = query[:idx]
+						remaining = strings.TrimSpace(remaining)
+					}
+					return types.IntentMatch{
+						Type:       types.IntentTypeSpecialist,
+						ID:         s.ID,
+						Confidence: types.SignalExplicitMention.Confidence(),
+						Signal:     types.SignalExplicitMention,
+						Params:     map[string]interface{}{"task": remaining},
+					}, remaining
+				}
+			}
+		}
+	}
+
+	return types.IntentMatch{}, ""
+}
 func (o *Orchestrator) GetActiveModelID(sessionID string) string {
 	if sessionID != "" {
 		o.mu.RLock()
@@ -305,7 +394,7 @@ func (o *Orchestrator) gatherPromptContext(ctx context.Context, text string) (st
 	return userProfilePool, memoryContextPool
 }
 
-func (o *Orchestrator) resolveExecutionModel(text, sessionID, overrideModelID string) (types.ModelConfig, error) {
+func (o *Orchestrator) resolveExecutionModel(ctx context.Context, text, sessionID, overrideModelID string, out chan<- llm.StreamEvent) (types.ModelConfig, error) {
 	var modelCfg types.ModelConfig
 
 	// Priority: Explicit request override > Session-level lock
@@ -326,11 +415,25 @@ func (o *Orchestrator) resolveExecutionModel(text, sessionID, overrideModelID st
 
 	if modelCfg.ID == "" {
 		useCase := llm.ClassifyUseCase(text)
+		
+		// Detection: check if the preferred model is actually available
+		preferredCfg, _, _ := o.StreamCoord.Router.GetProviderForUseCase(useCase)
 		ordered := o.StreamCoord.Router.GetOrderedProvidersForUseCase(useCase)
+		
 		if len(ordered) == 0 {
 			return modelCfg, fmt.Errorf("no LLM models configured")
 		}
+
 		modelCfg = ordered[0].Config
+		
+		// Fallback notification
+		if preferredCfg.ID != "" && modelCfg.ID != preferredCfg.ID {
+			msg := fmt.Sprintf("⚠️ Use-case model '%s' unavailable. Falling back to '%s'.", preferredCfg.Alias, modelCfg.Alias)
+			select {
+			case out <- llm.StreamEvent{Type: llm.EventTypeStatus, Content: msg}:
+			default:
+			}
+		}
 	}
 	return modelCfg, nil
 }
@@ -353,6 +456,44 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 		conversationID := o.resolveConversationContext(sessionID, specialistID)
 
 		trimmedText := strings.TrimSpace(text)
+
+		// FAST PATH 0: Structural @mention pre-processor (language-agnostic, always runs)
+		// This is evaluated BEFORE IdentifyIntent and the resolver, regardless of specialistID.
+		if mentionMatch, remainingTask := o.resolveMention(trimmedText); mentionMatch.Confidence >= 1.0 {
+			o.ChatRepo.SaveMessage(&types.Message{
+				ID: intentID, ConversationID: conversationID,
+				Role: "user", Content: text, Timestamp: time.Now(),
+			})
+
+			if mentionMatch.Type == types.IntentTypeReturnControl {
+				// Clear specialist context and optionally re-route remaining task
+				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n🔄 Control returned to Vraxter.\n"}
+				o.ChatRepo.SaveMessage(&types.Message{
+					ID: uuid.New().String(), ConversationID: conversationID,
+					Role: "system", Content: "CONTROL RETURNED. The specialist sub-agent has exited the conversation. SYSTEM DIRECTIVE: YOU ARE NOW 'VRAXTER' (The primary Orchestrator). STOP ACTING LIKE THE SPECIALIST. Abandon all sub-agent personas. You MUST now answer the user's latest query using your full capabilities as Vraxter.",
+					Timestamp: time.Now(),
+				})
+				// Signal TUI to clear specialist banner
+				out <- llm.StreamEvent{Type: llm.EventTypeSpecialistResult, Content: "||"}
+
+				if remainingTask != "" {
+					// Re-route the remaining text through the supervisor pipeline
+					subStream, err := o.ProcessRawIntent(ctx, sessionID, remainingTask, "", overrideModelID)
+					if err == nil {
+						for e := range subStream {
+							if e.Type != llm.EventTypeDone {
+								out <- e
+							}
+						}
+					}
+				}
+				return
+			}
+
+			// @SpecialistName delegation
+			o.ExecEngine.RunFastPath(ctx, out, mentionMatch, conversationID)
+			return
+		}
 
 		// FAST PATH 1: Exact Command Match
 		explicitMatch, _ := o.IdentifyIntent(ctx, trimmedText)
@@ -400,13 +541,44 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 		if strings.HasPrefix(trimmedText, "/plan") {
 			o.mu.RUnlock()
 			query := strings.TrimPrefix(trimmedText, "/plan")
-			plan, err := o.Planner.BuildPlan(ctx, strings.TrimSpace(query), specsCtxStr)
-			if err != nil {
-				out <- llm.StreamEvent{Type: llm.EventTypeError, Err: err}
-				return
+			
+			// Fire the planner asynchronously using the background daemon manager
+			jobID := o.JobManager.SpawnDaemon("Architecture Planner", func() (string, error) {
+				// Use background context to prevent stream cancellation from killing the job
+				planCtx := context.Background()
+				plan, err := o.Planner.BuildPlan(planCtx, strings.TrimSpace(query), specsCtxStr)
+				if err != nil {
+					return "", err
+				}
+				planJSON, _ := json.Marshal(plan)
+				
+				// Once completed, broadcast the proposed plan so any UI can pick it up
+				o.JobManager.Broadcast(SystemEvent{
+					Type:      EventPlanProposed,
+					JobID:     "plan-" + uuid.New().String(),
+					Title:     "Plan Proposed",
+					Payload:   string(planJSON),
+					Timestamp: time.Now(),
+				})
+				
+				return "Plan successfully generated and pushed to UI.", nil
+			})
+
+			out <- llm.StreamEvent{
+				Type:    llm.EventTypeToken, 
+				Content: fmt.Sprintf("\n⚡ Spawned Architecture Planner Daemon (Job ID: %s). You will be notified when the plan is ready.\n", jobID),
 			}
-			planJSON, _ := json.Marshal(plan)
-			out <- llm.StreamEvent{Type: llm.EventTypePlanProposal, Content: string(planJSON)}
+			return
+		}
+
+		if strings.HasPrefix(trimmedText, "!RUN_SKILL") {
+			o.mu.RUnlock()
+			skillID := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!RUN_SKILL"))
+			out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n▶️ **Running skill:** %s\n", skillID)}
+			
+			// Invoke HandleStandardSkill directly
+			result := o.ExecEngine.HandleStandardSkill(ctx, out, types.ToolCall{SkillID: skillID}, skillID)
+			out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ **Result:**\n%s\n", result)}
 			return
 		}
 
@@ -415,15 +587,47 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 			planJSON := strings.TrimPrefix(trimmedText, "!EXECUTE_PLAN")
 			var plan Plan
 			if err := json.Unmarshal([]byte(planJSON), &plan); err == nil {
-				for i, phase := range plan.Phases {
-					if ctx.Err() != nil {
-						return
+				jobID := o.JobManager.SpawnDaemon("Plan Execution: "+plan.Goal, func() (string, error) {
+					bgCtx := context.Background()
+					var finalOutput string
+					
+					for i, phase := range plan.Phases {
+						// Broadcast progress so TUI sees the phase shifts
+						o.JobManager.Broadcast(SystemEvent{
+							Type:      EventSwarmProgress,
+							Title:     "Executing Plan",
+							Payload:   fmt.Sprintf("Running Phase %d: %s", i+1, phase.Title),
+							Timestamp: time.Now(),
+						})
+						
+						// Swallow stream tokens locally to prevent blocking the daemon
+						dummyOut := make(chan llm.StreamEvent, 100)
+						var phaseOutput string
+						
+						go func() {
+							for evt := range dummyOut {
+								if evt.Type == llm.EventTypeToken {
+									phaseOutput += evt.Content
+								}
+							}
+						}()
+						
+						phaseQuery := fmt.Sprintf("TASK: %s\nDESCRIPTION: %s", phase.Title, phase.Description)
+						_ = o.executeSubTask(bgCtx, phaseQuery, phase.Specialist, dummyOut)
+						close(dummyOut)
+						
+						finalOutput += fmt.Sprintf("=== Phase %d: %s ===\n%s\n\n", i+1, phase.Title, phaseOutput)
 					}
-					out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n\n[▶️ Phase %d: %s]\n", i+1, phase.Title)}
-					phaseQuery := fmt.Sprintf("TASK: %s\nDESCRIPTION: %s", phase.Title, phase.Description)
-					_ = o.executeSubTask(ctx, phaseQuery, phase.Specialist, out)
+					
+					return finalOutput, nil
+				})
+				
+				out <- llm.StreamEvent{
+					Type:    llm.EventTypeToken, 
+					Content: fmt.Sprintf("\n⚡ Spawned Plan Execution Daemon (Job ID: %s). The plan is now running in the background.\n", jobID),
 				}
-				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n\n✅ Plan Complete"}
+			} else {
+				out <- llm.StreamEvent{Type: llm.EventTypeError, Err: err}
 			}
 			return
 		}
@@ -432,8 +636,17 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 		userProfilePool, memoryContextPool := o.gatherPromptContext(ctx, trimmedText)
 		o.mu.RUnlock()
 
-		// LLM EXECUTION: Resolve Model
-		modelCfg, err := o.resolveExecutionModel(trimmedText, sessionID, overrideModelID)
+		// If no model override is provided, but we have a targeted specialist, check if it has a fixed model
+		if overrideModelID == "" && specialistID != "" {
+			if spec, err := o.SpecialistRepo.GetSpecialist(specialistID); err == nil && spec != nil {
+				if spec.ModelID != "" {
+					overrideModelID = spec.ModelID
+				}
+			}
+		}
+
+		// LLM EXECUTION: Resolve Model (falls back to use-case intent parsing if no override)
+		modelCfg, err := o.resolveExecutionModel(ctx, trimmedText, sessionID, overrideModelID, out)
 		if err != nil {
 			out <- llm.StreamEvent{Type: llm.EventTypeError, Err: err}
 			return
@@ -444,13 +657,13 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 			Role: "user", Content: text, Timestamp: time.Now(),
 		})
 
-		maxRetries := 2
+		maxRetries := 5
 		for iteration := 0; iteration < maxRetries; iteration++ {
 			if ctx.Err() != nil {
 				break
 			}
 
-			history, _ := o.ChatRepo.GetMessagesByConversation(conversationID, 12)
+			history := o.ContextMgr.PruneHistory(conversationID, modelCfg.ContextWindow)
 			toolsContext := o.buildToolsContext(specialistID)
 			systemPrompt, enf := o.buildSystemPrompt(specialistID, specsCtxStr, modelsCtxStr, toolsContext, userProfilePool, memoryContextPool, &modelCfg)
 
@@ -481,7 +694,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 				}
 				o.ChatRepo.SaveMessage(&types.Message{
 					ID: uuid.New().String(), ConversationID: conversationID,
-					Role: "system", Content: feedback, Timestamp: time.Now(),
+					Role: "user", Content: feedback, Timestamp: time.Now(),
 				})
 			}
 		}
@@ -508,7 +721,7 @@ func (o *Orchestrator) buildToolsContext(specialistID string) string {
 		addedOfficial[id] = true
 	}
 
-	addOfficial("vraxter-coder", "CREATE NEW TOOLS. Use this when the user needs a tool that doesn't exist. Params: name, description, logic (Go code).")
+	addOfficial("vraxter-coder", "CREATE NEW SKILLS. Use this when the user needs to create a new skill. Params: name (string, required), description (string, required), spec (string, required: natural language description of what the skill should do, its inputs and outputs), language (string, optional: 'go' or 'rust'), run_params (object, optional: parameters to immediately execute the skill after creation). If you are creating a skill to fulfill a specific user request (e.g. 'tell me the weather'), you MUST provide the inferred execution parameters in 'run_params' to trigger immediate execution. Vraxter will auto-generate and compile the code to WASM.")
 
 	if specialistID == "" {
 		addOfficial("vraxter-create-specialist", "Create a Sub-Agent specialist. Params: name, expertise, model_id (optional).")
@@ -521,6 +734,9 @@ func (o *Orchestrator) buildToolsContext(specialistID string) string {
 	addOfficial("vraxter-activate-model", "Manually switch and lock a specific model for the current session. Use this ONLY if the user explicitly requests to change models. Params: model_id.")
 	addOfficial("vraxter-restore-model", "Unlock model routing and restore automatic selection based on intent.")
 
+	addOfficial("vraxter-read-file", "Read the contents of a local file. Use this to read files from the workspace. Params: path.")
+	addOfficial("vraxter-list-dir", "List the contents of a local directory. Use this to explore the workspace. Params: path.")
+
 	for _, sl := range allSkills {
 		if addedOfficial[sl.ID] {
 			continue // Skip duplicate/legacy descriptions from DB
@@ -529,7 +745,13 @@ func (o *Orchestrator) buildToolsContext(specialistID string) string {
 		if sl.IsOfficial {
 			officialSkills = append(officialSkills, fmt.Sprintf("- ID: %s [OFFICIAL] | Description: %s", sl.ID, sl.Description))
 		} else {
-			communitySkills = append(communitySkills, fmt.Sprintf("- ID: %s | Description: %s (Trust Score: %.1f)", sl.ID, sl.Description, sl.Score))
+			paramsInfo := ""
+			if sl.ParamsSchema != "" {
+				paramsInfo = " | [Schema Available upon Exception]"
+			} else if sl.ParamRegex != "" {
+				paramsInfo = " | [Regex Discovery]"
+			}
+			communitySkills = append(communitySkills, fmt.Sprintf("- ID: %s | Description: %s%s", sl.ID, sl.Description, paramsInfo))
 		}
 	}
 
@@ -547,8 +769,8 @@ func (o *Orchestrator) buildSystemPrompt(
 	specialistID, specsCtxStr, modelsCtxStr, toolsContext, userProfile, memoryContext string,
 	modelCfg *types.ModelConfig,
 ) (string, string) {
-	enforcementSuffix := fmt.Sprintf("\n\n[PROMPT LOCK: You MUST strictly mirror the user language in EVERY response.]\n[PROTOCOL LOCK: IF a functional tool is needed, use: %s, %s, %s. If the task is EDUCATIONAL (snippets/explanations), DO NOT use tools. Use PLAIN Markdown chat.]\n[CRITICAL: DO NOT attempt to write code or create skills to perform 'model activation' or 'switching'. Use the built-in 'vraxter-activate-model' tool instead. Hallucinating execution scripts for configuration changes is strictly Forbidden.]",
-		markerChat, markerTool, markerCode)
+	enforcementSuffix := fmt.Sprintf("\n\n[PROMPT LOCK: You MUST strictly mirror the user language in EVERY response.]\n[PROTOCOL LOCK: IF a functional tool is needed, use: %s, %s, %s. If the task is EDUCATIONAL (snippets/explanations), DO NOT use tools. Use PLAIN Markdown chat.]\n[CRITICAL: DO NOT attempt to write code or create skills to perform 'model activation' or 'switching'. Use the built-in 'vraxter-activate-model' tool instead.]\n[TOOL USAGE: To invoke a tool, YOU MUST OUTPUT STRICTLY VALID JSON. The JSON must contain the 'skill_id' of the tool you are invoking, and a 'params' object. Example: %s {\"skill_id\": \"vraxter-coder\", \"params\": {\"name\": \"weather_service\", \"description\": \"...\", \"spec\": \"...\"}}]\n[CAPABILITY LOCK: You ARE running inside the Vraxter autonomous engine. Vraxter will natively compile and execute your code. YOU MUST NOT refuse to write code. NEVER say 'I cannot execute code'.]\n[RETRY LOCK: If a tool execution fails and returns an error, you MUST correct the payload and invoke the tool again. NEVER give up and dump raw code as markdown.]",
+		markerChat, markerTool, markerCode, markerTool)
 
 	gitCtx := utils.CaptureGitContext("")
 
@@ -568,6 +790,9 @@ func (o *Orchestrator) buildSystemPrompt(
 				GitContext:          gitCtx,
 				UserProfile:         userProfile,
 				SemanticMemory:      memoryContext,
+				MarkerChat:          markerChat,
+				MarkerTool:          markerTool,
+				MarkerCode:          markerCode,
 			})
 			if err == nil {
 				return out, enforcementSuffix

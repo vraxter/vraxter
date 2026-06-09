@@ -3,8 +3,8 @@ package tui
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/patagonicrune/vraxter/internal/services"
 )
 
@@ -59,13 +59,13 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.userWizard.Width = msg.Width
 		m.provWizard.width = msg.Width
 		m.modelWizard.width = msg.Width
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.state == StateSplash {
-			if msg.Type == tea.KeyEnter {
+			if msg.String() == "enter" {
 				m.state = StateUserProfile
 				return m, m.userWizard.Init()
 			}
-			if msg.Type == tea.KeyEsc {
+			if msg.String() == "esc" {
 				m.quitting = true
 				m.Done = true
 				return m, nil
@@ -111,7 +111,7 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = StateFinished
 		}
 	case StateFinished:
-		if km, ok := msg.(tea.KeyMsg); ok && km.Type == tea.KeyEnter {
+		if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "enter" {
 			m.Done = true
 			return m, nil
 		}
@@ -120,24 +120,25 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *StartupWizard) View() string {
+func (m *StartupWizard) View() tea.View {
 	if m.quitting {
-		return "Onboarding cancelled. Vraxter is ready when you are."
+		return tea.NewView("Onboarding cancelled. Vraxter is ready when you are.")
 	}
 
+	var content string
 	switch m.state {
 	case StateSplash:
-		return m.renderSplash()
+		content = m.renderSplash()
 	case StateUserProfile:
-		return m.userWizard.View()
+		content = m.userWizard.View().Content
 	case StateProviderConfig:
-		return m.provWizard.View()
+		content = m.provWizard.View().Content
 	case StateModelRegister:
-		return m.modelWizard.View()
+		content = m.modelWizard.View().Content
 	case StateFinished:
-		return m.renderFinished()
+		content = m.renderFinished()
 	}
-	return ""
+	return tea.NewView(content)
 }
 
 func (m *StartupWizard) renderSplash() string {

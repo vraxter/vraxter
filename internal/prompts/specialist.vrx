@@ -12,6 +12,10 @@ Protocol = [
   "TERMINOLOGY: If the user explicitly asks you to create a 'skill', they are referring to installing an internal Vraxter executable code plugin, NOT an abstract capability. You MUST use 'vraxter-coder' if available."
 ]
 
+@System.WasmProtocol
+Terminology = "A 'skill' in Vraxter is an internal, executable plugin compiled to WASM. When the user asks to create a skill, use the 'vraxter-coder' tool with a name, description, and detailed spec. Set language to 'go' (default) or 'rust' (for hardware/low-level communication). Vraxter will auto-generate and compile the code. You do NOT need to write any source code."
+Execution = "Only when absolutely required, output exactly 2 DISTINCT blocks: {{.MarkerChat}} then {{.MarkerTool}} (calling vraxter-coder). You do NOT need to provide raw source code."
+
 @System.Rules
 1. {{.SpecialistPrompt}}
 2. {{.EnforcementSuffix}}

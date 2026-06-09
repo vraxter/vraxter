@@ -99,6 +99,66 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 	return nil
 }
 
+// SubscribeEvents provides a persistent, one-way event stream for background jobs
+func (h *AgentHandler) SubscribeEvents(req *v1.SubscribeEventsRequest, stream v1.AgentService_SubscribeEventsServer) error {
+	clientID := req.ClientId
+	if clientID == "" {
+		clientID = fmt.Sprintf("client-%d", time.Now().UnixNano())
+	}
+
+	// Connect to the engine's global event bus
+	ch := h.engine.JobManager().Subscribe(clientID)
+	defer h.engine.JobManager().Unsubscribe(clientID)
+
+	for event := range ch {
+		// Map core.SystemEvent to v1.SystemEvent
+		rpcEvent := &v1.SystemEvent{
+			JobId:     event.JobID,
+			Title:     event.Title,
+			Payload:   event.Payload,
+			Timestamp: event.Timestamp.Format(time.RFC3339),
+		}
+
+		switch event.Type {
+		case core.EventJobStarted:
+			rpcEvent.Type = v1.SystemEvent_JOB_STARTED
+		case core.EventJobCompleted:
+			rpcEvent.Type = v1.SystemEvent_JOB_COMPLETED
+		case core.EventJobFailed:
+			rpcEvent.Type = v1.SystemEvent_JOB_FAILED
+		case core.EventSwarmProgress:
+			rpcEvent.Type = v1.SystemEvent_SWARM_PROGRESS
+		case core.EventSystemAlert:
+			rpcEvent.Type = v1.SystemEvent_SYSTEM_ALERT
+		case core.EventPlanProposed:
+			rpcEvent.Type = v1.SystemEvent_PLAN_PROPOSED
+		}
+
+		if err := stream.Send(rpcEvent); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// GetActiveJobs returns all currently tracked background daemons
+func (h *AgentHandler) GetActiveJobs(ctx context.Context, req *v1.GetActiveJobsRequest) (*v1.GetActiveJobsResponse, error) {
+	activeJobs := h.engine.JobManager().GetActiveJobs()
+	
+	var rpcJobs []*v1.JobStatus
+	for _, job := range activeJobs {
+		rpcJobs = append(rpcJobs, &v1.JobStatus{
+			Id:        job.ID,
+			Title:     job.Title,
+			Status:    job.Status,
+			StartTime: job.StartTime.Format(time.RFC3339),
+		})
+	}
+	
+	return &v1.GetActiveJobsResponse{Jobs: rpcJobs}, nil
+}
+
 func (h *AgentHandler) GetInfo(ctx context.Context, req *v1.GetInfoRequest) (*v1.GetInfoResponse, error) {
 	modelID := h.engine.GetActiveModelID("")
 	return &v1.GetInfoResponse{

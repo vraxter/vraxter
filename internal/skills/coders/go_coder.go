@@ -33,7 +33,7 @@ type GoCoder struct {
 
 func (c *GoCoder) Language() string { return "go" }
 
-func (c *GoCoder) Compile(name, description, code string) error {
+func (c *GoCoder) Compile(name, description, paramsSchema, code string) error {
 	if !c.TM.IsReady("go") {
 		if err := c.TM.SetupSDK("go"); err != nil {
 			return err
@@ -142,15 +142,16 @@ func (c *GoCoder) Compile(name, description, code string) error {
 	}
 
 	manifest := types.SkillManifest{
-		ID:          skillID,
-		Name:        name,
-		Description: description,
-		Command:     wasmPath,
-		Engine:      "wasm",
-		Language:    "go",
-		Version:     "1.0.0",
-		Tier:        types.Tier2CommunityVerified,
-		Checksum:    checksum,
+		ID:           skillID,
+		Name:         name,
+		Description:  description,
+		ParamsSchema: paramsSchema,
+		Command:      wasmPath,
+		Engine:       "wasm",
+		Language:     "go",
+		Version:      "1.0.0",
+		Tier:         types.Tier2CommunityVerified,
+		Checksum:     checksum,
 	}
 
 	// 7. Execution Dry-Run Verification (Failsafe)

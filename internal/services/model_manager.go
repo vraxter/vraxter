@@ -58,7 +58,7 @@ func (m *ModelManager) GetModel(idOrAlias string) (*types.ModelConfig, error) {
 	return m.modelRepo.GetModelByID(idOrAlias)
 }
 
-func (m *ModelManager) UpdateModel(idOrAlias string, priority *int, isActive *bool, alias *string, modelName *string) error {
+func (m *ModelManager) UpdateModel(idOrAlias string, priority *int, isActive *bool, alias *string, modelName *string, useCasePriorities map[string]int) error {
 	cfg, err := m.modelRepo.GetModelByID(idOrAlias)
 	if err != nil {
 		return err
@@ -75,6 +75,9 @@ func (m *ModelManager) UpdateModel(idOrAlias string, priority *int, isActive *bo
 	}
 	if modelName != nil {
 		cfg.Model = *modelName
+	}
+	if useCasePriorities != nil {
+		cfg.UseCasePriorities = useCasePriorities
 	}
 
 	return m.modelRepo.UpsertModel(*cfg)

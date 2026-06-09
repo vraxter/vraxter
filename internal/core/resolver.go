@@ -40,32 +40,54 @@ func NewIntentResolver(registry *skills.Registry, llmRouter *llm.Router, repo *d
 func (r *IntentResolver) Resolve(ctx context.Context, query string) types.IntentMatch {
 	lowerQuery := strings.ToLower(query)
 
-	// 0. QUICK MATCH: Check for Specialist mentions (Fast-Path Delegation)
+	// 0. SPECIALIST MATCHING: Tiered confidence based on structural signals.
+	// NOTE: @mention handling is done BEFORE the resolver (in orchestrator.resolveMention).
+	// Here we only handle expertise-domain matches and bare name mentions.
 	if r.specRepo != nil {
 		allSpecs, err := r.specRepo.GetAllSpecialists()
 		if err == nil {
+			var bestSpecMatch types.IntentMatch
+
 			for _, s := range allSpecs {
-				// Exact name match or @mention match (Confidence 1.0)
-				if strings.Contains(lowerQuery, "@"+strings.ToLower(s.Name)) || strings.Contains(lowerQuery, strings.ToLower(s.Name)) {
-					return types.IntentMatch{
-						Type:       types.IntentTypeSpecialist,
-						ID:         s.ID,
-						Confidence: 1.0,
-						Params:     map[string]interface{}{"task": query},
+				lowerName := strings.ToLower(s.Name)
+				nameInQuery := strings.Contains(lowerQuery, lowerName)
+
+				if !nameInQuery {
+					// Domain/Expertise keyword match WITHOUT specialist name → SignalDomainMatch (0.9)
+					expertiseKeywords := strings.Fields(strings.ToLower(s.Expertise))
+					for _, kw := range expertiseKeywords {
+						if len(kw) > 3 && strings.Contains(lowerQuery, kw) {
+							signal := types.SignalDomainMatch
+							if signal.Confidence() > bestSpecMatch.Confidence {
+								bestSpecMatch = types.IntentMatch{
+									Type:       types.IntentTypeSpecialist,
+									ID:         s.ID,
+									Confidence: signal.Confidence(),
+									Signal:     signal,
+									Params:     map[string]interface{}{"task": query},
+								}
+							}
+							break // One keyword hit is enough for this specialist
+						}
 					}
-				}
-				// Domain/Expertise keyword match (Confidence 0.9)
-				expertiseKeywords := strings.Fields(strings.ToLower(s.Expertise))
-				for _, kw := range expertiseKeywords {
-					if len(kw) > 3 && strings.Contains(lowerQuery, kw) {
-						return types.IntentMatch{
+				} else {
+					// Bare name mention WITHOUT @ prefix → SignalNameMention (0.6)
+					signal := types.SignalNameMention
+					if signal.Confidence() > bestSpecMatch.Confidence {
+						bestSpecMatch = types.IntentMatch{
 							Type:       types.IntentTypeSpecialist,
 							ID:         s.ID,
-							Confidence: 0.9,
+							Confidence: signal.Confidence(),
+							Signal:     signal,
 							Params:     map[string]interface{}{"task": query},
 						}
 					}
 				}
+			}
+
+			// If we have a strong domain match (>= 0.8), return it for fast-path
+			if bestSpecMatch.Confidence >= 0.8 {
+				return bestSpecMatch
 			}
 		}
 	}

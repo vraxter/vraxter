@@ -67,7 +67,11 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 
 	for _, m := range req.Messages {
 		if m.Role == "system" {
-			payload.System = m.Content
+			if payload.System == "" {
+				payload.System = m.Content
+			} else {
+				payload.System += "\n\n" + m.Content
+			}
 		} else {
 			payload.Messages = append(payload.Messages, anthropicMessage{
 				Role:    m.Role,

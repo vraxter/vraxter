@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/patagonicrune/vraxter/internal/client"
 	"github.com/patagonicrune/vraxter/internal/config"
 	"github.com/patagonicrune/vraxter/internal/core"
@@ -113,7 +113,6 @@ func main() {
 
 	rootCmd.AddCommand(serverCmd)
 	rootCmd.AddCommand(daemonCmd)
-	rootCmd.AddCommand(addCmd)
 	rootCmd.AddCommand(modelsCmd)
 	rootCmd.AddCommand(skillsCmd)
 	rootCmd.AddCommand(userCmd)
@@ -187,7 +186,7 @@ var rootCmd = &cobra.Command{
 
 			defer gClient.Close()
 			app := tui.NewModel(ctx, gClient, appStore, appCrypto, sessionID, "", userName)
-			p := tea.NewProgram(app, tea.WithAltScreen())
+			p := tea.NewProgram(app)
 			if _, err := p.Run(); err != nil {
 				fmt.Printf("❌ Failed to start UI: %v\n", err)
 			}

@@ -101,6 +101,9 @@ func (c *GRPCClient) ExecuteStream(ctx context.Context, query string, conversati
 				event.Type = llm.EventTypeToken
 			case v1.ExecuteResponse_TOOL_CALL:
 				event.Type = llm.EventTypeSkillCall
+				if resp.SkillId != "" {
+					event.Content = resp.SkillId
+				}
 			case v1.ExecuteResponse_ERROR:
 				event.Type = llm.EventTypeError
 				event.Err = fmt.Errorf("%s", resp.Content)
@@ -121,6 +124,39 @@ func (c *GRPCClient) ExecuteStream(ctx context.Context, query string, conversati
 	}()
 
 	return out, nil
+}
+
+// SubscribeEvents attaches to the engine's global event bus to receive asynchronous job notifications
+func (c *GRPCClient) SubscribeEvents(ctx context.Context, clientID string) (<-chan *v1.SystemEvent, error) {
+	req := &v1.SubscribeEventsRequest{ClientId: clientID}
+	stream, err := c.client.SubscribeEvents(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(chan *v1.SystemEvent)
+
+	go func() {
+		defer close(out)
+		for {
+			event, err := stream.Recv()
+			if err != nil {
+				return // Stream closed or errored
+			}
+			out <- event
+		}
+	}()
+
+	return out, nil
+}
+
+// GetActiveJobs queries the engine for a list of all currently tracked background daemons
+func (c *GRPCClient) GetActiveJobs(ctx context.Context) ([]*v1.JobStatus, error) {
+	resp, err := c.client.GetActiveJobs(ctx, &v1.GetActiveJobsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Jobs, nil
 }
 
 // ConversationSummary is a lightweight view of a conversation for listing

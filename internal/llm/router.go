@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 
@@ -157,8 +158,7 @@ func (r *Router) GetOrderedProviders() []struct {
 	return ordered
 }
 
-// GetOrderedProvidersForUseCase returns providers in priority order, with the
-// use-case preferred model moved to the front for cascading failover.
+// GetOrderedProvidersForUseCase returns providers fully sorted by their specific priority for the requested use-case.
 func (r *Router) GetOrderedProvidersForUseCase(useCase string) []struct {
 	Config   types.ModelConfig
 	Provider Provider
@@ -168,28 +168,34 @@ func (r *Router) GetOrderedProvidersForUseCase(useCase string) []struct {
 		return all
 	}
 
-	preferredCfg, _, err := r.GetProviderForUseCase(useCase)
-	if err != nil || preferredCfg.ID == "" {
-		return all
-	}
+	ucLower := strings.ToLower(useCase)
 
-	// Move preferred model to front without re-allocating
-	result := make([]struct {
-		Config   types.ModelConfig
-		Provider Provider
-	}, 0, len(all))
-	var rest []struct {
-		Config   types.ModelConfig
-		Provider Provider
-	}
-	for _, entry := range all {
-		if entry.Config.ID == preferredCfg.ID {
-			result = append(result, entry)
-		} else {
-			rest = append(rest, entry)
+	// Sort the array based on the configured priority for this specific use case
+	// If a model doesn't have an explicit priority for this use case, it falls back to its global priority.
+	// But we add a heavy penalty (+100) so that models specifically configured for this use case always float to the top.
+	sort.SliceStable(all, func(i, j int) bool {
+		cfgI := all[i].Config
+		cfgJ := all[j].Config
+
+		getEffectivePriority := func(cfg types.ModelConfig) int {
+			// Explicit overrides always win (Priority 0)
+			if overrideID, ok := r.routingOverrides[ucLower]; ok && cfg.ID == overrideID {
+				return -1 
+			}
+			
+			if cfg.UseCasePriorities != nil {
+				if p, ok := cfg.UseCasePriorities[ucLower]; ok {
+					return p
+				}
+			}
+			// Not explicitly configured for this use case, fall back to global priority + penalty
+			return cfg.Priority + 100
 		}
-	}
-	return append(result, rest...)
+
+		return getEffectivePriority(cfgI) < getEffectivePriority(cfgJ)
+	})
+
+	return all
 }
 
 func (r *Router) GetEmbeddingProvider() (types.ModelConfig, Provider, error) {

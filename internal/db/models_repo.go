@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -25,6 +26,7 @@ func (r *ModelRepository) GetActiveModels() ([]types.ModelConfig, error) {
 	query := `
 		SELECT m.id, m.provider_id, m.alias, p.type, m.model, COALESCE(p.api_key, ''), COALESCE(p.base_url, ''), 
 		       m.priority, m.is_active, COALESCE(m.capabilities, ''), COALESCE(m.context_window, 8192), COALESCE(m.use_cases, ''),
+		       COALESCE(m.use_case_priorities, '{}'),
 		       (CASE WHEN p.type = 'ollama' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
@@ -41,7 +43,8 @@ func (r *ModelRepository) GetActiveModels() ([]types.ModelConfig, error) {
 	for rows.Next() {
 		var m types.ModelConfig
 		var encryptedKey string
-		if err := rows.Scan(&m.ID, &m.ProviderID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases, &m.IsConfigured); err != nil {
+		var useCasePriosStr string
+		if err := rows.Scan(&m.ID, &m.ProviderID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases, &useCasePriosStr, &m.IsConfigured); err != nil {
 			log.Printf("Failed to scan model: %v", err)
 			continue
 		}
@@ -53,6 +56,7 @@ func (r *ModelRepository) GetActiveModels() ([]types.ModelConfig, error) {
 		}
 		m.APIKey = decryptedKey
 		hydrateCapabilities(&m)
+		parseUseCasePriorities(&m, useCasePriosStr)
 		models = append(models, m)
 	}
 	return models, nil
@@ -63,6 +67,7 @@ func (r *ModelRepository) GetAllModels() ([]types.ModelConfig, error) {
 	query := `
 		SELECT m.id, m.provider_id, m.alias, p.type, m.model, COALESCE(p.api_key, ''), COALESCE(p.base_url, ''), 
 		       m.priority, m.is_active, COALESCE(m.capabilities, ''), COALESCE(m.context_window, 8192), COALESCE(m.use_cases, ''),
+		       COALESCE(m.use_case_priorities, '{}'),
 		       (CASE WHEN p.type = 'ollama' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
@@ -78,12 +83,14 @@ func (r *ModelRepository) GetAllModels() ([]types.ModelConfig, error) {
 	for rows.Next() {
 		var m types.ModelConfig
 		var encryptedKey string
-		if err := rows.Scan(&m.ID, &m.ProviderID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases, &m.IsConfigured); err != nil {
+		var useCasePriosStr string
+		if err := rows.Scan(&m.ID, &m.ProviderID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases, &useCasePriosStr, &m.IsConfigured); err != nil {
 			continue
 		}
 		decryptedKey, _ := r.crypto.Decrypt(encryptedKey)
 		m.APIKey = decryptedKey
 		hydrateCapabilities(&m)
+		parseUseCasePriorities(&m, useCasePriosStr)
 		models = append(models, m)
 	}
 	return models, nil
@@ -94,6 +101,7 @@ func (r *ModelRepository) GetModelByID(id string) (*types.ModelConfig, error) {
 	query := `
 		SELECT m.id, m.provider_id, m.alias, p.type, m.model, COALESCE(p.api_key, ''), COALESCE(p.base_url, ''), 
 		       m.priority, m.is_active, COALESCE(m.capabilities, ''), COALESCE(m.context_window, 8192), COALESCE(m.use_cases, ''),
+		       COALESCE(m.use_case_priorities, '{}'),
 		       (CASE WHEN p.type = 'ollama' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
@@ -101,7 +109,8 @@ func (r *ModelRepository) GetModelByID(id string) (*types.ModelConfig, error) {
 
 	var m types.ModelConfig
 	var encryptedKey string
-	err := r.store.Conn.QueryRow(query, id+"%").Scan(&m.ID, &m.ProviderID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases, &m.IsConfigured)
+	var useCasePriosStr string
+	err := r.store.Conn.QueryRow(query, id+"%").Scan(&m.ID, &m.ProviderID, &m.Alias, &m.Provider, &m.Model, &encryptedKey, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases, &useCasePriosStr, &m.IsConfigured)
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +118,7 @@ func (r *ModelRepository) GetModelByID(id string) (*types.ModelConfig, error) {
 	decryptedKey, _ := r.crypto.Decrypt(encryptedKey)
 	m.APIKey = decryptedKey
 	hydrateCapabilities(&m)
+	parseUseCasePriorities(&m, useCasePriosStr)
 	return &m, nil
 }
 
@@ -117,6 +127,7 @@ func (r *ModelRepository) GetAllModelsPublic() ([]types.ModelConfig, error) {
 	query := `
 		SELECT m.id, m.provider_id, m.alias, p.type, m.model, COALESCE(p.base_url, ''), 
 		       m.priority, m.is_active, COALESCE(m.capabilities, ''), COALESCE(m.context_window, 8192), COALESCE(m.use_cases, ''),
+		       COALESCE(m.use_case_priorities, '{}'),
 		       (CASE WHEN p.type = 'ollama' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
@@ -131,11 +142,13 @@ func (r *ModelRepository) GetAllModelsPublic() ([]types.ModelConfig, error) {
 	var models []types.ModelConfig
 	for rows.Next() {
 		var m types.ModelConfig
-		err := rows.Scan(&m.ID, &m.ProviderID, &m.Alias, &m.Provider, &m.Model, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases, &m.IsConfigured)
+		var useCasePriosStr string
+		err := rows.Scan(&m.ID, &m.ProviderID, &m.Alias, &m.Provider, &m.Model, &m.BaseURL, &m.Priority, &m.IsActive, &m.Capabilities, &m.ContextWindow, &m.UseCases, &useCasePriosStr, &m.IsConfigured)
 		if err != nil {
 			return nil, err
 		}
 		hydrateCapabilities(&m)
+		parseUseCasePriorities(&m, useCasePriosStr)
 		models = append(models, m)
 	}
 	return models, nil
@@ -153,15 +166,22 @@ func (r *ModelRepository) UpsertModel(m types.ModelConfig) error {
 	// Open priority slot if needed
 	_ = r.shiftPriorities(m.ID, m.Priority)
 
-	query := `INSERT INTO models (id, provider_id, alias, model, priority, is_active, capabilities, context_window, use_cases)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	query := `INSERT INTO models (id, provider_id, alias, model, priority, is_active, capabilities, context_window, use_cases, use_case_priorities)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	          ON CONFLICT(id) DO UPDATE SET
 	          provider_id=excluded.provider_id, alias=excluded.alias, model=excluded.model,
 	          priority=excluded.priority, is_active=excluded.is_active,
-			  capabilities=excluded.capabilities, context_window=excluded.context_window, use_cases=excluded.use_cases`
+			  capabilities=excluded.capabilities, context_window=excluded.context_window, use_cases=excluded.use_cases, use_case_priorities=excluded.use_case_priorities`
 
 	fmt.Printf("Model Provider ID: %v\n", m.ProviderID)
-	_, err := r.store.Conn.Exec(query, m.ID, m.ProviderID, m.Alias, m.Model, m.Priority, m.IsActive, m.Capabilities, m.ContextWindow, m.UseCases)
+	
+	// Marshal use case priorities
+	ucb, _ := json.Marshal(m.UseCasePriorities)
+	if string(ucb) == "null" {
+		ucb = []byte("{}")
+	}
+
+	_, err := r.store.Conn.Exec(query, m.ID, m.ProviderID, m.Alias, m.Model, m.Priority, m.IsActive, m.Capabilities, m.ContextWindow, m.UseCases, string(ucb))
 	return err
 }
 
@@ -222,4 +242,12 @@ func hydrateCapabilities(m *types.ModelConfig) {
 			m.ContextWindow = 8192 // fallback for standard ollama models mostly
 		}
 	}
+}
+
+func parseUseCasePriorities(m *types.ModelConfig, raw string) {
+	m.UseCasePriorities = make(map[string]int)
+	if raw == "" || raw == "{}" {
+		return
+	}
+	_ = json.Unmarshal([]byte(raw), &m.UseCasePriorities)
 }

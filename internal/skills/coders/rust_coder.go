@@ -31,7 +31,7 @@ type RustCoder struct {
 
 func (c *RustCoder) Language() string { return "rust" }
 
-func (c *RustCoder) Compile(name, description, code string) error {
+func (c *RustCoder) Compile(name, description, paramsSchema, code string) error {
 	if !c.TM.IsReady("rust") {
 		if err := c.TM.SetupSDK("rust"); err != nil {
 			return err
@@ -64,15 +64,16 @@ func (c *RustCoder) Compile(name, description, code string) error {
 	}
 
 	 manifest := types.SkillManifest{
-		ID:          skillID,
-		Name:        name,
-		Description: description,
-		Command:     wasmPath,
-		Engine:      "wasm",
-		Language:    "rust",
-		Version:     "1.0.0",
-		Tier:        types.Tier2CommunityVerified,
-		Checksum:    checksum,
+		ID:           skillID,
+		Name:         name,
+		Description:  description,
+		ParamsSchema: paramsSchema,
+		Command:      wasmPath,
+		Engine:       "wasm",
+		Language:     "rust",
+		Version:      "1.0.0",
+		Tier:         types.Tier2CommunityVerified,
+		Checksum:     checksum,
 	}
 
 	// 7. Execution Dry-Run Verification (Failsafe)

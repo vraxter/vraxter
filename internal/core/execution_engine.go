@@ -27,6 +27,8 @@ type ExecutionEngine struct {
 	Coder         *services.CoderService
 	ChatRepo      *db.ChatRepository
 	SpecRepo      *db.SpecialistRepository
+	JobManager    *JobManager
+	CodeGen       *CodeGenService
 	Verbose       bool
 	SwarmDelegate func(ctx context.Context, out chan<- llm.StreamEvent, specialistID string, task string, threadID string) string
 	ActivateModelDelegate func(sessionID, modelID string) error
@@ -41,14 +43,18 @@ func NewExecutionEngine(
 	coder *services.CoderService,
 	chatRepo *db.ChatRepository,
 	specRepo *db.SpecialistRepository,
+	jobManager *JobManager,
+	codegen *CodeGenService,
 	verbose bool,
 ) *ExecutionEngine {
 	return &ExecutionEngine{
 		Registry: registry,
 		Runner:   runner,
 		Coder:    coder,
-		ChatRepo: chatRepo,
-		SpecRepo: specRepo,
+		ChatRepo:   chatRepo,
+		SpecRepo:   specRepo,
+		JobManager: jobManager,
+		CodeGen:    codegen,
 		Verbose:  verbose,
 	}
 }
@@ -229,21 +235,54 @@ func (e *ExecutionEngine) DispatchToolPayload(
 	conversationID string,
 ) string {
 	rawTool := strings.TrimSpace(toolPayload)
+	
+	// Sanitization: Strip markdown backticks if the LLM hallucinated them
+	if strings.HasPrefix(rawTool, "```") {
+		lines := strings.Split(rawTool, "\n")
+		if len(lines) > 2 {
+			rawTool = strings.Join(lines[1:len(lines)-1], "\n")
+		}
+	}
+	rawTool = strings.TrimSpace(rawTool)
+
 	if e.Verbose {
 		slog.Info("Parsing Tool JSON", "payload", rawTool)
 	}
 
-	var generic map[string]interface{}
-	if err := json.Unmarshal([]byte(rawTool), &generic); err != nil {
-		if e.Verbose {
-			slog.Warn("Failed to unmarshal tool payload", "error", err)
+	var call types.ToolCall
+	if err := json.Unmarshal([]byte(rawTool), &call); err != nil {
+		if len(codePayload) > 0 {
+			errMsg := "\n❌ Invalid Tool Payload: You provided source code but failed to invoke the 'vraxter-coder' tool correctly."
+			e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+			return "SYSTEM ERROR: You provided source code but failed to invoke the 'vraxter-coder' tool. You MUST output a valid JSON [VRAX_TOOL] block containing the skill 'name' and 'description' parameters before providing the [VRAX_CODE] block."
+		} else {
+			if e.Verbose {
+				slog.Warn("Failed to unmarshal tool payload", "error", err)
+			}
+			errMsg := fmt.Sprintf("\n❌ Invalid Tool Payload: Could not parse JSON. %v", err)
+			e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+			return fmt.Sprintf("SYSTEM ERROR: Tool invocation failed because the JSON payload was invalid. Error: %v. Please re-generate the tool call using strictly valid JSON wrapped IMMEDIATELY AFTER the [VRAX_TOOL] marker. Example: [VRAX_TOOL] {\"skill_id\": \"...\", \"params\": {...}}", err)
 		}
-		return ""
 	}
 
-	skillID, _ := generic["skill_id"].(string)
+	skillID := call.SkillID
+
+	if skillID == "INVALID_EMPTY_PAYLOAD" {
+		errMsg := "\n❌ Invalid Tool Payload: You generated the [VRAX_TOOL] marker but provided no valid JSON payload block. Please ensure you output valid JSON."
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+		return "SYSTEM ERROR: Tool invocation failed because the JSON payload was completely missing. Please re-generate the tool call providing the strictly valid JSON block containing the 'skill_id' IMMEDIATELY AFTER the [VRAX_TOOL] marker. Example: [VRAX_TOOL] {\"skill_id\": \"...\", \"params\": {...}}"
+	}
+
 	if skillID == "" && len(codePayload) > 0 {
-		skillID = "vraxter-coder"
+		errMsg := "\n❌ Invalid Tool Payload: Missing skill_id. You MUST output a valid JSON [VRAX_TOOL] block containing the skill 'name' and 'description' parameters before providing the [VRAX_CODE] block."
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+		return "SYSTEM ERROR: Tool invocation failed because the 'skill_id' was missing. You provided source code but failed to invoke the 'vraxter-coder' tool properly. You MUST output a valid JSON [VRAX_TOOL] block containing the skill 'name' and 'description' parameters before providing the [VRAX_CODE] block."
+	}
+
+	if len(codePayload) > 0 && skillID != "vraxter-coder" && skillID != "vraxter-coder-rust" {
+		errMsg := fmt.Sprintf("\n❌ Invalid Tool Payload: You provided source code but invoked '%s' instead of 'vraxter-coder'.", skillID)
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+		return fmt.Sprintf("SYSTEM ERROR: Tool invocation failed. You provided [VRAX_CODE] but invoked '%s'. To create a skill, you MUST set \"skill_id\": \"vraxter-coder\" in the [VRAX_TOOL] block. Do not put the new skill's name in the skill_id field. Put it in the 'name' parameter instead.", skillID)
 	}
 
 	e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeSkillCall, Content: skillID})
@@ -258,28 +297,20 @@ func (e *ExecutionEngine) DispatchToolPayload(
 
 	// Look for a registered internal command
 	if handler, exists := BuiltInCommands[skillID]; exists {
-		return handler(ctx, generic, codePayload, conversationID, e, out)
+		return handler(ctx, call, codePayload, conversationID, e, out)
 	}
 
 	// Fallback to standard WASM/binary skill runner
-	return e.handleStandardSkill(ctx, out, generic, skillID)
+	return e.HandleStandardSkill(ctx, out, call, skillID)
 }
 
 // --- Internal handlers ---
 
-func (e *ExecutionEngine) handleCreateSpecialist(ctx context.Context, out chan<- llm.StreamEvent, generic map[string]interface{}, conversationID string) {
-	name, expertise, modelID := "", "", ""
-	if params, ok := generic["params"].(map[string]interface{}); ok {
-		if n, ok := params["name"].(string); ok {
-			name = n
-		}
-		if ex, ok := params["expertise"].(string); ok {
-			expertise = ex
-		}
-		if m, ok := params["model_id"].(string); ok {
-			modelID = m
-		}
-	}
+func (e *ExecutionEngine) handleCreateSpecialist(ctx context.Context, out chan<- llm.StreamEvent, call types.ToolCall, conversationID string) string {
+	name, _ := call.Params["name"].(string)
+	expertise, _ := call.Params["expertise"].(string)
+	modelID, _ := call.Params["model_id"].(string)
+
 	if name != "" && expertise != "" {
 		s := types.Specialist{
 			ID:        uuid.New().String(),
@@ -287,32 +318,27 @@ func (e *ExecutionEngine) handleCreateSpecialist(ctx context.Context, out chan<-
 			Expertise: expertise,
 			ModelID:   modelID,
 		}
-		e.SpecRepo.CreateSpecialist(s)
+		if err := e.SpecRepo.CreateSpecialist(s); err != nil {
+			errMsg := fmt.Sprintf("\n❌ Database Error: Failed to create specialist '%s': %v", name, err)
+			e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+			return fmt.Sprintf("SYSTEM ERROR: Failed to create specialist in the database. Details: %v", err)
+		}
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ Sub-Agent Specialist '%s' created! (ID: %s, Model: %s)", name, s.ID, modelID)})
+		return fmt.Sprintf("SYSTEM: Successfully created specialist '%s'. You may now converse with the user and let them know.", name)
 	} else {
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: specific 'name' and 'expertise' required to create specialist."})
+		return "SYSTEM ERROR: You must provide a valid 'name' and 'expertise' string parameters to create a specialist."
 	}
 }
 
-func (e *ExecutionEngine) handleCoderSkill(ctx context.Context, out chan<- llm.StreamEvent, generic map[string]interface{}, codePayload, skillID, conversationID string) string {
+func (e *ExecutionEngine) handleCoderSkill(ctx context.Context, out chan<- llm.StreamEvent, call types.ToolCall, codePayload, skillID, conversationID string) string {
 	name, desc := "auto-tool", "Auto-generated skill"
 
-	if params, ok := generic["params"].(map[string]interface{}); ok {
-		if n, ok := params["name"].(string); ok {
-			name = n
-		}
-		if d, ok := params["description"].(string); ok {
-			desc = d
-		}
-	} else {
-		if n, ok := generic["name"].(string); ok {
-			name = n
-		} else if n, ok := generic["tool_name"].(string); ok {
-			name = n
-		}
-		if d, ok := generic["description"].(string); ok {
-			desc = d
-		}
+	if n, ok := call.Params["name"].(string); ok {
+		name = n
+	}
+	if d, ok := call.Params["description"].(string); ok {
+		desc = d
 	}
 
 	lang := "go"
@@ -323,7 +349,7 @@ func (e *ExecutionEngine) handleCoderSkill(ctx context.Context, out chan<- llm.S
 	if e.Verbose {
 		slog.Info("Invoking Sandbox Coder", "lang", lang, "skill", name, "bytes", len(codePayload))
 	}
-	err := e.Coder.CreateSkill(lang, name, desc, codePayload)
+	err := e.Coder.CreateSkill(lang, name, desc, "", codePayload)
 
 	if err != nil {
 		if e.Verbose {
@@ -344,16 +370,37 @@ func (e *ExecutionEngine) handleCoderSkill(ctx context.Context, out chan<- llm.S
 	return ""
 }
 
-func (e *ExecutionEngine) handleStandardSkill(ctx context.Context, out chan<- llm.StreamEvent, generic map[string]interface{}, skillID string) string {
+func (e *ExecutionEngine) HandleStandardSkill(ctx context.Context, out chan<- llm.StreamEvent, call types.ToolCall, skillID string) string {
 	manifest, err := e.Registry.FindSkill(skillID)
 	if err != nil {
 		return fmt.Sprintf("ERROR: Skill %s not found in registry.", skillID)
 	}
-	params, _ := generic["params"].(map[string]interface{})
-	result, err := e.Runner.Execute(ctx, *manifest, params)
+	
+	if call.IsDaemon {
+		jobID := e.JobManager.SpawnDaemon(fmt.Sprintf("Skill %s", skillID), func() (string, error) {
+			// Create a background context that survives the parent stream closure
+			bgCtx := context.Background()
+			res, err := e.Runner.Execute(bgCtx, *manifest, call.Params)
+			if err != nil {
+				return "", err
+			}
+			return res.Output, nil
+		})
+
+		msg := fmt.Sprintf("\n⚡ Spawned Daemon Job for '%s' (Job ID: %s)", skillID, jobID)
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: msg})
+		return fmt.Sprintf("DAEMON SPAWNED: Skill '%s' is now running in the background with Job ID: %s. You will be notified when it completes.", skillID, jobID)
+	}
+
+	result, err := e.Runner.Execute(ctx, *manifest, call.Params)
 	if err != nil {
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n❌ Skill execution failed: %v", err)})
-		return fmt.Sprintf("SKILL ['%s'] FAILED: %v", skillID, err)
+		
+		schemaHint := ""
+		if manifest.ParamsSchema != "" {
+			schemaHint = fmt.Sprintf("\nREQUIRED SCHEMA: %s\n\nCRITICAL DIRECTIVE: The tool execution failed. Compare your previous payload against the REQUIRED SCHEMA above, fix the mismatch, and RE-INVOKE the tool. Do NOT stop.", manifest.ParamsSchema)
+		}
+		return fmt.Sprintf("SKILL ['%s'] FAILED: %v%s", skillID, err, schemaHint)
 	}
 	
 	e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n[%s]: %s", skillID, result.Output)})

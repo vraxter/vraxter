@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/patagonicrune/vraxter/internal/db"
 	"github.com/patagonicrune/vraxter/internal/services"
 	"github.com/patagonicrune/vraxter/pkg/interfaces"
@@ -46,7 +46,7 @@ func NewModelWizard(pMgr *services.ProviderManager, mMgr *services.ModelManager)
 	ti.Placeholder = "Alias (e.g. My Default Claude)"
 	ti.Focus()
 	ti.CharLimit = 64
-	ti.Width = 64
+	ti.SetWidth(64)
 
 	return &ModelWizard{
 		providerMgr: pMgr,
@@ -71,25 +71,25 @@ func (m *ModelWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.models = msg
 		m.step = StepModelSelect
 		return m, nil
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyEsc:
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "esc":
 			m.quitting = true
 			m.done = true
 			return m, nil
-		case tea.KeyUp:
+		case "up":
 			if m.step == StepProviderSelect && m.selProvider > 0 {
 				m.selProvider--
 			} else if m.step == StepModelSelect && m.selModel > 0 {
 				m.selModel--
 			}
-		case tea.KeyDown:
+		case "down":
 			if m.step == StepProviderSelect && m.selProvider < len(m.providers)-1 {
 				m.selProvider++
 			} else if m.step == StepModelSelect && m.selModel < len(m.models)-1 {
 				m.selModel++
 			}
-		case tea.KeyEnter:
+		case "enter":
 			switch m.step {
 			case StepProviderSelect:
 				if len(m.providers) == 0 {
@@ -133,12 +133,12 @@ func (m *ModelWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *ModelWizard) View() string {
+func (m *ModelWizard) View() tea.View {
 	if m.quitting {
-		return "Setup cancelled."
+		return tea.NewView("Setup cancelled.")
 	}
 	if m.done {
-		return fmt.Sprintf("✅ Model configured successfully (ID: %s)", m.ModelID)
+		return tea.NewView(fmt.Sprintf("✅ Model configured successfully (ID: %s)", m.ModelID))
 	}
 
 	var s strings.Builder
@@ -224,10 +224,10 @@ func (m *ModelWizard) View() string {
 
 	s.WriteString("\n\n" + setupFaintStyle.Render("(↑/↓: Navigate | Enter: Select | Esc: Cancel)"))
 
-	return lipgloss.NewStyle().
+	return tea.NewView(lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("#2a2a2a")).
 		Padding(1, 2).
 		Width(width).
-		Render(s.String())
+		Render(s.String()))
 }

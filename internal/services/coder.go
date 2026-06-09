@@ -34,7 +34,7 @@ func (s *CoderService) RegisterCoder(c interfaces.SkillCoder) {
 }
 
 // CreateSkill delegates compilation to the appropriate language coder
-func (s *CoderService) CreateSkill(lang, name, description, code string) error {
+func (s *CoderService) CreateSkill(lang, name, description, paramsSchema, code string) error {
 	s.mu.RLock()
 	coder, ok := s.coders[lang]
 	s.mu.RUnlock()
@@ -42,5 +42,5 @@ func (s *CoderService) CreateSkill(lang, name, description, code string) error {
 	if !ok {
 		return fmt.Errorf("no coder registered for language: %s", lang)
 	}
-	return coder.Compile(name, description, code)
+	return coder.Compile(name, description, paramsSchema, code)
 }

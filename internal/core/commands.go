@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"github.com/patagonicrune/vraxter/internal/llm"
 	"github.com/patagonicrune/vraxter/internal/skills"
+	"github.com/patagonicrune/vraxter/pkg/types"
 )
 
 // InternalToolHandler defines the signature for built-in executable tools
-type InternalToolHandler func(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string
+type InternalToolHandler func(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string
 
 // BuiltInCommands holds the registry of all native system commands
 var BuiltInCommands = map[string]InternalToolHandler{
@@ -25,28 +26,25 @@ var BuiltInCommands = map[string]InternalToolHandler{
 	"vraxter-delete-specialist": handleCmdDeleteSpecialist,
 }
 
-func handleCmdCreateSpecialist(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
-	e.handleCreateSpecialist(ctx, out, generic, conversationID)
-	return ""
+func handleCmdCreateSpecialist(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	return e.handleCreateSpecialist(ctx, out, call, conversationID)
 }
 
-func handleCmdActivateModel(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
-	if params, ok := generic["params"].(map[string]interface{}); ok {
-		if modelID, ok := params["model_id"].(string); ok {
-			if e.ActivateModelDelegate != nil {
-				if err := e.ActivateModelDelegate(conversationID, modelID); err != nil {
-					e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeError, Content: fmt.Sprintf("❌ Activation failed: %v", err)})
-					return fmt.Sprintf("SYSTEM ERROR: Model '%s' is not recognized or available in your current configuration.", modelID)
-				}
-				e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeStatus, Content: fmt.Sprintf("🎯 **%s** is now locked for this session.", modelID)})
-				return fmt.Sprintf("🚀 Vraxter is now locked to **%s** for this conversation. Automatic routing is suspended until you restore it.", modelID)
+func handleCmdActivateModel(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	if modelID, ok := call.Params["model_id"].(string); ok {
+		if e.ActivateModelDelegate != nil {
+			if err := e.ActivateModelDelegate(conversationID, modelID); err != nil {
+				e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeError, Content: fmt.Sprintf("❌ Activation failed: %v", err)})
+				return fmt.Sprintf("SYSTEM ERROR: Model '%s' is not recognized or available in your current configuration.", modelID)
 			}
+			e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeStatus, Content: fmt.Sprintf("🎯 **%s** is now locked for this session.", modelID)})
+			return fmt.Sprintf("🚀 Vraxter is now locked to **%s** for this conversation. Automatic routing is suspended until you restore it.", modelID)
 		}
 	}
 	return "SYSTEM ERROR: Failed to activate model. Please provide a valid model ID or identifier."
 }
 
-func handleCmdRestoreModel(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+func handleCmdRestoreModel(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
 	if e.RestoreModelDelegate != nil {
 		e.RestoreModelDelegate(conversationID)
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeStatus, Content: "🔄 Automatic routing restored."})
@@ -55,16 +53,9 @@ func handleCmdRestoreModel(ctx context.Context, generic map[string]interface{}, 
 	return "SYSTEM ERROR: Failed to restore model routing."
 }
 
-func handleCmdDelegate(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
-	specID, taskText := "", ""
-	if params, ok := generic["params"].(map[string]interface{}); ok {
-		if s, ok := params["specialist_id"].(string); ok {
-			specID = s
-		}
-		if t, ok := params["task"].(string); ok {
-			taskText = t
-		}
-	}
+func handleCmdDelegate(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	specID, _ := call.Params["specialist_id"].(string)
+	taskText, _ := call.Params["task"].(string)
 
 	displayName := specID
 	if e.SpecRepo != nil {
@@ -83,47 +74,91 @@ func handleCmdDelegate(ctx context.Context, generic map[string]interface{}, code
 	return "ERROR: SwarmDelegate not fully bound in engine."
 }
 
-func handleCmdReturnControl(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+func handleCmdReturnControl(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
 	return "CONTROL RETURNED. The specialist sub-agent has exited the conversation. SYSTEM DIRECTIVE: YOU ARE NOW 'VRAXTER' (The primary Orchestrator). STOP ACTING LIKE THE SPECIALIST. Abandon all sub-agent personas. You MUST now answer the user's latest query using your full capabilities as Vraxter."
 }
 
-func handleCmdCoder(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
-	skillID, _ := generic["skill_id"].(string)
+func handleCmdCoder(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	skillID := call.SkillID
 	if skillID == "" { // Fallback context
 		skillID = "vraxter-coder"
 	}
-	if len(codePayload) > 0 {
-		return e.handleCoderSkill(ctx, out, generic, codePayload, skillID, conversationID)
+
+	name, _ := call.Params["name"].(string)
+	desc, _ := call.Params["description"].(string)
+	spec, _ := call.Params["spec"].(string)
+	lang, _ := call.Params["language"].(string)
+
+	if lang == "" {
+		lang = "go"
+		if skillID == "vraxter-coder-rust" {
+			lang = "rust"
+		}
 	}
-	return ""
+
+	// Auto-recover: if the LLM provided code directly (e.g. via [VRAX_CODE] block or JSON param), use it
+	if len(codePayload) > 0 {
+		return e.handleCoderSkill(ctx, out, call, codePayload, skillID, conversationID)
+	}
+	for _, key := range []string{"tool_code", "code", "source"} {
+		if code, ok := call.Params[key].(string); ok && len(code) > 0 {
+			return e.handleCoderSkill(ctx, out, call, code, skillID, conversationID)
+		}
+	}
+
+	// Phase 2: CodeGen pipeline
+	if spec == "" {
+		spec = desc // fallback: use description as spec if spec is missing
+	}
+
+	if e.CodeGen == nil {
+		return "SYSTEM ERROR: CodeGenService not initialized in engine."
+	}
+
+	err := e.CodeGen.GenerateAndCompile(ctx, out, name, desc, spec, lang)
+	if err != nil {
+		return fmt.Sprintf("SYSTEM ERROR: Failed to generate/compile skill: %v", err)
+	}
+
+	// Post-Creation Actions
+	if runParams, ok := call.Params["run_params"].(map[string]interface{}); ok {
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n🚀 **Auto-Executing** '%s' to fulfill your request...\n", name)})
+		
+		// Map parameters and execute
+		runCall := types.ToolCall{
+			SkillID: name,
+			Params:  runParams,
+		}
+		return e.HandleStandardSkill(ctx, out, runCall, name)
+	}
+
+	if promptRun, ok := call.Params["prompt_run"].(bool); ok && promptRun {
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("[PROMPT_RUN:%s]", name)})
+		return fmt.Sprintf("SUCCESS: Skill '%s' installed. Prompting user for execution.", name)
+	}
+
+	return fmt.Sprintf("SUCCESS: Skill '%s' installed and verified. It is now ready for use.", name)
 }
 
-func handleCmdReadFile(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
-	path, _ := generic["path"].(string)
+func handleCmdReadFile(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	path, _ := call.Params["path"].(string)
 	return skills.ReadFile(path)
 }
 
-func handleCmdListDir(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
-	path, _ := generic["path"].(string)
+func handleCmdListDir(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	path, _ := call.Params["path"].(string)
 	return skills.ListDir(path)
 }
 
-func handleCmdPatchCode(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
-	path, _ := generic["path"].(string)
-	search, _ := generic["search"].(string)
-	replace, _ := generic["replace"].(string)
+func handleCmdPatchCode(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	path, _ := call.Params["path"].(string)
+	search, _ := call.Params["search"].(string)
+	replace, _ := call.Params["replace"].(string)
 	return skills.PatchCode(path, search, replace)
 }
 
-func handleCmdDeleteSpecialist(ctx context.Context, generic map[string]interface{}, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
-	identifier := ""
-	if params, ok := generic["params"].(map[string]interface{}); ok {
-		if idt, ok := params["identifier"].(string); ok {
-			identifier = idt
-		}
-	} else if idt, ok := generic["identifier"].(string); ok {
-		identifier = idt
-	}
+func handleCmdDeleteSpecialist(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	identifier, _ := call.Params["identifier"].(string)
 
 	if identifier == "" {
 		return "ERROR: identifier (Name or ID) parameter is required to delete a specialist."

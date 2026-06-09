@@ -133,12 +133,19 @@ func (sc *StreamCoordinator) Run(
 
 				toolP := parser.ToolPayload()
 				codeP := parser.CodePayload()
+				hasToolMarker := parser.HasToolMarker()
 
 				if sc.Verbose {
 					slog.Info("Stream Done", "tool_bytes", len(toolP), "code_bytes", len(codeP))
 				}
 
-				if len(toolP) > 0 {
+				if len(toolP) > 0 || len(codeP) > 0 || hasToolMarker {
+					if len(toolP) == 0 && hasToolMarker {
+						// The LLM emitted [VRAX_TOOL] but failed to provide a JSON payload.
+						// We inject a special payload to ensure ExecutePipeline bounces an error back.
+						toolP = `{"skill_id": "INVALID_EMPTY_PAYLOAD"}`
+					}
+
 					select {
 					case queue <- types.Event{
 						Type: types.EventTypeToolCall,

@@ -3,7 +3,13 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver without CGO
 )
@@ -15,6 +21,13 @@ type Store struct {
 
 // NewStore initializes the database connection and performance modes
 func NewStore(dbPath string) (*Store, error) {
+	// Secure-by-Design: Perform automated backup of the workspace memory database prior to opening
+	if dbPath != ":memory:" && dbPath != "" {
+		if _, err := os.Stat(dbPath); err == nil {
+			_ = autoBackup(dbPath)
+		}
+	}
+
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("could not open db: %w", err)
@@ -80,6 +93,7 @@ func (s *Store) initSchema() error {
 		examples TEXT NOT NULL DEFAULT '[]',
 		tags TEXT NOT NULL DEFAULT '[]',
 		param_regex TEXT NOT NULL DEFAULT '',
+		params_schema TEXT DEFAULT '',
 		vector BLOB DEFAULT NULL,
 		installed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -166,9 +180,69 @@ func (s *Store) initSchema() error {
 		log.Printf("DB Schema Init error: %v", err)
 	}
 
+	// Migration: Add params_schema to skills if it doesn't exist
+	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN params_schema TEXT DEFAULT '';")
+	
+	// Migration: Add use_case_priorities to models
+	_, _ = s.Conn.Exec("ALTER TABLE models ADD COLUMN use_case_priorities TEXT DEFAULT '{}';")
+
 	return err
 }
 
 func (s *Store) Close() error {
 	return s.Conn.Close()
+}
+
+func autoBackup(dbPath string) error {
+	backupsDir := filepath.Join(filepath.Dir(dbPath), "backups")
+	if err := os.MkdirAll(backupsDir, 0700); err != nil {
+		return err
+	}
+
+	timestamp := time.Now().Format("2006-01-02")
+	backupName := fmt.Sprintf("vraxter_%s.db", timestamp)
+	backupPath := filepath.Join(backupsDir, backupName)
+
+	// Skip if a backup for today has already been created to reduce write cycles
+	if _, err := os.Stat(backupPath); err == nil {
+		return nil
+	}
+
+	src, err := os.Open(dbPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(backupPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	if _, err = io.Copy(dst, src); err != nil {
+		return err
+	}
+
+	// Rolling retention: maintain the last 7 daily backups
+	files, err := os.ReadDir(backupsDir)
+	if err == nil {
+		var backupFiles []os.DirEntry
+		for _, f := range files {
+			if !f.IsDir() && strings.HasPrefix(f.Name(), "vraxter_") && strings.HasSuffix(f.Name(), ".db") {
+				backupFiles = append(backupFiles, f)
+			}
+		}
+
+		if len(backupFiles) > 7 {
+			sort.Slice(backupFiles, func(i, j int) bool {
+				return backupFiles[i].Name() < backupFiles[j].Name()
+			})
+			for i := 0; i < len(backupFiles)-7; i++ {
+				_ = os.Remove(filepath.Join(backupsDir, backupFiles[i].Name()))
+			}
+		}
+	}
+
+	return nil
 }

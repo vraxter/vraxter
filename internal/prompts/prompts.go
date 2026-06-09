@@ -15,6 +15,7 @@ var (
 	baseSystemTpl   *template.Template
 	specialistTpl   *template.Template
 	plannerTpl      *template.Template
+	codegenTpl      *template.Template
 	GoBoilerplate   string
 	RustBoilerplate string
 )
@@ -69,6 +70,22 @@ func init() {
 		panic(fmt.Sprintf("Failed to load planner.vrx template: %v", err))
 	}
 
+	codegenTpl, err = template.New("codegen.vrx").Funcs(template.FuncMap{
+		"prefix": func(p, s string) string {
+			if strings.TrimSpace(s) == "" {
+				return ""
+			}
+			lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+			for i, line := range lines {
+				lines[i] = p + line
+			}
+			return strings.Join(lines, "\n")
+		},
+	}).ParseFS(promptFiles, "codegen.vrx")
+	if err != nil {
+		panic(fmt.Sprintf("Failed to load codegen.vrx template: %v", err))
+	}
+
 	// Load boilerplates
 	goBytes, _ := promptFiles.ReadFile("boilerplate_go.vrx")
 	GoBoilerplate = string(goBytes)
@@ -99,12 +116,25 @@ type SpecialistParams struct {
 	GitContext          string
 	UserProfile         string
 	SemanticMemory      string
+	GoBoilerplate       string
+	RustBoilerplate     string
+	MarkerChat          string
+	MarkerTool          string
+	MarkerCode          string
 }
 
 type PlannerParams struct {
 	Query               string
 	GitContext          string
 	ExistingSpecialists string
+}
+
+type CodeGenParams struct {
+	Language    string
+	Boilerplate string
+	Name        string
+	Description string
+	Spec        string
 }
 
 func RenderBaseSystem(params BaseSystemParams) (string, error) {
@@ -123,6 +153,13 @@ func RenderBaseSystem(params BaseSystemParams) (string, error) {
 }
 
 func RenderSpecialist(params SpecialistParams) (string, error) {
+	if params.GoBoilerplate == "" {
+		params.GoBoilerplate = GoBoilerplate
+	}
+	if params.RustBoilerplate == "" {
+		params.RustBoilerplate = RustBoilerplate
+	}
+
 	var buf bytes.Buffer
 	if err := specialistTpl.Execute(&buf, params); err != nil {
 		return "", fmt.Errorf("failed to execute specialist template: %w", err)
@@ -134,6 +171,25 @@ func RenderPlanner(params PlannerParams) (string, error) {
 	var buf bytes.Buffer
 	if err := plannerTpl.Execute(&buf, params); err != nil {
 		return "", fmt.Errorf("failed to execute planner template: %w", err)
+	}
+	return buf.String(), nil
+}
+
+func RenderCodeGen(params CodeGenParams) (string, error) {
+	if params.Language == "" {
+		params.Language = "go"
+	}
+	if params.Boilerplate == "" {
+		if params.Language == "rust" {
+			params.Boilerplate = RustBoilerplate
+		} else {
+			params.Boilerplate = GoBoilerplate
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := codegenTpl.Execute(&buf, params); err != nil {
+		return "", fmt.Errorf("failed to execute codegen template: %w", err)
 	}
 	return buf.String(), nil
 }
