@@ -249,13 +249,13 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 	for _, perm := range manifest.Permissions {
 		if strings.HasPrefix(perm, "fs_read:") {
 			dir := strings.TrimPrefix(perm, "fs_read:")
-			resolvedDir := resolveMountPath(dir)
+			resolvedDir := ResolveMountPath(dir)
 			if resolvedDir != "" {
 				fsConfig = fsConfig.WithReadOnlyDirMount(resolvedDir, resolvedDir)
 			}
 		} else if strings.HasPrefix(perm, "fs_write:") {
 			dir := strings.TrimPrefix(perm, "fs_write:")
-			resolvedDir := resolveMountPath(dir)
+			resolvedDir := ResolveMountPath(dir)
 			if resolvedDir != "" {
 				fsConfig = fsConfig.WithDirMount(resolvedDir, resolvedDir)
 			}
@@ -332,7 +332,7 @@ func (rn *Runner) calculateHash(path string) (string, error) {
 	return hex.EncodeToString(h[:]), nil
 }
 
-func resolveMountPath(path string) string {
+func ResolveMountPath(path string) string {
 	cleaned := strings.TrimSpace(path)
 	if cleaned == "" {
 		return ""

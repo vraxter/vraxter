@@ -1,6 +1,9 @@
 package interfaces
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // Message represents a single conversational turn or system instruction
 type Message struct {
@@ -59,4 +62,38 @@ type LLMProvider interface {
 	Discover(ctx context.Context) ([]ModelMetadata, error)
 	GetModelDetails(ctx context.Context, modelID string) (map[string]interface{}, error)
 	CheckHealth(ctx context.Context) error
+}
+
+// SpeechSynthesizer is an optional interface for models/providers that can synthesize text into speech
+type SpeechSynthesizer interface {
+	SynthesizeSpeech(ctx context.Context, text, voice string) ([]byte, error)
+}
+
+// AudioTranscriber is an optional interface for models/providers that can transcribe audio into text
+type AudioTranscriber interface {
+	TranscribeAudio(ctx context.Context, audioBytes []byte, mimeType, prompt string) (string, error)
+}
+
+// ParseDataURI checks if the given content starts with a base64 data URI format,
+// e.g., "data:image/png;base64,iVBORw..." and parses it into mimeType, base64 data,
+// and any trailing text prompt.
+func ParseDataURI(content string) (mimeType string, base64Data string, textPrompt string, ok bool) {
+	if !strings.HasPrefix(content, "data:") {
+		return "", "", "", false
+	}
+	idx := strings.Index(content, ";base64,")
+	if idx == -1 {
+		return "", "", "", false
+	}
+	mimeType = content[5:idx]
+	remaining := content[idx+8:]
+
+	// Separate the base64 data from any trailing prompt text
+	spaceIdx := strings.IndexAny(remaining, " \t\n\r")
+	if spaceIdx == -1 {
+		return mimeType, remaining, "", true
+	}
+	base64Data = remaining[:spaceIdx]
+	textPrompt = strings.TrimSpace(remaining[spaceIdx:])
+	return mimeType, base64Data, textPrompt, true
 }

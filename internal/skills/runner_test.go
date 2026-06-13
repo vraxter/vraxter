@@ -43,7 +43,7 @@ func TestResolveMountPath(t *testing.T) {
 	// Test 1: Simple absolute path
 	abs, _ := filepath.Abs(".")
 	expected := filepath.Clean(abs)
-	res := resolveMountPath(".")
+	res := ResolveMountPath(".")
 	if res != expected {
 		t.Errorf("expected %q, got %q", expected, res)
 	}
@@ -51,7 +51,7 @@ func TestResolveMountPath(t *testing.T) {
 	// Test 2: Environment variables
 	os.Setenv("VRAX_TEST_DIR", "my-env-dir")
 	defer os.Unsetenv("VRAX_TEST_DIR")
-	resEnv := resolveMountPath("$VRAX_TEST_DIR")
+	resEnv := ResolveMountPath("$VRAX_TEST_DIR")
 	expectedEnv, _ := filepath.Abs("my-env-dir")
 	if resEnv != filepath.Clean(expectedEnv) {
 		t.Errorf("expected %q, got %q", filepath.Clean(expectedEnv), resEnv)
@@ -60,7 +60,7 @@ func TestResolveMountPath(t *testing.T) {
 	// Test 3: Home directory shortcuts
 	home, err := os.UserHomeDir()
 	if err == nil {
-		resHome := resolveMountPath("~/vrax-projects")
+		resHome := ResolveMountPath("~/vrax-projects")
 		expectedHome := filepath.Clean(filepath.Join(home, "vrax-projects"))
 		if resHome != expectedHome {
 			t.Errorf("expected %q, got %q", expectedHome, resHome)

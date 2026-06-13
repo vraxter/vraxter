@@ -38,6 +38,7 @@ type Orchestrator struct {
 	MemoryRepo     *db.MemoryRepository
 	ContextMgr     *ContextManager
 	JobManager     *JobManager
+	SpatialSvc     *services.SpatialService
 
 	// Sub-controllers
 	Resolver    *IntentResolver
@@ -69,6 +70,7 @@ func NewOrchestrator(
 	reg *skills.Registry,
 	run *skills.Runner,
 	coder *services.CoderService,
+	spatialSvc *services.SpatialService,
 	verbose bool,
 	routingOverrides map[string]string, // from routing.yaml: useCase → modelID
 ) (*Orchestrator, error) {
@@ -117,6 +119,7 @@ func NewOrchestrator(
 		MemoryRepo:       memoryRepo,
 		ContextMgr:       NewContextManager(chatRepo),
 		JobManager:       jobMgr,
+		SpatialSvc:       spatialSvc,
 		UserRepo:         db.NewUserRepository(store),
 		Resolver:         NewIntentResolver(reg, router, skillRepo, specRepo),
 		ExecEngine:       NewExecutionEngine(reg, run, coder, chatRepo, specRepo, jobMgr, codegen, verbose),
@@ -127,6 +130,7 @@ func NewOrchestrator(
 		sessionOverrides: make(map[string]string),
 	}
 
+	o.ExecEngine.GetActiveModelConfigDelegate = o.GetActiveModelConfig
 	o.Swarm = NewSwarmDispatcher(o.ExecEngine, jobMgr, o.Resolver)
 
 	// Register System Skills for Semantic Matching/Fast Path
@@ -142,6 +146,28 @@ func NewOrchestrator(
 		Name:        "Restore Model",
 		Description: "Unlock model routing and restore automatic selection. Usage: restore model",
 		ParamRegex:  `(restore|auto)\s+model`,
+		IsOfficial:  true,
+	})
+
+	reg.Register(types.SkillManifest{
+		ID:          "vraxter-see",
+		Name:        "See",
+		Description: "Analyze and describe an image file using the active vision model.",
+		ParamRegex:  `(?:see|look|analyze|describe)\s+(?:the\s+)?(?:image\s+|picture\s+|photo\s+)?(?P<path>[^\s]+\.(png|jpg|jpeg|webp|gif))(?:\s+(?P<prompt>.*))?`,
+		IsOfficial:  true,
+	})
+	reg.Register(types.SkillManifest{
+		ID:          "vraxter-hear",
+		Name:        "Hear",
+		Description: "Transcribe an audio file using the active audio model or API.",
+		ParamRegex:  `(?:hear|listen|transcribe)\s+(?:the\s+)?(?:audio\s+|voice\s+|sound\s+)?(?P<path>[^\s]+\.(mp3|wav|ogg|m4a|flac))(?:\s+(?P<prompt>.*))?`,
+		IsOfficial:  true,
+	})
+	reg.Register(types.SkillManifest{
+		ID:          "vraxter-talk",
+		Name:        "Talk",
+		Description: "Synthesize speech from text and route it to a target spatial zone for playback.",
+		ParamRegex:  `(?:talk|speak|say|synthesize|reply)\s+"?(?P<text>[^"]+)"?(?:\s+(?:in|to|at)\s+(?:the\s+)?(?P<target_zone>[a-zA-Z0-9_-]+))?`,
 		IsOfficial:  true,
 	})
 
@@ -340,6 +366,17 @@ func (o *Orchestrator) GetActiveModelID(sessionID string) string {
 	return "unknown"
 }
 
+func (o *Orchestrator) GetActiveModelConfig(sessionID string) (types.ModelConfig, error) {
+	modelID := o.GetActiveModelID(sessionID)
+	// Try to match the exact alias or model string from the ordered providers
+	for _, p := range o.StreamCoord.Router.GetOrderedProviders() {
+		if p.Config.Alias == modelID || p.Config.Model == modelID || p.Config.ID == modelID {
+			return p.Config, nil
+		}
+	}
+	return types.ModelConfig{}, fmt.Errorf("no provider found matching active model '%s'", modelID)
+}
+
 func (o *Orchestrator) resolveConversationContext(sessionID, specialistID string) string {
 	conversationID := sessionID
 	if specialistID != "" {
@@ -366,13 +403,21 @@ func (o *Orchestrator) resolveConversationContext(sessionID, specialistID string
 	return conversationID
 }
 
-func (o *Orchestrator) gatherPromptContext(ctx context.Context, text string) (string, string) {
+func (o *Orchestrator) gatherPromptContext(ctx context.Context, text, sourceUser string) (string, string) {
 	var userProfilePool, memoryContextPool string
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		user, err := o.UserRepo.GetDefaultUser(ctx)
+		var user *db.UserProfile
+		var err error
+		if sourceUser != "" {
+			user, err = o.UserRepo.GetUserByName(ctx, sourceUser)
+		}
+		if user == nil || err != nil {
+			user, err = o.UserRepo.GetDefaultUser(ctx)
+		}
+
 		if err == nil && user != nil {
 			userProfilePool = fmt.Sprintf("User: %s. expertise: %s.", user.Name, user.Expertise)
 		}
@@ -438,7 +483,8 @@ func (o *Orchestrator) resolveExecutionModel(ctx context.Context, text, sessionI
 	return modelCfg, nil
 }
 
-func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, specialistID, overrideModelID string) (<-chan llm.StreamEvent, error) {
+// ProcessRawIntent routes a raw text command through the LLM pipeline and executes resolved skills.
+func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, text, specialistID, overrideModelID, sourceZone, sourceUser string) (<-chan llm.StreamEvent, error) {
 	out := make(chan llm.StreamEvent)
 	intentID := uuid.New().String()
 
@@ -453,7 +499,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 		}
 
 		// Resolve conversation early
-		conversationID := o.resolveConversationContext(sessionID, specialistID)
+		conversationID := o.resolveConversationContext(conversationID, specialistID)
 
 		trimmedText := strings.TrimSpace(text)
 
@@ -478,7 +524,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 
 				if remainingTask != "" {
 					// Re-route the remaining text through the supervisor pipeline
-					subStream, err := o.ProcessRawIntent(ctx, sessionID, remainingTask, "", overrideModelID)
+					subStream, err := o.ProcessRawIntent(ctx, conversationID, remainingTask, "", overrideModelID, sourceZone, sourceUser)
 					if err == nil {
 						for e := range subStream {
 							if e.Type != llm.EventTypeDone {
@@ -632,8 +678,8 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 			return
 		}
 
-		// CONTEXT GATHERING
-		userProfilePool, memoryContextPool := o.gatherPromptContext(ctx, trimmedText)
+		// 2. Load context in parallel (RAG memory & User Profile)
+		userProfilePool, memoryContextPool := o.gatherPromptContext(ctx, trimmedText, sourceUser)
 		o.mu.RUnlock()
 
 		// If no model override is provided, but we have a targeted specialist, check if it has a fixed model
@@ -646,7 +692,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 		}
 
 		// LLM EXECUTION: Resolve Model (falls back to use-case intent parsing if no override)
-		modelCfg, err := o.resolveExecutionModel(ctx, trimmedText, sessionID, overrideModelID, out)
+		modelCfg, err := o.resolveExecutionModel(ctx, trimmedText, conversationID, overrideModelID, out)
 		if err != nil {
 			out <- llm.StreamEvent{Type: llm.EventTypeError, Err: err}
 			return
@@ -665,7 +711,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, sessionID, text, sp
 
 			history := o.ContextMgr.PruneHistory(conversationID, modelCfg.ContextWindow)
 			toolsContext := o.buildToolsContext(specialistID)
-			systemPrompt, enf := o.buildSystemPrompt(specialistID, specsCtxStr, modelsCtxStr, toolsContext, userProfilePool, memoryContextPool, &modelCfg)
+			systemPrompt, enf := o.buildSystemPrompt(specialistID, specsCtxStr, modelsCtxStr, toolsContext, userProfilePool, memoryContextPool, &modelCfg, sourceZone)
 
 			msgs := []llm.Message{{Role: "system", Content: systemPrompt}}
 			for idx, h := range history {
@@ -767,12 +813,16 @@ func (o *Orchestrator) buildToolsContext(specialistID string) string {
 
 func (o *Orchestrator) buildSystemPrompt(
 	specialistID, specsCtxStr, modelsCtxStr, toolsContext, userProfile, memoryContext string,
-	modelCfg *types.ModelConfig,
+	modelCfg *types.ModelConfig, sourceZone string,
 ) (string, string) {
 	enforcementSuffix := fmt.Sprintf("\n\n[PROMPT LOCK: You MUST strictly mirror the user language in EVERY response.]\n[PROTOCOL LOCK: IF a functional tool is needed, use: %s, %s, %s. If the task is EDUCATIONAL (snippets/explanations), DO NOT use tools. Use PLAIN Markdown chat.]\n[CRITICAL: DO NOT attempt to write code or create skills to perform 'model activation' or 'switching'. Use the built-in 'vraxter-activate-model' tool instead.]\n[TOOL USAGE: To invoke a tool, YOU MUST OUTPUT STRICTLY VALID JSON. The JSON must contain the 'skill_id' of the tool you are invoking, and a 'params' object. Example: %s {\"skill_id\": \"vraxter-coder\", \"params\": {\"name\": \"weather_service\", \"description\": \"...\", \"spec\": \"...\"}}]\n[CAPABILITY LOCK: You ARE running inside the Vraxter autonomous engine. Vraxter will natively compile and execute your code. YOU MUST NOT refuse to write code. NEVER say 'I cannot execute code'.]\n[RETRY LOCK: If a tool execution fails and returns an error, you MUST correct the payload and invoke the tool again. NEVER give up and dump raw code as markdown.]",
 		markerChat, markerTool, markerCode, markerTool)
 
 	gitCtx := utils.CaptureGitContext("")
+	var deviceMap map[string][]string
+	if o.SpatialSvc != nil {
+		deviceMap = o.SpatialSvc.GetDeviceMap()
+	}
 
 	if specialistID != "" {
 		spec, err := o.SpecialistRepo.GetSpecialist(specialistID)
@@ -793,6 +843,8 @@ func (o *Orchestrator) buildSystemPrompt(
 				MarkerChat:          markerChat,
 				MarkerTool:          markerTool,
 				MarkerCode:          markerCode,
+				SourceZone:          sourceZone,
+				DeviceMap:           deviceMap,
 			})
 			if err == nil {
 				return out, enforcementSuffix
@@ -811,6 +863,8 @@ func (o *Orchestrator) buildSystemPrompt(
 		GitContext:          gitCtx,
 		UserProfile:         userProfile,
 		SemanticMemory:      memoryContext,
+		SourceZone:          sourceZone,
+		DeviceMap:           deviceMap,
 	})
 	if err == nil {
 		return out, enforcementSuffix
@@ -877,7 +931,7 @@ func (o *Orchestrator) DelegateSwarmTask(ctx context.Context, out chan<- llm.Str
 	defer cancel()
 
 	// Intercept the stream of the newly spawned orchestration loop
-	outStream, err := o.ProcessRawIntent(subCtx, subSessionID, task, specialistID, "")
+	outStream, err := o.ProcessRawIntent(subCtx, subSessionID, task, specialistID, "", "", "")
 	if err != nil {
 		return fmt.Sprintf("SUB-AGENT CRASHED: %v", err)
 	}
@@ -919,7 +973,7 @@ func (o *Orchestrator) executeSubTask(ctx context.Context, query, specialistID s
 	subSessionID := fmt.Sprintf("phase_%s", uuid.New().String())
 
 	// We call ProcessRawIntent recursively for the sub-task
-	subStream, err := o.ProcessRawIntent(ctx, subSessionID, query, specialistID, "")
+	subStream, err := o.ProcessRawIntent(ctx, subSessionID, query, specialistID, "", "", "")
 	if err != nil {
 		return err
 	}

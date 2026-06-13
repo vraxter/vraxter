@@ -53,11 +53,16 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 	// 1. Resolve Session Identity
 	sessionID := req.ConversationId
 	if sessionID == "" {
-		sessionID = fmt.Sprintf("volatile-%d", time.Now().UnixNano())
+		if req.SourceZone != "" {
+			// Isolate concurrent multi-room conversations natively by physical location
+			sessionID = fmt.Sprintf("zone-%s", req.SourceZone)
+		} else {
+			sessionID = fmt.Sprintf("volatile-%d", time.Now().UnixNano())
+		}
 	}
 
 	// 2. Process intent via Engine (Returns a channel of events)
-	events, err := h.engine.ProcessRawIntent(ctx, sessionID, req.Query, specID, req.ModelId)
+	events, err := h.engine.ProcessRawIntent(ctx, sessionID, req.Query, specID, req.ModelId, req.SourceZone, req.SourceUser)
 	if err != nil {
 		return fmt.Errorf("engine failed to initialize stream: %w", err)
 	}

@@ -20,8 +20,8 @@ func init() {
 // ... (internal types)
 
 type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"`
 }
 
 type anthropicReq struct {
@@ -73,10 +73,33 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 				payload.System += "\n\n" + m.Content
 			}
 		} else {
-			payload.Messages = append(payload.Messages, anthropicMessage{
-				Role:    m.Role,
-				Content: m.Content,
-			})
+			if mimeType, b64Data, textPrompt, ok := interfaces.ParseDataURI(m.Content); ok {
+				parts := []interface{}{
+					map[string]interface{}{
+						"type": "image",
+						"source": map[string]string{
+							"type":       "base64",
+							"media_type": mimeType,
+							"data":       b64Data,
+						},
+					},
+				}
+				if textPrompt != "" {
+					parts = append(parts, map[string]interface{}{
+						"type": "text",
+						"text": textPrompt,
+					})
+				}
+				payload.Messages = append(payload.Messages, anthropicMessage{
+					Role:    m.Role,
+					Content: parts,
+				})
+			} else {
+				payload.Messages = append(payload.Messages, anthropicMessage{
+					Role:    m.Role,
+					Content: m.Content,
+				})
+			}
 		}
 	}
 

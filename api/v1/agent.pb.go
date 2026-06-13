@@ -245,6 +245,8 @@ type ExecuteRequest struct {
 	ConversationId string                 `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
 	SpecialistId   string                 `protobuf:"bytes,3,opt,name=specialist_id,json=specialistId,proto3" json:"specialist_id,omitempty"`
 	ModelId        string                 `protobuf:"bytes,4,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
+	SourceZone     string                 `protobuf:"bytes,5,opt,name=source_zone,json=sourceZone,proto3" json:"source_zone,omitempty"`
+	SourceUser     string                 `protobuf:"bytes,6,opt,name=source_user,json=sourceUser,proto3" json:"source_user,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -303,6 +305,20 @@ func (x *ExecuteRequest) GetSpecialistId() string {
 func (x *ExecuteRequest) GetModelId() string {
 	if x != nil {
 		return x.ModelId
+	}
+	return ""
+}
+
+func (x *ExecuteRequest) GetSourceZone() string {
+	if x != nil {
+		return x.SourceZone
+	}
+	return ""
+}
+
+func (x *ExecuteRequest) GetSourceUser() string {
+	if x != nil {
+		return x.SourceUser
 	}
 	return ""
 }
@@ -1684,12 +1700,16 @@ const file_api_v1_agent_proto_rawDesc = "" +
 	"\x0fGetInfoResponse\x12\x19\n" +
 	"\bmodel_id\x18\x01 \x01(\tR\amodelId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
-	"\x06status\x18\x03 \x01(\tR\x06status\"\x8f\x01\n" +
+	"\x06status\x18\x03 \x01(\tR\x06status\"\xd1\x01\n" +
 	"\x0eExecuteRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12#\n" +
 	"\rspecialist_id\x18\x03 \x01(\tR\fspecialistId\x12\x19\n" +
-	"\bmodel_id\x18\x04 \x01(\tR\amodelId\"\x9a\x02\n" +
+	"\bmodel_id\x18\x04 \x01(\tR\amodelId\x12\x1f\n" +
+	"\vsource_zone\x18\x05 \x01(\tR\n" +
+	"sourceZone\x12\x1f\n" +
+	"\vsource_user\x18\x06 \x01(\tR\n" +
+	"sourceUser\"\x9a\x02\n" +
 	"\x0fExecuteResponse\x12,\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x18.v1.ExecuteResponse.TypeR\x04type\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12\x19\n" +

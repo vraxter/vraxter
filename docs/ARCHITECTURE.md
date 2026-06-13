@@ -5,23 +5,26 @@ Vraxter is engineered as a **distributed, headless autonomous engine** consistin
 
 ## System Overview
 
-The system follows a classic Client-Server architecture over **gRPC**, ensuring that the "brain" (state, memory, execution) remains decoupled from the "eyes" (rendering, user input).
+The system follows a headless Client-Server architecture over **Connect RPC (HTTP/2)**, ensuring that the "brain" (state, memory, execution) remains completely decoupled from any specific frontend (TUI, Svelte web dashboard, or Smart Speaker).
 
 ### 1. The Daemon (`vraxterd`)
 The daemon is the primary source of truth. It manages:
 - **Persistence**: SQLite-backed history, specialists, and model configurations.
+- **Environmental Context Engine**: A thread-safe `StateManager` that manages dynamic `ModeConfig` templates (e.g. ambient lighting, music).
 - **Orchestration**: The request lifecycle from intent resolution to execution.
 - **Skill Runner**: The Wazero-powered WASM sandbox.
 - **Intelligence**: Model routing and multi-provider coordination.
 
-### 2. The gRPC Layer
-- **Protobuf-Defined**: Every interaction is type-safe and defined in `internal/proto`.
+### 2. The Connect RPC Layer
+- **Protobuf-Defined**: Every interaction is type-safe and defined in `api/v1`.
+- **Client-Agnostic HTTP/2**: Vraxter transitioned from pure gRPC to Connect RPC, allowing standard web clients (like fetch) to interact seamlessly without proxying.
 - **Streaming**: Supports bidirectional streaming for real-time LLM token delivery and tool output updates.
 
-### 3. The TUI (Bubble Tea)
-The terminal interface is a view onto the daemon's state.
-- **Fluid Layout**: Uses the Model-View-Update (MVU) pattern for ultra-responsive interface changes.
-- **Component System**: Modular wizards and banners for task-specific feedback.
+### 3. Spatial & Identity Concurrency
+The engine natively supports serving multiple physical rooms simultaneously.
+- **Spatial Isolation**: Requests containing a `source_zone` (e.g. "living_room") instantiate separate conversation memory streams.
+- **Unified Device Mapping**: The `SpatialService` merges internal `spatial.json` mapping with Google Home SDK data so the AI knows exactly which speakers (`[Nest Audio, TV]`) exist in which rooms.
+- **Voice Recognition**: Requests can pass a `source_user`. The Orchestrator automatically fetches that exact User Profile from the database, instantly hot-swapping the AI's identity context even during concurrent multi-user conversations.
 
 
 ## The Intelligence Pipeline
@@ -49,10 +52,12 @@ Vraxter dynamically builds a system prompt using:
 
 ```mermaid
 graph TD
-    User([User Input]) --> TUI[Bubble Tea CLI]
-    TUI --> gRPC[gRPC Client]
-    gRPC --> Daemon[vraxterd]
+    User([User Input]) --> Client[TUI / Web UI / Smart Speaker]
+    Client --> ConnectRPC[Connect RPC HTTP/2]
+    ConnectRPC --> Daemon[vraxterd]
     Daemon --> Orchestrator{Orchestrator}
+    Orchestrator --> StateMgr[State Manager]
+    Orchestrator --> SpatialSvc[Spatial Service]
     Orchestrator --> SQL[SQLite DB]
     Orchestrator --> Runner[WASM Skill Runner]
     Orchestrator --> Router[LLM Multi-Router]

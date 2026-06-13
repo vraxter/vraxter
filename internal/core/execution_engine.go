@@ -34,6 +34,7 @@ type ExecutionEngine struct {
 	ActivateModelDelegate func(sessionID, modelID string) error
 	RestoreModelDelegate  func(sessionID string)
 	ResolveSpecialistDelegate func(ctx context.Context, query string) (*types.Specialist, error)
+	GetActiveModelConfigDelegate func(sessionID string) (types.ModelConfig, error)
 }
 
 // NewExecutionEngine creates a new ExecutionEngine.

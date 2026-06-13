@@ -2,9 +2,15 @@ package core
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/patagonicrune/vraxter/internal/llm"
 	"github.com/patagonicrune/vraxter/internal/skills"
+	"github.com/patagonicrune/vraxter/pkg/interfaces"
 	"github.com/patagonicrune/vraxter/pkg/types"
 )
 
@@ -24,6 +30,9 @@ var BuiltInCommands = map[string]InternalToolHandler{
 	"vraxter-list-dir":          handleCmdListDir,
 	"vraxter-patch-code":        handleCmdPatchCode,
 	"vraxter-delete-specialist": handleCmdDeleteSpecialist,
+	"vraxter-see":               handleCmdSee,
+	"vraxter-hear":              handleCmdHear,
+	"vraxter-talk":              handleCmdTalk,
 }
 
 func handleCmdCreateSpecialist(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
@@ -180,4 +189,213 @@ func handleCmdDeleteSpecialist(ctx context.Context, call types.ToolCall, codePay
 	}
 
 	return "ERROR: ResolveSpecialistDelegate not mapped in ExecutionEngine."
+}
+
+func handleCmdSee(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	path, _ := call.Params["path"].(string)
+	prompt, _ := call.Params["prompt"].(string)
+	if prompt == "" {
+		prompt = "Describe this image."
+	}
+	if path == "" {
+		return "ERROR: Missing required parameter 'path'."
+	}
+
+	resolvedPath := skills.ResolveMountPath(path)
+	data, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Failed to read image file at '%s': %v", path, err)
+	}
+
+	if e.GetActiveModelConfigDelegate == nil {
+		return "ERROR: Active model config delegate is not initialized."
+	}
+	activeCfg, err := e.GetActiveModelConfigDelegate(conversationID)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Failed to retrieve active model config: %v", err)
+	}
+
+	hasVision := false
+	for _, c := range strings.Split(strings.ToLower(activeCfg.Capabilities), ",") {
+		c = strings.TrimSpace(c)
+		if c == "vision" || c == "image" {
+			hasVision = true
+			break
+		}
+	}
+	if !hasVision {
+		return fmt.Sprintf("ERROR: Active model '%s' (%s) does not support vision capabilities. Please configure or activate a vision-capable model.", activeCfg.Alias, activeCfg.Model)
+	}
+
+	mimeType := "image/jpeg"
+	ext := strings.ToLower(filepath.Ext(resolvedPath))
+	switch ext {
+	case ".png":
+		mimeType = "image/png"
+	case ".webp":
+		mimeType = "image/webp"
+	case ".gif":
+		mimeType = "image/gif"
+	}
+
+	b64Data := base64.StdEncoding.EncodeToString(data)
+	dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, b64Data)
+
+	_, provider, err := e.CodeGen.Router.GetProviderByID(activeCfg.ID)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Failed to resolve provider for model '%s': %v", activeCfg.Model, err)
+	}
+
+	e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeStatus, Content: fmt.Sprintf("👀 Analyzing image with model '%s'...", activeCfg.Alias)})
+
+	req := interfaces.CompletionRequest{
+		Model: activeCfg.Model,
+		Messages: []interfaces.Message{
+			{Role: "system", Content: "You are a helpful visual assistant. Answer questions or describe images accurately based on user prompts."},
+			{Role: "user", Content: fmt.Sprintf("%s %s", dataURI, prompt)},
+		},
+	}
+
+	resp, err := provider.Generate(ctx, req)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Image analysis failed: %v", err)
+	}
+
+	return fmt.Sprintf("IMAGE ANALYSIS RESULT:\n%s", resp.Content)
+}
+
+func handleCmdHear(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	path, _ := call.Params["path"].(string)
+	prompt, _ := call.Params["prompt"].(string)
+	if prompt == "" {
+		prompt = "Transcribe the following audio exactly. Do not add any commentary."
+	}
+	if path == "" {
+		return "ERROR: Missing required parameter 'path'."
+	}
+
+	resolvedPath := skills.ResolveMountPath(path)
+	data, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Failed to read audio file at '%s': %v", path, err)
+	}
+
+	if e.GetActiveModelConfigDelegate == nil {
+		return "ERROR: Active model config delegate is not initialized."
+	}
+	activeCfg, err := e.GetActiveModelConfigDelegate(conversationID)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Failed to retrieve active model config: %v", err)
+	}
+
+	_, provider, err := e.CodeGen.Router.GetProviderByID(activeCfg.ID)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Failed to resolve provider for model '%s': %v", activeCfg.Model, err)
+	}
+
+	mimeType := "audio/wav"
+	ext := strings.ToLower(filepath.Ext(resolvedPath))
+	switch ext {
+	case ".mp3":
+		mimeType = "audio/mp3"
+	case ".ogg":
+		mimeType = "audio/ogg"
+	case ".m4a":
+		mimeType = "audio/m4a"
+	case ".flac":
+		mimeType = "audio/flac"
+	}
+
+	if transcriber, ok := provider.(interfaces.AudioTranscriber); ok {
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeStatus, Content: fmt.Sprintf("👂 Transcribing audio via API '%s'...", activeCfg.Alias)})
+		text, err := transcriber.TranscribeAudio(ctx, data, mimeType, prompt)
+		if err != nil {
+			return fmt.Sprintf("ERROR: Transcription API failed: %v", err)
+		}
+		return fmt.Sprintf("AUDIO TRANSCRIPTION RESULT:\n%s", text)
+	}
+
+	hasAudio := false
+	for _, c := range strings.Split(strings.ToLower(activeCfg.Capabilities), ",") {
+		c = strings.TrimSpace(c)
+		if c == "audio" || c == "voice" {
+			hasAudio = true
+			break
+		}
+	}
+	if !hasAudio {
+		return fmt.Sprintf("ERROR: Active model '%s' (%s) does not support audio processing capabilities.", activeCfg.Alias, activeCfg.Model)
+	}
+
+	b64Data := base64.StdEncoding.EncodeToString(data)
+	dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, b64Data)
+
+	e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeStatus, Content: fmt.Sprintf("👂 Transcribing audio with model '%s'...", activeCfg.Alias)})
+
+	req := interfaces.CompletionRequest{
+		Model: activeCfg.Model,
+		Messages: []interfaces.Message{
+			{Role: "system", Content: "You are a helpful assistant. You transcribe or analyze audio content accurately."},
+			{Role: "user", Content: fmt.Sprintf("%s %s", dataURI, prompt)},
+		},
+	}
+
+	resp, err := provider.Generate(ctx, req)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Audio analysis failed: %v", err)
+	}
+
+	return fmt.Sprintf("AUDIO TRANSCRIPTION RESULT:\n%s", resp.Content)
+}
+
+func handleCmdTalk(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	text, _ := call.Params["text"].(string)
+	targetZone, _ := call.Params["target_zone"].(string)
+	voice, _ := call.Params["voice"].(string)
+	if voice == "" {
+		voice = "alloy"
+	}
+
+	if text == "" {
+		return "ERROR: Missing required parameter: 'text'."
+	}
+
+	if e.GetActiveModelConfigDelegate == nil {
+		return "ERROR: Active model config delegate is not initialized."
+	}
+	activeCfg, err := e.GetActiveModelConfigDelegate(conversationID)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Failed to retrieve active model config: %v", err)
+	}
+
+	_, provider, err := e.CodeGen.Router.GetProviderByID(activeCfg.ID)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Failed to resolve provider for model '%s': %v", activeCfg.Model, err)
+	}
+
+	synth, ok := provider.(interfaces.SpeechSynthesizer)
+	if !ok {
+		return fmt.Sprintf("ERROR: Speech synthesis (talk) is not supported by the active provider '%s' (%s). Please switch to an OpenAI-compatible provider that supports /v1/audio/speech endpoints.", activeCfg.Provider, activeCfg.Model)
+	}
+
+	e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeStatus, Content: fmt.Sprintf("🗣️ Synthesizing speech with model '%s'...", activeCfg.Alias)})
+
+	audioBytes, err := synth.SynthesizeSpeech(ctx, text, voice)
+	if err != nil {
+		return fmt.Sprintf("ERROR: Speech synthesis failed: %v", err)
+	}
+
+	b64Audio := base64.StdEncoding.EncodeToString(audioBytes)
+	
+	// Create JSON playback payload
+	payloadJSON := fmt.Sprintf(`{"action":"playback","target_zone":"%s","audio_base64":"%s"}`, targetZone, b64Audio)
+	
+	// Push over the stream as a special Status event so the UI/Client can catch it and handle playback
+	out <- llm.StreamEvent{
+		Type:    llm.EventTypeStatus,
+		Content: fmt.Sprintf("[AUDIO_PLAYBACK_EVENT]%s", payloadJSON),
+	}
+
+	e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n🔊 Synthesized speech routed to zone '%s'\n", targetZone)})
+	return fmt.Sprintf("SUCCESS: Synthesized speech routed to zone '%s'.", targetZone)
 }

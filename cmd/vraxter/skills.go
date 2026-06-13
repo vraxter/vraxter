@@ -254,7 +254,7 @@ var execSkillCmd = &cobra.Command{
 		fmt.Printf("🚀 Firing native local execution for [%s]...\n", skillID)
 
 		query := fmt.Sprintf("!%s %s", skillID, paramStr)
-		stream, err := appEngine.ProcessRawIntent(ctx, sessionID, query, agentFlag, "")
+		stream, err := appEngine.ProcessRawIntent(ctx, sessionID, query, agentFlag, "", "", "")
 		if err != nil {
 			fmt.Printf("❌ Engine Fast-Path Error: %v\n", err)
 			return

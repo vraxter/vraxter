@@ -38,6 +38,7 @@ func NewEngine(
 	reg *skills.Registry,
 	run *skills.Runner,
 	coder *services.CoderService,
+	spatialSvc *services.SpatialService,
 	verbose bool,
 	appDir string, // needed to load routing.yaml
 ) (*Engine, error) {
@@ -50,7 +51,7 @@ func NewEngine(
 	// Ensure a documented sample is written on first run
 	_ = appcfg.WriteSampleRoutingConfig(appDir)
 
-	orch, err := NewOrchestrator(store, crypto, reg, run, coder, verbose, routingCfg.Routes)
+	orch, err := NewOrchestrator(store, crypto, reg, run, coder, spatialSvc, verbose, routingCfg.Routes)
 	if err != nil {
 		return nil, err
 	}
@@ -73,9 +74,9 @@ func (e *Engine) GetResolver() *IntentResolver {
 	return e.orch.Resolver
 }
 
-// ProcessRawIntent delegates to the Orchestrator.
-func (e *Engine) ProcessRawIntent(ctx context.Context, sessionID, text, specialistID, overrideModelID string) (<-chan llm.StreamEvent, error) {
-	return e.orch.ProcessRawIntent(ctx, sessionID, text, specialistID, overrideModelID)
+// ProcessRawIntent routes a raw text command through the LLM pipeline and executes resolved skills.
+func (e *Engine) ProcessRawIntent(ctx context.Context, sessionID, text, specialistID, overrideModelID, sourceZone, sourceUser string) (<-chan llm.StreamEvent, error) {
+	return e.orch.ProcessRawIntent(ctx, sessionID, text, specialistID, overrideModelID, sourceZone, sourceUser)
 }
 
 func (e *Engine) GetActiveModelID(sessionID string) string {

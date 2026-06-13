@@ -39,6 +39,21 @@ func (r *UserRepository) GetDefaultUser(ctx context.Context) (*UserProfile, erro
 	return &u, nil
 }
 
+func (r *UserRepository) GetUserByName(ctx context.Context, name string) (*UserProfile, error) {
+	const query = `SELECT id, name, language, theme_preference, expertise, interests, bio FROM users WHERE name = ? LIMIT 1`
+	var u UserProfile
+	err := r.store.Conn.QueryRowContext(ctx, query, name).Scan(
+		&u.ID, &u.Name, &u.Language, &u.ThemePreference, &u.Expertise, &u.Interests, &u.Bio,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 func (r *UserRepository) UpdateUser(ctx context.Context, u *UserProfile) error {
 	const query = `
 		UPDATE users SET 

@@ -21,8 +21,14 @@ func init() {
 
 // ... (internal types)
 
+type inlineData struct {
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
+}
+
 type geminiPart struct {
-	Text string `json:"text"`
+	Text       string      `json:"text,omitempty"`
+	InlineData *inlineData `json:"inline_data,omitempty"`
 }
 
 type geminiContent struct {
@@ -97,10 +103,28 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 			role = "model"
 		}
 
-		contents = append(contents, geminiContent{
-			Role:  role,
-			Parts: []geminiPart{{Text: m.Content}},
-		})
+		if mimeType, b64Data, textPrompt, ok := interfaces.ParseDataURI(m.Content); ok {
+			parts := []geminiPart{
+				{
+					InlineData: &inlineData{
+						MimeType: mimeType,
+						Data:     b64Data,
+					},
+				},
+			}
+			if textPrompt != "" {
+				parts = append(parts, geminiPart{Text: textPrompt})
+			}
+			contents = append(contents, geminiContent{
+				Role:  role,
+				Parts: parts,
+			})
+		} else {
+			contents = append(contents, geminiContent{
+				Role:  role,
+				Parts: []geminiPart{{Text: m.Content}},
+			})
+		}
 	}
 
 	payload := geminiReq{
@@ -168,16 +192,34 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 			} else {
 				systemMsg.Parts[0].Text += "\n\n" + m.Content
 			}
-		case "user":
-			contents = append(contents, geminiContent{
-				Role:  "user",
-				Parts: []geminiPart{{Text: m.Content}},
-			})
-		case "assistant", "model":
-			contents = append(contents, geminiContent{
-				Role:  "model",
-				Parts: []geminiPart{{Text: m.Content}},
-			})
+		case "user", "assistant", "model":
+			role := "user"
+			if m.Role == "assistant" || m.Role == "model" {
+				role = "model"
+			}
+			
+			if mimeType, b64Data, textPrompt, ok := interfaces.ParseDataURI(m.Content); ok {
+				parts := []geminiPart{
+					{
+						InlineData: &inlineData{
+							MimeType: mimeType,
+							Data:     b64Data,
+						},
+					},
+				}
+				if textPrompt != "" {
+					parts = append(parts, geminiPart{Text: textPrompt})
+				}
+				contents = append(contents, geminiContent{
+					Role:  role,
+					Parts: parts,
+				})
+			} else {
+				contents = append(contents, geminiContent{
+					Role:  role,
+					Parts: []geminiPart{{Text: m.Content}},
+				})
+			}
 		default:
 			continue
 		}

@@ -26,6 +26,14 @@ Execution = "Only when absolutely required to run a Skill, output exactly 2 DIST
 Creation = "When the user asks to create a new skill, use the 'vraxter-coder' tool with a name, description, and detailed spec. Set language to 'go' (default) or 'rust'. Vraxter will auto-generate and compile the code."
 
 @System.Context
+{{if .SourceZone}}$Context.Spatial
+| Location = "{{.SourceZone}}"
+| AudioRouting = "If generating speech/audio, route to '{{.SourceZone}}' unless the user explicitly requested a different physical zone."
+{{end}}
+{{if .DeviceMap}}
+| Spatial Awareness = "You are physically aware of the following Zone -> [Speakers] mappings. Use these exact speaker names as targets when asked to play audio or speak in a specific room."
+{{range $zone, $speakers := .DeviceMap}}  - {{$zone}}: [{{join $speakers ", "}}]
+{{end}}{{end}}
 {{if .UserProfile}}$Context.Identity
 {{prefix "| " .UserProfile}}
 {{end}}

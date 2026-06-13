@@ -8,19 +8,24 @@ Vraxter is a **Local-First, Autonomous Agent Workstation** designed to bridge th
 
 ## Core Architecture
 
-Vraxter is built on the **Sovereign-Agent Model**, ensuring that your data, logic, and execution stay within your infrastructure.
+Vraxter is built on the **Sovereign-Agent Model**, ensuring that your data, logic, and execution stay within your infrastructure. It has evolved into a headless, highly-concurrent smart home engine.
 
-### 1. The Autonomous Execution Loop
+### 1. Client-Agnostic Connect RPC
+Vraxter operates as a completely headless backend daemon exposing an HTTP/2 Connect RPC API. It is entirely uncoupled from any specific UI framework, allowing you to connect CLI interfaces, Web Dashboards, or hardware smart-speakers natively.
+
+### 2. Environmental Context Engine & Spatial Concurrency
+Vraxter manages dynamic `ModeConfig` templates (e.g., "Deep Work", "D&D Party") to orchestrate real-world side effects like music and smart lights. It natively supports **Room-Based Spatial Isolation**: using Google Home or local mappings, Vraxter isolates concurrent conversation histories per physical room and dynamically swaps active User Profiles via Voice Recognition.
+
+### 3. The Autonomous Execution Loop
 Vraxter doesn't just generate text; it solves problems by iterating through an autonomous cycle:
-- **Analyze & Plan**: Decomposes complex queries into actionable phases using its internal **Planner**.
-- **Resolve Intent**: Routes tasks either to local scripts or specialized LLM instructions.
-- **WASM Skill Execution**: Runs highly performant, sandboxed tools compiled to WebAssembly (WASM).
-- **Self-Recursion (The Coder)**: If a tool is missing, Vraxter can write, compile, and register a new Skill in real-time.
+- **Analyze & Plan**: Decomposes complex queries into actionable phases using its internal Planner.
+- **Multimodal Senses**: Native Official Skills allow Vraxter to see images, hear audio, and synthesize speech targeting specific physical rooms.
+- **WASM Skill Execution**: Runs highly performant, sandboxed tools compiled to WebAssembly.
 
-### 2. Specialist Swarm
-Vraxter manages a roster of **Specialists**, domain-specific sub-agents (e.g., Security Auditor, Frontend Architect) that can be delegated to for hyper-focused reasoning. The Supervisor engine orchestrates handoffs and consolidates results seamlessly.
+### 4. Specialist Swarm
+Vraxter manages a roster of domain-specific sub-agents (e.g., Security Auditor, Frontend Architect) that can be delegated to for hyper-focused reasoning. The Supervisor engine orchestrates handoffs seamlessly.
 
-### 3. Multi-Model Intelligence
+### 5. Multi-Model Intelligence
 Stop being locked into a single provider. Vraxter features dynamic, priority-based routing across:
 - **Cloud**: OpenAI, Anthropic, Google.
 - **Local**: Ollama.
@@ -61,7 +66,7 @@ The first time you run Vraxter, or by typing `/start`, you will enter the **Prem
 | **Sandbox** | Wazero (WASM) | Hardened, sandboxed tool execution without local dependencies. |
 | **Persistence** | SQLite | Local-first, relational storage for memory and configuration. |
 | **TUI Interface** | Bubble Tea | Premium, fluid terminal ecosystem for professional engineers. |
-| **Internal Comms** | gRPC / Protobuf | High-speed, type-safe daemon/client communication. |
+| **Internal Comms** | Connect RPC (HTTP/2) | Broadly compatible, high-speed API layer for any frontend client. |
 
 ## Command Reference
 

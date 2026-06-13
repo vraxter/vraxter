@@ -33,6 +33,7 @@ func init() {
 			}
 			return strings.Join(lines, "\n")
 		},
+		"join": strings.Join,
 	}).ParseFS(promptFiles, "base_system.vrx")
 	if err != nil {
 		panic(fmt.Sprintf("Failed to load base_system.vrx template: %v", err))
@@ -49,6 +50,7 @@ func init() {
 			}
 			return strings.Join(lines, "\n")
 		},
+		"join": strings.Join,
 	}).ParseFS(promptFiles, "specialist.vrx")
 	if err != nil {
 		panic(fmt.Sprintf("Failed to load specialist.vrx template: %v", err))
@@ -94,6 +96,8 @@ func init() {
 }
 
 type BaseSystemParams struct {
+	SourceZone          string
+	DeviceMap           map[string][]string
 	ExistingSpecialists string
 	AvailableModels     string
 	AvailableTools      string
@@ -108,6 +112,8 @@ type BaseSystemParams struct {
 }
 
 type SpecialistParams struct {
+	SourceZone          string
+	DeviceMap           map[string][]string
 	SpecialistName      string
 	SpecialistExpertise string
 	SpecialistPrompt    string

@@ -47,6 +47,14 @@ When you ask Vraxter to do something it doesn't have a tool for:
 3. It compiles the code to WASM.
 4. It registers the tool in its local DB for immediate use.
 
+## Multimodal Official Skills
+
+Vraxter ships with native sensory capabilities built directly into the Orchestrator as **Official Skills**. These do not require WASM compilation and hook directly into Vraxter's spatial awareness matrix:
+
+- **`vraxter-see`**: Analyzes and describes visual content from image data URIs.
+- **`vraxter-hear`**: Transcribes audio inputs (e.g., from a microphone in a specific room) into text for processing.
+- **`vraxter-talk`**: Synthesizes speech from text and intelligently routes the audio playback to the specific `source_zone` (or custom speaker) where the request originated.
+
 
 ## Registering a Skill Manually
 

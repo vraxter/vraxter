@@ -17,6 +17,7 @@ import (
 	"github.com/patagonicrune/vraxter/internal/config"
 	"github.com/patagonicrune/vraxter/internal/core"
 	"github.com/patagonicrune/vraxter/internal/db"
+	"github.com/patagonicrune/vraxter/internal/env"
 	"github.com/patagonicrune/vraxter/internal/llm"
 	"github.com/patagonicrune/vraxter/internal/security"
 	"github.com/patagonicrune/vraxter/internal/server"
@@ -24,6 +25,7 @@ import (
 	"github.com/patagonicrune/vraxter/internal/skills"
 	"github.com/patagonicrune/vraxter/internal/tui"
 	"github.com/spf13/cobra"
+	"net/http"
 )
 
 var (
@@ -33,11 +35,13 @@ var (
 	appEngine   *core.Engine
 	appProviderManager *services.ProviderManager
 	appModelManager    *services.ModelManager
-	agentFlag   string
-	sessionFlag string
-	modelFlag   string
-	newFlag     bool
-	verboseFlag bool
+	appStateManager    *env.StateManager
+	appPipeline        *env.ExecutionPipeline
+	agentFlag          string
+	sessionFlag        string
+	modelFlag          string
+	newFlag            bool
+	verboseFlag        bool
 
 	bootstrapOnce sync.Once
 )
@@ -78,8 +82,9 @@ func bootstrap() {
 
 		tm := services.NewToolchainManager(appConfig.SDKDir)
 		coder := services.NewCoderService(skillRepo, tm, appConfig.SkillsDir, runner)
+		spatialSvc := services.NewSpatialService(appConfig.EnableGoogleHome, appConfig.SpatialConfigPath)
 
-		appEngine, err = core.NewEngine(appStore, appCrypto, registry, runner, coder, verboseFlag, appConfig.AppDir)
+		appEngine, err = core.NewEngine(appStore, appCrypto, registry, runner, coder, spatialSvc, verboseFlag, appConfig.AppDir)
 		if err != nil {
 			fmt.Printf("Fatal: Core Engine initialization failed: %v\n", err)
 			os.Exit(1)
@@ -90,6 +95,13 @@ func bootstrap() {
 
 		appProviderManager = services.NewProviderManager(providerRepo)
 		appModelManager = services.NewModelManager(modelRepo, providerRepo)
+
+		appStateManager, err = env.NewStateManager(appConfig.AppDir)
+		if err != nil {
+			fmt.Printf("Fatal: State Manager initialization failed: %v\n", err)
+			os.Exit(1)
+		}
+		appPipeline = env.NewExecutionPipeline()
 
 		// 3. Automigrations
 		if err := db.RenameProviderType(appStore, "gemini", "google"); err != nil {
@@ -308,6 +320,18 @@ var serverCmd = &cobra.Command{
 
 		<-ready
 		fmt.Println("🚀 Vraxter Engine (gRPC) is Online.")
+
+		// Start Connect RPC Server
+		mux := http.NewServeMux()
+		server.RegisterEnvService(mux, appStateManager, appPipeline)
+
+		fmt.Println("🌍 Connect RPC API listening on :8080 (HTTP)")
+		go func() {
+			if err := http.ListenAndServe(":8080", mux); err != nil {
+				fmt.Printf("Fatal: HTTP server error: %v\n", err)
+			}
+		}()
+
 		select {} // Block main thread
 	},
 }

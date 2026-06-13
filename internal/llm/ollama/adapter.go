@@ -22,8 +22,9 @@ func init() {
 }
 
 type ollamaMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string   `json:"role"`
+	Content string   `json:"content"`
+	Images  []string `json:"images,omitempty"`
 }
 
 type ollamaChatReq struct {
@@ -74,9 +75,24 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 	}
 
 	for i, m := range req.Messages {
-		payload.Messages[i] = ollamaMessage{
-			Role:    m.Role,
-			Content: m.Content,
+		if mimeType, b64Data, textPrompt, ok := interfaces.ParseDataURI(m.Content); ok {
+			if strings.HasPrefix(mimeType, "image/") {
+				payload.Messages[i] = ollamaMessage{
+					Role:    m.Role,
+					Content: textPrompt,
+					Images:  []string{b64Data},
+				}
+			} else {
+				payload.Messages[i] = ollamaMessage{
+					Role:    m.Role,
+					Content: fmt.Sprintf("[Audio input block of type %s] %s", mimeType, textPrompt),
+				}
+			}
+		} else {
+			payload.Messages[i] = ollamaMessage{
+				Role:    m.Role,
+				Content: m.Content,
+			}
 		}
 	}
 
@@ -122,9 +138,24 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 	}
 
 	for i, m := range req.Messages {
-		payload.Messages[i] = ollamaMessage{
-			Role:    m.Role,
-			Content: m.Content,
+		if mimeType, b64Data, textPrompt, ok := interfaces.ParseDataURI(m.Content); ok {
+			if strings.HasPrefix(mimeType, "image/") {
+				payload.Messages[i] = ollamaMessage{
+					Role:    m.Role,
+					Content: textPrompt,
+					Images:  []string{b64Data},
+				}
+			} else {
+				payload.Messages[i] = ollamaMessage{
+					Role:    m.Role,
+					Content: fmt.Sprintf("[Audio input block of type %s] %s", mimeType, textPrompt),
+				}
+			}
+		} else {
+			payload.Messages[i] = ollamaMessage{
+				Role:    m.Role,
+				Content: m.Content,
+			}
 		}
 	}
 

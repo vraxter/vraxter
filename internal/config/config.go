@@ -9,9 +9,11 @@ import (
 type Config struct {
 	AppDir    string
 	DBPath    string
-	KeyPath   string
-	SkillsDir string
-	SDKDir    string
+	KeyPath          string
+	SkillsDir         string
+	SDKDir            string
+	EnableGoogleHome  bool
+	SpatialConfigPath string
 }
 
 // Load loads the minimal configuration from environment or system defaults
@@ -41,8 +43,10 @@ func Load() Config {
 	return Config{
 		AppDir:    appDir,
 		DBPath:    filepath.Join(appDir, "vraxter.db"),
-		KeyPath:   filepath.Join(appDir, ".masterkey"),
-		SkillsDir: skillsDir,
-		SDKDir:    sdkDir,
+		KeyPath:          filepath.Join(appDir, ".masterkey"),
+		SkillsDir:         skillsDir,
+		SDKDir:            sdkDir,
+		EnableGoogleHome:  os.Getenv("VRAXTER_GOOGLE_HOME") == "true",
+		SpatialConfigPath: filepath.Join(appDir, "spatial.json"),
 	}
 }

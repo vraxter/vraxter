@@ -47,10 +47,11 @@ func (s MatchSignal) Confidence() float64 {
 
 // Intent represents an actionable user request sent to the Core
 type Intent struct {
-	ID        string    `json:"id"`
-	Query     string    `json:"query"`
-	Language  string    `json:"language"`
-	Timestamp time.Time `json:"timestamp"`
+	ID         string    `json:"id"`
+	Query      string    `json:"query"`
+	Language   string    `json:"language"`
+	SourceZone string    `json:"source_zone,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 // IntentMatch represents the outcome of the IntentResolver

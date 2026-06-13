@@ -60,6 +60,8 @@ message ExecuteRequest {
   string conversation_id = 2;
   string specialist_id = 3;
   string model_id = 4;
+  string source_zone = 5;
+  string source_user = 6;
 }
 
 message ExecuteResponse {

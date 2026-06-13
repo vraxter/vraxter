@@ -221,6 +221,10 @@ func hydrateCapabilities(m *types.ModelConfig) {
 		if strings.Contains(mname, "vision") || strings.Contains(mname, "gemini-1.5") || strings.Contains(mname, "gemini-2") || strings.Contains(mname, "gpt-4o") || strings.Contains(mname, "claude-3-5") || strings.Contains(mname, "llava") {
 			caps = append(caps, "vision")
 		}
+		
+		if strings.Contains(mname, "gemini-1.5") || strings.Contains(mname, "gemini-2") || strings.Contains(mname, "gpt-4o") {
+			caps = append(caps, "audio")
+		}
 
 		// Tool calling assumption: most modern clouds and llama3.1+ do
 		if m.Provider == "openai" || m.Provider == "anthropic" || m.Provider == "google" || strings.Contains(mname, "llama3.1") || strings.Contains(mname, "llama3.2") || strings.Contains(mname, "llama3.3") {
