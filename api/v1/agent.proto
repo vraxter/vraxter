@@ -59,6 +59,11 @@ service AgentService {
   rpc InspectSkill(InspectSkillRequest) returns (InspectSkillResponse);
   rpc DeleteSkill(DeleteSkillRequest) returns (DeleteSkillResponse);
   rpc TrustSkill(TrustSkillRequest) returns (TrustSkillResponse);
+
+  // Auth & Tokens
+  rpc GenerateToken(GenerateTokenRequest) returns (GenerateTokenResponse);
+  rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
+  rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
 }
 
 message GetInfoRequest {}
@@ -171,6 +176,35 @@ message TrustSkillRequest {
 message TrustSkillResponse {
   bool success = 1;
   string message = 2;
+}
+
+message GenerateTokenRequest {
+  string name = 1;
+  string scopes = 2; // e.g. "chat:write,skills:read"
+}
+message GenerateTokenResponse {
+  string token = 1; // Only returned once
+  string id = 2;
+}
+
+message RevokeTokenRequest {
+  string id = 1;
+}
+message RevokeTokenResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ListTokensRequest {}
+message ListTokensResponse {
+  repeated TokenInfo tokens = 1;
+}
+
+message TokenInfo {
+  string id = 1;
+  string name = 2;
+  string scopes = 3;
+  string created_at = 4;
 }
 
 message ExecuteRequest {

@@ -85,7 +85,7 @@ func (x ExecuteResponse_Type) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ExecuteResponse_Type.Descriptor instead.
 func (ExecuteResponse_Type) EnumDescriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{23, 0}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{30, 0}
 }
 
 type SystemEvent_EventType int32
@@ -143,7 +143,7 @@ func (x SystemEvent_EventType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SystemEvent_EventType.Descriptor instead.
 func (SystemEvent_EventType) EnumDescriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{25, 0}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{32, 0}
 }
 
 type GetInfoRequest struct {
@@ -1362,6 +1362,354 @@ func (x *TrustSkillResponse) GetMessage() string {
 	return ""
 }
 
+type GenerateTokenRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Scopes        string                 `protobuf:"bytes,2,opt,name=scopes,proto3" json:"scopes,omitempty"` // e.g. "chat:write,skills:read"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GenerateTokenRequest) Reset() {
+	*x = GenerateTokenRequest{}
+	mi := &file_api_v1_agent_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GenerateTokenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GenerateTokenRequest) ProtoMessage() {}
+
+func (x *GenerateTokenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_agent_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GenerateTokenRequest.ProtoReflect.Descriptor instead.
+func (*GenerateTokenRequest) Descriptor() ([]byte, []int) {
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *GenerateTokenRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GenerateTokenRequest) GetScopes() string {
+	if x != nil {
+		return x.Scopes
+	}
+	return ""
+}
+
+type GenerateTokenResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"` // Only returned once
+	Id            string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GenerateTokenResponse) Reset() {
+	*x = GenerateTokenResponse{}
+	mi := &file_api_v1_agent_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GenerateTokenResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GenerateTokenResponse) ProtoMessage() {}
+
+func (x *GenerateTokenResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_agent_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GenerateTokenResponse.ProtoReflect.Descriptor instead.
+func (*GenerateTokenResponse) Descriptor() ([]byte, []int) {
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *GenerateTokenResponse) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *GenerateTokenResponse) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type RevokeTokenRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeTokenRequest) Reset() {
+	*x = RevokeTokenRequest{}
+	mi := &file_api_v1_agent_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeTokenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeTokenRequest) ProtoMessage() {}
+
+func (x *RevokeTokenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_agent_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeTokenRequest.ProtoReflect.Descriptor instead.
+func (*RevokeTokenRequest) Descriptor() ([]byte, []int) {
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *RevokeTokenRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type RevokeTokenResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeTokenResponse) Reset() {
+	*x = RevokeTokenResponse{}
+	mi := &file_api_v1_agent_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeTokenResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeTokenResponse) ProtoMessage() {}
+
+func (x *RevokeTokenResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_agent_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeTokenResponse.ProtoReflect.Descriptor instead.
+func (*RevokeTokenResponse) Descriptor() ([]byte, []int) {
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *RevokeTokenResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RevokeTokenResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+type ListTokensRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTokensRequest) Reset() {
+	*x = ListTokensRequest{}
+	mi := &file_api_v1_agent_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTokensRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTokensRequest) ProtoMessage() {}
+
+func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_agent_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTokensRequest.ProtoReflect.Descriptor instead.
+func (*ListTokensRequest) Descriptor() ([]byte, []int) {
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{26}
+}
+
+type ListTokensResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tokens        []*TokenInfo           `protobuf:"bytes,1,rep,name=tokens,proto3" json:"tokens,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTokensResponse) Reset() {
+	*x = ListTokensResponse{}
+	mi := &file_api_v1_agent_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTokensResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTokensResponse) ProtoMessage() {}
+
+func (x *ListTokensResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_agent_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTokensResponse.ProtoReflect.Descriptor instead.
+func (*ListTokensResponse) Descriptor() ([]byte, []int) {
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ListTokensResponse) GetTokens() []*TokenInfo {
+	if x != nil {
+		return x.Tokens
+	}
+	return nil
+}
+
+type TokenInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Scopes        string                 `protobuf:"bytes,3,opt,name=scopes,proto3" json:"scopes,omitempty"`
+	CreatedAt     string                 `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TokenInfo) Reset() {
+	*x = TokenInfo{}
+	mi := &file_api_v1_agent_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TokenInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TokenInfo) ProtoMessage() {}
+
+func (x *TokenInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_agent_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TokenInfo.ProtoReflect.Descriptor instead.
+func (*TokenInfo) Descriptor() ([]byte, []int) {
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *TokenInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *TokenInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TokenInfo) GetScopes() string {
+	if x != nil {
+		return x.Scopes
+	}
+	return ""
+}
+
+func (x *TokenInfo) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
 type ExecuteRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Query          string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
@@ -1376,7 +1724,7 @@ type ExecuteRequest struct {
 
 func (x *ExecuteRequest) Reset() {
 	*x = ExecuteRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[22]
+	mi := &file_api_v1_agent_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1388,7 +1736,7 @@ func (x *ExecuteRequest) String() string {
 func (*ExecuteRequest) ProtoMessage() {}
 
 func (x *ExecuteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[22]
+	mi := &file_api_v1_agent_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1401,7 +1749,7 @@ func (x *ExecuteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteRequest.ProtoReflect.Descriptor instead.
 func (*ExecuteRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{22}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ExecuteRequest) GetQuery() string {
@@ -1460,7 +1808,7 @@ type ExecuteResponse struct {
 
 func (x *ExecuteResponse) Reset() {
 	*x = ExecuteResponse{}
-	mi := &file_api_v1_agent_proto_msgTypes[23]
+	mi := &file_api_v1_agent_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1472,7 +1820,7 @@ func (x *ExecuteResponse) String() string {
 func (*ExecuteResponse) ProtoMessage() {}
 
 func (x *ExecuteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[23]
+	mi := &file_api_v1_agent_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1485,7 +1833,7 @@ func (x *ExecuteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteResponse.ProtoReflect.Descriptor instead.
 func (*ExecuteResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{23}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ExecuteResponse) GetType() ExecuteResponse_Type {
@@ -1539,7 +1887,7 @@ type SubscribeEventsRequest struct {
 
 func (x *SubscribeEventsRequest) Reset() {
 	*x = SubscribeEventsRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[24]
+	mi := &file_api_v1_agent_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1551,7 +1899,7 @@ func (x *SubscribeEventsRequest) String() string {
 func (*SubscribeEventsRequest) ProtoMessage() {}
 
 func (x *SubscribeEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[24]
+	mi := &file_api_v1_agent_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1564,7 +1912,7 @@ func (x *SubscribeEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeEventsRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeEventsRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{24}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SubscribeEventsRequest) GetClientId() string {
@@ -1587,7 +1935,7 @@ type SystemEvent struct {
 
 func (x *SystemEvent) Reset() {
 	*x = SystemEvent{}
-	mi := &file_api_v1_agent_proto_msgTypes[25]
+	mi := &file_api_v1_agent_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1599,7 +1947,7 @@ func (x *SystemEvent) String() string {
 func (*SystemEvent) ProtoMessage() {}
 
 func (x *SystemEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[25]
+	mi := &file_api_v1_agent_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1612,7 +1960,7 @@ func (x *SystemEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SystemEvent.ProtoReflect.Descriptor instead.
 func (*SystemEvent) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{25}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SystemEvent) GetType() SystemEvent_EventType {
@@ -1662,7 +2010,7 @@ type JobStatus struct {
 
 func (x *JobStatus) Reset() {
 	*x = JobStatus{}
-	mi := &file_api_v1_agent_proto_msgTypes[26]
+	mi := &file_api_v1_agent_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1674,7 +2022,7 @@ func (x *JobStatus) String() string {
 func (*JobStatus) ProtoMessage() {}
 
 func (x *JobStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[26]
+	mi := &file_api_v1_agent_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1687,7 +2035,7 @@ func (x *JobStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobStatus.ProtoReflect.Descriptor instead.
 func (*JobStatus) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{26}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *JobStatus) GetId() string {
@@ -1726,7 +2074,7 @@ type GetActiveJobsRequest struct {
 
 func (x *GetActiveJobsRequest) Reset() {
 	*x = GetActiveJobsRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[27]
+	mi := &file_api_v1_agent_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1738,7 +2086,7 @@ func (x *GetActiveJobsRequest) String() string {
 func (*GetActiveJobsRequest) ProtoMessage() {}
 
 func (x *GetActiveJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[27]
+	mi := &file_api_v1_agent_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1751,7 +2099,7 @@ func (x *GetActiveJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActiveJobsRequest.ProtoReflect.Descriptor instead.
 func (*GetActiveJobsRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{27}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{34}
 }
 
 type GetActiveJobsResponse struct {
@@ -1763,7 +2111,7 @@ type GetActiveJobsResponse struct {
 
 func (x *GetActiveJobsResponse) Reset() {
 	*x = GetActiveJobsResponse{}
-	mi := &file_api_v1_agent_proto_msgTypes[28]
+	mi := &file_api_v1_agent_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1775,7 +2123,7 @@ func (x *GetActiveJobsResponse) String() string {
 func (*GetActiveJobsResponse) ProtoMessage() {}
 
 func (x *GetActiveJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[28]
+	mi := &file_api_v1_agent_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1788,7 +2136,7 @@ func (x *GetActiveJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActiveJobsResponse.ProtoReflect.Descriptor instead.
 func (*GetActiveJobsResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{28}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *GetActiveJobsResponse) GetJobs() []*JobStatus {
@@ -1807,7 +2155,7 @@ type ListHistoryRequest struct {
 
 func (x *ListHistoryRequest) Reset() {
 	*x = ListHistoryRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[29]
+	mi := &file_api_v1_agent_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1819,7 +2167,7 @@ func (x *ListHistoryRequest) String() string {
 func (*ListHistoryRequest) ProtoMessage() {}
 
 func (x *ListHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[29]
+	mi := &file_api_v1_agent_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1832,7 +2180,7 @@ func (x *ListHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListHistoryRequest.ProtoReflect.Descriptor instead.
 func (*ListHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{29}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ListHistoryRequest) GetLimit() int32 {
@@ -1851,7 +2199,7 @@ type ListHistoryResponse struct {
 
 func (x *ListHistoryResponse) Reset() {
 	*x = ListHistoryResponse{}
-	mi := &file_api_v1_agent_proto_msgTypes[30]
+	mi := &file_api_v1_agent_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1863,7 +2211,7 @@ func (x *ListHistoryResponse) String() string {
 func (*ListHistoryResponse) ProtoMessage() {}
 
 func (x *ListHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[30]
+	mi := &file_api_v1_agent_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1876,7 +2224,7 @@ func (x *ListHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListHistoryResponse.ProtoReflect.Descriptor instead.
 func (*ListHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{30}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ListHistoryResponse) GetConversations() []*ConversationSummary {
@@ -1899,7 +2247,7 @@ type ConversationSummary struct {
 
 func (x *ConversationSummary) Reset() {
 	*x = ConversationSummary{}
-	mi := &file_api_v1_agent_proto_msgTypes[31]
+	mi := &file_api_v1_agent_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1911,7 +2259,7 @@ func (x *ConversationSummary) String() string {
 func (*ConversationSummary) ProtoMessage() {}
 
 func (x *ConversationSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[31]
+	mi := &file_api_v1_agent_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1924,7 +2272,7 @@ func (x *ConversationSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationSummary.ProtoReflect.Descriptor instead.
 func (*ConversationSummary) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{31}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ConversationSummary) GetId() string {
@@ -1971,7 +2319,7 @@ type GetConversationRequest struct {
 
 func (x *GetConversationRequest) Reset() {
 	*x = GetConversationRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[32]
+	mi := &file_api_v1_agent_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1983,7 +2331,7 @@ func (x *GetConversationRequest) String() string {
 func (*GetConversationRequest) ProtoMessage() {}
 
 func (x *GetConversationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[32]
+	mi := &file_api_v1_agent_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1996,7 +2344,7 @@ func (x *GetConversationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConversationRequest.ProtoReflect.Descriptor instead.
 func (*GetConversationRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{32}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *GetConversationRequest) GetConversationId() string {
@@ -2015,7 +2363,7 @@ type GetConversationResponse struct {
 
 func (x *GetConversationResponse) Reset() {
 	*x = GetConversationResponse{}
-	mi := &file_api_v1_agent_proto_msgTypes[33]
+	mi := &file_api_v1_agent_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2027,7 +2375,7 @@ func (x *GetConversationResponse) String() string {
 func (*GetConversationResponse) ProtoMessage() {}
 
 func (x *GetConversationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[33]
+	mi := &file_api_v1_agent_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2040,7 +2388,7 @@ func (x *GetConversationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConversationResponse.ProtoReflect.Descriptor instead.
 func (*GetConversationResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{33}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GetConversationResponse) GetMessages() []*HistoryMessage {
@@ -2061,7 +2409,7 @@ type HistoryMessage struct {
 
 func (x *HistoryMessage) Reset() {
 	*x = HistoryMessage{}
-	mi := &file_api_v1_agent_proto_msgTypes[34]
+	mi := &file_api_v1_agent_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2073,7 +2421,7 @@ func (x *HistoryMessage) String() string {
 func (*HistoryMessage) ProtoMessage() {}
 
 func (x *HistoryMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[34]
+	mi := &file_api_v1_agent_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2086,7 +2434,7 @@ func (x *HistoryMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryMessage.ProtoReflect.Descriptor instead.
 func (*HistoryMessage) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{34}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *HistoryMessage) GetRole() string {
@@ -2118,7 +2466,7 @@ type GetSupportedProvidersRequest struct {
 
 func (x *GetSupportedProvidersRequest) Reset() {
 	*x = GetSupportedProvidersRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[35]
+	mi := &file_api_v1_agent_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2130,7 +2478,7 @@ func (x *GetSupportedProvidersRequest) String() string {
 func (*GetSupportedProvidersRequest) ProtoMessage() {}
 
 func (x *GetSupportedProvidersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[35]
+	mi := &file_api_v1_agent_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2143,7 +2491,7 @@ func (x *GetSupportedProvidersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSupportedProvidersRequest.ProtoReflect.Descriptor instead.
 func (*GetSupportedProvidersRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{35}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{42}
 }
 
 type GetSupportedProvidersResponse struct {
@@ -2155,7 +2503,7 @@ type GetSupportedProvidersResponse struct {
 
 func (x *GetSupportedProvidersResponse) Reset() {
 	*x = GetSupportedProvidersResponse{}
-	mi := &file_api_v1_agent_proto_msgTypes[36]
+	mi := &file_api_v1_agent_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2167,7 +2515,7 @@ func (x *GetSupportedProvidersResponse) String() string {
 func (*GetSupportedProvidersResponse) ProtoMessage() {}
 
 func (x *GetSupportedProvidersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[36]
+	mi := &file_api_v1_agent_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2180,7 +2528,7 @@ func (x *GetSupportedProvidersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSupportedProvidersResponse.ProtoReflect.Descriptor instead.
 func (*GetSupportedProvidersResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{36}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *GetSupportedProvidersResponse) GetProviders() []string {
@@ -2202,7 +2550,7 @@ type ConfigureProviderRequest struct {
 
 func (x *ConfigureProviderRequest) Reset() {
 	*x = ConfigureProviderRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[37]
+	mi := &file_api_v1_agent_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2214,7 +2562,7 @@ func (x *ConfigureProviderRequest) String() string {
 func (*ConfigureProviderRequest) ProtoMessage() {}
 
 func (x *ConfigureProviderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[37]
+	mi := &file_api_v1_agent_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2227,7 +2575,7 @@ func (x *ConfigureProviderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureProviderRequest.ProtoReflect.Descriptor instead.
 func (*ConfigureProviderRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{37}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ConfigureProviderRequest) GetName() string {
@@ -2268,7 +2616,7 @@ type ConfigureProviderResponse struct {
 
 func (x *ConfigureProviderResponse) Reset() {
 	*x = ConfigureProviderResponse{}
-	mi := &file_api_v1_agent_proto_msgTypes[38]
+	mi := &file_api_v1_agent_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2280,7 +2628,7 @@ func (x *ConfigureProviderResponse) String() string {
 func (*ConfigureProviderResponse) ProtoMessage() {}
 
 func (x *ConfigureProviderResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[38]
+	mi := &file_api_v1_agent_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2293,7 +2641,7 @@ func (x *ConfigureProviderResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureProviderResponse.ProtoReflect.Descriptor instead.
 func (*ConfigureProviderResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{38}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *ConfigureProviderResponse) GetProviderId() string {
@@ -2318,7 +2666,7 @@ type ListProvidersRequest struct {
 
 func (x *ListProvidersRequest) Reset() {
 	*x = ListProvidersRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[39]
+	mi := &file_api_v1_agent_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2330,7 +2678,7 @@ func (x *ListProvidersRequest) String() string {
 func (*ListProvidersRequest) ProtoMessage() {}
 
 func (x *ListProvidersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[39]
+	mi := &file_api_v1_agent_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2343,7 +2691,7 @@ func (x *ListProvidersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProvidersRequest.ProtoReflect.Descriptor instead.
 func (*ListProvidersRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{39}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{46}
 }
 
 type ListProvidersResponse struct {
@@ -2355,7 +2703,7 @@ type ListProvidersResponse struct {
 
 func (x *ListProvidersResponse) Reset() {
 	*x = ListProvidersResponse{}
-	mi := &file_api_v1_agent_proto_msgTypes[40]
+	mi := &file_api_v1_agent_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2367,7 +2715,7 @@ func (x *ListProvidersResponse) String() string {
 func (*ListProvidersResponse) ProtoMessage() {}
 
 func (x *ListProvidersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[40]
+	mi := &file_api_v1_agent_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2380,7 +2728,7 @@ func (x *ListProvidersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProvidersResponse.ProtoReflect.Descriptor instead.
 func (*ListProvidersResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{40}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ListProvidersResponse) GetProviders() []*ProviderInfo {
@@ -2402,7 +2750,7 @@ type ProviderInfo struct {
 
 func (x *ProviderInfo) Reset() {
 	*x = ProviderInfo{}
-	mi := &file_api_v1_agent_proto_msgTypes[41]
+	mi := &file_api_v1_agent_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2414,7 +2762,7 @@ func (x *ProviderInfo) String() string {
 func (*ProviderInfo) ProtoMessage() {}
 
 func (x *ProviderInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[41]
+	mi := &file_api_v1_agent_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2427,7 +2775,7 @@ func (x *ProviderInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderInfo.ProtoReflect.Descriptor instead.
 func (*ProviderInfo) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{41}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ProviderInfo) GetId() string {
@@ -2467,7 +2815,7 @@ type DiscoverModelsRequest struct {
 
 func (x *DiscoverModelsRequest) Reset() {
 	*x = DiscoverModelsRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[42]
+	mi := &file_api_v1_agent_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2479,7 +2827,7 @@ func (x *DiscoverModelsRequest) String() string {
 func (*DiscoverModelsRequest) ProtoMessage() {}
 
 func (x *DiscoverModelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[42]
+	mi := &file_api_v1_agent_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2492,7 +2840,7 @@ func (x *DiscoverModelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiscoverModelsRequest.ProtoReflect.Descriptor instead.
 func (*DiscoverModelsRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{42}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *DiscoverModelsRequest) GetProviderId() string {
@@ -2511,7 +2859,7 @@ type DiscoverModelsResponse struct {
 
 func (x *DiscoverModelsResponse) Reset() {
 	*x = DiscoverModelsResponse{}
-	mi := &file_api_v1_agent_proto_msgTypes[43]
+	mi := &file_api_v1_agent_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2523,7 +2871,7 @@ func (x *DiscoverModelsResponse) String() string {
 func (*DiscoverModelsResponse) ProtoMessage() {}
 
 func (x *DiscoverModelsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[43]
+	mi := &file_api_v1_agent_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2536,7 +2884,7 @@ func (x *DiscoverModelsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiscoverModelsResponse.ProtoReflect.Descriptor instead.
 func (*DiscoverModelsResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{43}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *DiscoverModelsResponse) GetModels() []string {
@@ -2558,7 +2906,7 @@ type RegisterModelRequest struct {
 
 func (x *RegisterModelRequest) Reset() {
 	*x = RegisterModelRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[44]
+	mi := &file_api_v1_agent_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2570,7 +2918,7 @@ func (x *RegisterModelRequest) String() string {
 func (*RegisterModelRequest) ProtoMessage() {}
 
 func (x *RegisterModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[44]
+	mi := &file_api_v1_agent_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2583,7 +2931,7 @@ func (x *RegisterModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterModelRequest.ProtoReflect.Descriptor instead.
 func (*RegisterModelRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{44}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *RegisterModelRequest) GetProviderId() string {
@@ -2623,7 +2971,7 @@ type RegisterModelResponse struct {
 
 func (x *RegisterModelResponse) Reset() {
 	*x = RegisterModelResponse{}
-	mi := &file_api_v1_agent_proto_msgTypes[45]
+	mi := &file_api_v1_agent_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2635,7 +2983,7 @@ func (x *RegisterModelResponse) String() string {
 func (*RegisterModelResponse) ProtoMessage() {}
 
 func (x *RegisterModelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[45]
+	mi := &file_api_v1_agent_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2648,7 +2996,7 @@ func (x *RegisterModelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterModelResponse.ProtoReflect.Descriptor instead.
 func (*RegisterModelResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{45}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *RegisterModelResponse) GetModelId() string {
@@ -2667,7 +3015,7 @@ type ListModelsRequest struct {
 
 func (x *ListModelsRequest) Reset() {
 	*x = ListModelsRequest{}
-	mi := &file_api_v1_agent_proto_msgTypes[46]
+	mi := &file_api_v1_agent_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2679,7 +3027,7 @@ func (x *ListModelsRequest) String() string {
 func (*ListModelsRequest) ProtoMessage() {}
 
 func (x *ListModelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[46]
+	mi := &file_api_v1_agent_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2692,7 +3040,7 @@ func (x *ListModelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListModelsRequest.ProtoReflect.Descriptor instead.
 func (*ListModelsRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{46}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ListModelsRequest) GetProviderId() string {
@@ -2711,7 +3059,7 @@ type ListModelsResponse struct {
 
 func (x *ListModelsResponse) Reset() {
 	*x = ListModelsResponse{}
-	mi := &file_api_v1_agent_proto_msgTypes[47]
+	mi := &file_api_v1_agent_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2723,7 +3071,7 @@ func (x *ListModelsResponse) String() string {
 func (*ListModelsResponse) ProtoMessage() {}
 
 func (x *ListModelsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[47]
+	mi := &file_api_v1_agent_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2736,7 +3084,7 @@ func (x *ListModelsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListModelsResponse.ProtoReflect.Descriptor instead.
 func (*ListModelsResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{47}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ListModelsResponse) GetModels() []*ModelInfo {
@@ -2760,7 +3108,7 @@ type ModelInfo struct {
 
 func (x *ModelInfo) Reset() {
 	*x = ModelInfo{}
-	mi := &file_api_v1_agent_proto_msgTypes[48]
+	mi := &file_api_v1_agent_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2772,7 +3120,7 @@ func (x *ModelInfo) String() string {
 func (*ModelInfo) ProtoMessage() {}
 
 func (x *ModelInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_agent_proto_msgTypes[48]
+	mi := &file_api_v1_agent_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2785,7 +3133,7 @@ func (x *ModelInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelInfo.ProtoReflect.Descriptor instead.
 func (*ModelInfo) Descriptor() ([]byte, []int) {
-	return file_api_v1_agent_proto_rawDescGZIP(), []int{48}
+	return file_api_v1_agent_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ModelInfo) GetId() string {
@@ -2916,7 +3264,27 @@ const file_api_v1_agent_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"H\n" +
 	"\x12TrustSkillResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xd1\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"B\n" +
+	"\x14GenerateTokenRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06scopes\x18\x02 \x01(\tR\x06scopes\"=\n" +
+	"\x15GenerateTokenResponse\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12\x0e\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\"$\n" +
+	"\x12RevokeTokenRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"I\n" +
+	"\x13RevokeTokenResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x13\n" +
+	"\x11ListTokensRequest\";\n" +
+	"\x12ListTokensResponse\x12%\n" +
+	"\x06tokens\x18\x01 \x03(\v2\r.v1.TokenInfoR\x06tokens\"f\n" +
+	"\tTokenInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06scopes\x18\x03 \x01(\tR\x06scopes\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x04 \x01(\tR\tcreatedAt\"\xd1\x01\n" +
 	"\x0eExecuteRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12#\n" +
@@ -3034,7 +3402,7 @@ const file_api_v1_agent_proto_rawDesc = "" +
 	"\x05alias\x18\x03 \x01(\tR\x05alias\x12\x14\n" +
 	"\x05model\x18\x04 \x01(\tR\x05model\x12\x1b\n" +
 	"\tis_active\x18\x05 \x01(\bR\bisActive\x12\x1a\n" +
-	"\bpriority\x18\x06 \x01(\x05R\bpriority2\xcb\v\n" +
+	"\bpriority\x18\x06 \x01(\x05R\bpriority2\x8e\r\n" +
 	"\fAgentService\x124\n" +
 	"\aExecute\x12\x12.v1.ExecuteRequest\x1a\x13.v1.ExecuteResponse0\x01\x122\n" +
 	"\aGetInfo\x12\x12.v1.GetInfoRequest\x1a\x13.v1.GetInfoResponse\x12>\n" +
@@ -3060,7 +3428,11 @@ const file_api_v1_agent_proto_rawDesc = "" +
 	"\fInspectSkill\x12\x17.v1.InspectSkillRequest\x1a\x18.v1.InspectSkillResponse\x12>\n" +
 	"\vDeleteSkill\x12\x16.v1.DeleteSkillRequest\x1a\x17.v1.DeleteSkillResponse\x12;\n" +
 	"\n" +
-	"TrustSkill\x12\x15.v1.TrustSkillRequest\x1a\x16.v1.TrustSkillResponseB)Z'github.com/patagonicrune/vraxter/api/v1b\x06proto3"
+	"TrustSkill\x12\x15.v1.TrustSkillRequest\x1a\x16.v1.TrustSkillResponse\x12D\n" +
+	"\rGenerateToken\x12\x18.v1.GenerateTokenRequest\x1a\x19.v1.GenerateTokenResponse\x12>\n" +
+	"\vRevokeToken\x12\x16.v1.RevokeTokenRequest\x1a\x17.v1.RevokeTokenResponse\x12;\n" +
+	"\n" +
+	"ListTokens\x12\x15.v1.ListTokensRequest\x1a\x16.v1.ListTokensResponseB)Z'github.com/patagonicrune/vraxter/api/v1b\x06proto3"
 
 var (
 	file_api_v1_agent_proto_rawDescOnce sync.Once
@@ -3075,7 +3447,7 @@ func file_api_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_api_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_api_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 49)
+var file_api_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
 var file_api_v1_agent_proto_goTypes = []any{
 	(ExecuteResponse_Type)(0),             // 0: v1.ExecuteResponse.Type
 	(SystemEvent_EventType)(0),            // 1: v1.SystemEvent.EventType
@@ -3101,93 +3473,107 @@ var file_api_v1_agent_proto_goTypes = []any{
 	(*DeleteSkillResponse)(nil),           // 21: v1.DeleteSkillResponse
 	(*TrustSkillRequest)(nil),             // 22: v1.TrustSkillRequest
 	(*TrustSkillResponse)(nil),            // 23: v1.TrustSkillResponse
-	(*ExecuteRequest)(nil),                // 24: v1.ExecuteRequest
-	(*ExecuteResponse)(nil),               // 25: v1.ExecuteResponse
-	(*SubscribeEventsRequest)(nil),        // 26: v1.SubscribeEventsRequest
-	(*SystemEvent)(nil),                   // 27: v1.SystemEvent
-	(*JobStatus)(nil),                     // 28: v1.JobStatus
-	(*GetActiveJobsRequest)(nil),          // 29: v1.GetActiveJobsRequest
-	(*GetActiveJobsResponse)(nil),         // 30: v1.GetActiveJobsResponse
-	(*ListHistoryRequest)(nil),            // 31: v1.ListHistoryRequest
-	(*ListHistoryResponse)(nil),           // 32: v1.ListHistoryResponse
-	(*ConversationSummary)(nil),           // 33: v1.ConversationSummary
-	(*GetConversationRequest)(nil),        // 34: v1.GetConversationRequest
-	(*GetConversationResponse)(nil),       // 35: v1.GetConversationResponse
-	(*HistoryMessage)(nil),                // 36: v1.HistoryMessage
-	(*GetSupportedProvidersRequest)(nil),  // 37: v1.GetSupportedProvidersRequest
-	(*GetSupportedProvidersResponse)(nil), // 38: v1.GetSupportedProvidersResponse
-	(*ConfigureProviderRequest)(nil),      // 39: v1.ConfigureProviderRequest
-	(*ConfigureProviderResponse)(nil),     // 40: v1.ConfigureProviderResponse
-	(*ListProvidersRequest)(nil),          // 41: v1.ListProvidersRequest
-	(*ListProvidersResponse)(nil),         // 42: v1.ListProvidersResponse
-	(*ProviderInfo)(nil),                  // 43: v1.ProviderInfo
-	(*DiscoverModelsRequest)(nil),         // 44: v1.DiscoverModelsRequest
-	(*DiscoverModelsResponse)(nil),        // 45: v1.DiscoverModelsResponse
-	(*RegisterModelRequest)(nil),          // 46: v1.RegisterModelRequest
-	(*RegisterModelResponse)(nil),         // 47: v1.RegisterModelResponse
-	(*ListModelsRequest)(nil),             // 48: v1.ListModelsRequest
-	(*ListModelsResponse)(nil),            // 49: v1.ListModelsResponse
-	(*ModelInfo)(nil),                     // 50: v1.ModelInfo
+	(*GenerateTokenRequest)(nil),          // 24: v1.GenerateTokenRequest
+	(*GenerateTokenResponse)(nil),         // 25: v1.GenerateTokenResponse
+	(*RevokeTokenRequest)(nil),            // 26: v1.RevokeTokenRequest
+	(*RevokeTokenResponse)(nil),           // 27: v1.RevokeTokenResponse
+	(*ListTokensRequest)(nil),             // 28: v1.ListTokensRequest
+	(*ListTokensResponse)(nil),            // 29: v1.ListTokensResponse
+	(*TokenInfo)(nil),                     // 30: v1.TokenInfo
+	(*ExecuteRequest)(nil),                // 31: v1.ExecuteRequest
+	(*ExecuteResponse)(nil),               // 32: v1.ExecuteResponse
+	(*SubscribeEventsRequest)(nil),        // 33: v1.SubscribeEventsRequest
+	(*SystemEvent)(nil),                   // 34: v1.SystemEvent
+	(*JobStatus)(nil),                     // 35: v1.JobStatus
+	(*GetActiveJobsRequest)(nil),          // 36: v1.GetActiveJobsRequest
+	(*GetActiveJobsResponse)(nil),         // 37: v1.GetActiveJobsResponse
+	(*ListHistoryRequest)(nil),            // 38: v1.ListHistoryRequest
+	(*ListHistoryResponse)(nil),           // 39: v1.ListHistoryResponse
+	(*ConversationSummary)(nil),           // 40: v1.ConversationSummary
+	(*GetConversationRequest)(nil),        // 41: v1.GetConversationRequest
+	(*GetConversationResponse)(nil),       // 42: v1.GetConversationResponse
+	(*HistoryMessage)(nil),                // 43: v1.HistoryMessage
+	(*GetSupportedProvidersRequest)(nil),  // 44: v1.GetSupportedProvidersRequest
+	(*GetSupportedProvidersResponse)(nil), // 45: v1.GetSupportedProvidersResponse
+	(*ConfigureProviderRequest)(nil),      // 46: v1.ConfigureProviderRequest
+	(*ConfigureProviderResponse)(nil),     // 47: v1.ConfigureProviderResponse
+	(*ListProvidersRequest)(nil),          // 48: v1.ListProvidersRequest
+	(*ListProvidersResponse)(nil),         // 49: v1.ListProvidersResponse
+	(*ProviderInfo)(nil),                  // 50: v1.ProviderInfo
+	(*DiscoverModelsRequest)(nil),         // 51: v1.DiscoverModelsRequest
+	(*DiscoverModelsResponse)(nil),        // 52: v1.DiscoverModelsResponse
+	(*RegisterModelRequest)(nil),          // 53: v1.RegisterModelRequest
+	(*RegisterModelResponse)(nil),         // 54: v1.RegisterModelResponse
+	(*ListModelsRequest)(nil),             // 55: v1.ListModelsRequest
+	(*ListModelsResponse)(nil),            // 56: v1.ListModelsResponse
+	(*ModelInfo)(nil),                     // 57: v1.ModelInfo
 }
 var file_api_v1_agent_proto_depIdxs = []int32{
 	7,  // 0: v1.ListSkillsResponse.skills:type_name -> v1.SkillInfo
 	7,  // 1: v1.GetSkillInfoResponse.skill:type_name -> v1.SkillInfo
-	0,  // 2: v1.ExecuteResponse.type:type_name -> v1.ExecuteResponse.Type
-	1,  // 3: v1.SystemEvent.type:type_name -> v1.SystemEvent.EventType
-	28, // 4: v1.GetActiveJobsResponse.jobs:type_name -> v1.JobStatus
-	33, // 5: v1.ListHistoryResponse.conversations:type_name -> v1.ConversationSummary
-	36, // 6: v1.GetConversationResponse.messages:type_name -> v1.HistoryMessage
-	43, // 7: v1.ListProvidersResponse.providers:type_name -> v1.ProviderInfo
-	50, // 8: v1.ListModelsResponse.models:type_name -> v1.ModelInfo
-	24, // 9: v1.AgentService.Execute:input_type -> v1.ExecuteRequest
-	2,  // 10: v1.AgentService.GetInfo:input_type -> v1.GetInfoRequest
-	31, // 11: v1.AgentService.ListHistory:input_type -> v1.ListHistoryRequest
-	34, // 12: v1.AgentService.GetConversation:input_type -> v1.GetConversationRequest
-	37, // 13: v1.AgentService.GetSupportedProviders:input_type -> v1.GetSupportedProvidersRequest
-	39, // 14: v1.AgentService.ConfigureProvider:input_type -> v1.ConfigureProviderRequest
-	41, // 15: v1.AgentService.ListProviders:input_type -> v1.ListProvidersRequest
-	44, // 16: v1.AgentService.DiscoverModels:input_type -> v1.DiscoverModelsRequest
-	46, // 17: v1.AgentService.RegisterModel:input_type -> v1.RegisterModelRequest
-	48, // 18: v1.AgentService.ListModels:input_type -> v1.ListModelsRequest
-	26, // 19: v1.AgentService.SubscribeEvents:input_type -> v1.SubscribeEventsRequest
-	29, // 20: v1.AgentService.GetActiveJobs:input_type -> v1.GetActiveJobsRequest
-	4,  // 21: v1.AgentService.GetConfig:input_type -> v1.GetConfigRequest
-	5,  // 22: v1.AgentService.UpdateConfig:input_type -> v1.UpdateConfigRequest
-	8,  // 23: v1.AgentService.ListSkills:input_type -> v1.ListSkillsRequest
-	10, // 24: v1.AgentService.GetSkillInfo:input_type -> v1.GetSkillInfoRequest
-	12, // 25: v1.AgentService.InstallSkill:input_type -> v1.InstallSkillRequest
-	14, // 26: v1.AgentService.DownloadSkill:input_type -> v1.DownloadSkillRequest
-	16, // 27: v1.AgentService.InjectSkill:input_type -> v1.InjectSkillRequest
-	18, // 28: v1.AgentService.InspectSkill:input_type -> v1.InspectSkillRequest
-	20, // 29: v1.AgentService.DeleteSkill:input_type -> v1.DeleteSkillRequest
-	22, // 30: v1.AgentService.TrustSkill:input_type -> v1.TrustSkillRequest
-	25, // 31: v1.AgentService.Execute:output_type -> v1.ExecuteResponse
-	3,  // 32: v1.AgentService.GetInfo:output_type -> v1.GetInfoResponse
-	32, // 33: v1.AgentService.ListHistory:output_type -> v1.ListHistoryResponse
-	35, // 34: v1.AgentService.GetConversation:output_type -> v1.GetConversationResponse
-	38, // 35: v1.AgentService.GetSupportedProviders:output_type -> v1.GetSupportedProvidersResponse
-	40, // 36: v1.AgentService.ConfigureProvider:output_type -> v1.ConfigureProviderResponse
-	42, // 37: v1.AgentService.ListProviders:output_type -> v1.ListProvidersResponse
-	45, // 38: v1.AgentService.DiscoverModels:output_type -> v1.DiscoverModelsResponse
-	47, // 39: v1.AgentService.RegisterModel:output_type -> v1.RegisterModelResponse
-	49, // 40: v1.AgentService.ListModels:output_type -> v1.ListModelsResponse
-	27, // 41: v1.AgentService.SubscribeEvents:output_type -> v1.SystemEvent
-	30, // 42: v1.AgentService.GetActiveJobs:output_type -> v1.GetActiveJobsResponse
-	6,  // 43: v1.AgentService.GetConfig:output_type -> v1.ConfigResponse
-	6,  // 44: v1.AgentService.UpdateConfig:output_type -> v1.ConfigResponse
-	9,  // 45: v1.AgentService.ListSkills:output_type -> v1.ListSkillsResponse
-	11, // 46: v1.AgentService.GetSkillInfo:output_type -> v1.GetSkillInfoResponse
-	13, // 47: v1.AgentService.InstallSkill:output_type -> v1.InstallSkillResponse
-	15, // 48: v1.AgentService.DownloadSkill:output_type -> v1.DownloadSkillResponse
-	17, // 49: v1.AgentService.InjectSkill:output_type -> v1.InjectSkillResponse
-	19, // 50: v1.AgentService.InspectSkill:output_type -> v1.InspectSkillResponse
-	21, // 51: v1.AgentService.DeleteSkill:output_type -> v1.DeleteSkillResponse
-	23, // 52: v1.AgentService.TrustSkill:output_type -> v1.TrustSkillResponse
-	31, // [31:53] is the sub-list for method output_type
-	9,  // [9:31] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	30, // 2: v1.ListTokensResponse.tokens:type_name -> v1.TokenInfo
+	0,  // 3: v1.ExecuteResponse.type:type_name -> v1.ExecuteResponse.Type
+	1,  // 4: v1.SystemEvent.type:type_name -> v1.SystemEvent.EventType
+	35, // 5: v1.GetActiveJobsResponse.jobs:type_name -> v1.JobStatus
+	40, // 6: v1.ListHistoryResponse.conversations:type_name -> v1.ConversationSummary
+	43, // 7: v1.GetConversationResponse.messages:type_name -> v1.HistoryMessage
+	50, // 8: v1.ListProvidersResponse.providers:type_name -> v1.ProviderInfo
+	57, // 9: v1.ListModelsResponse.models:type_name -> v1.ModelInfo
+	31, // 10: v1.AgentService.Execute:input_type -> v1.ExecuteRequest
+	2,  // 11: v1.AgentService.GetInfo:input_type -> v1.GetInfoRequest
+	38, // 12: v1.AgentService.ListHistory:input_type -> v1.ListHistoryRequest
+	41, // 13: v1.AgentService.GetConversation:input_type -> v1.GetConversationRequest
+	44, // 14: v1.AgentService.GetSupportedProviders:input_type -> v1.GetSupportedProvidersRequest
+	46, // 15: v1.AgentService.ConfigureProvider:input_type -> v1.ConfigureProviderRequest
+	48, // 16: v1.AgentService.ListProviders:input_type -> v1.ListProvidersRequest
+	51, // 17: v1.AgentService.DiscoverModels:input_type -> v1.DiscoverModelsRequest
+	53, // 18: v1.AgentService.RegisterModel:input_type -> v1.RegisterModelRequest
+	55, // 19: v1.AgentService.ListModels:input_type -> v1.ListModelsRequest
+	33, // 20: v1.AgentService.SubscribeEvents:input_type -> v1.SubscribeEventsRequest
+	36, // 21: v1.AgentService.GetActiveJobs:input_type -> v1.GetActiveJobsRequest
+	4,  // 22: v1.AgentService.GetConfig:input_type -> v1.GetConfigRequest
+	5,  // 23: v1.AgentService.UpdateConfig:input_type -> v1.UpdateConfigRequest
+	8,  // 24: v1.AgentService.ListSkills:input_type -> v1.ListSkillsRequest
+	10, // 25: v1.AgentService.GetSkillInfo:input_type -> v1.GetSkillInfoRequest
+	12, // 26: v1.AgentService.InstallSkill:input_type -> v1.InstallSkillRequest
+	14, // 27: v1.AgentService.DownloadSkill:input_type -> v1.DownloadSkillRequest
+	16, // 28: v1.AgentService.InjectSkill:input_type -> v1.InjectSkillRequest
+	18, // 29: v1.AgentService.InspectSkill:input_type -> v1.InspectSkillRequest
+	20, // 30: v1.AgentService.DeleteSkill:input_type -> v1.DeleteSkillRequest
+	22, // 31: v1.AgentService.TrustSkill:input_type -> v1.TrustSkillRequest
+	24, // 32: v1.AgentService.GenerateToken:input_type -> v1.GenerateTokenRequest
+	26, // 33: v1.AgentService.RevokeToken:input_type -> v1.RevokeTokenRequest
+	28, // 34: v1.AgentService.ListTokens:input_type -> v1.ListTokensRequest
+	32, // 35: v1.AgentService.Execute:output_type -> v1.ExecuteResponse
+	3,  // 36: v1.AgentService.GetInfo:output_type -> v1.GetInfoResponse
+	39, // 37: v1.AgentService.ListHistory:output_type -> v1.ListHistoryResponse
+	42, // 38: v1.AgentService.GetConversation:output_type -> v1.GetConversationResponse
+	45, // 39: v1.AgentService.GetSupportedProviders:output_type -> v1.GetSupportedProvidersResponse
+	47, // 40: v1.AgentService.ConfigureProvider:output_type -> v1.ConfigureProviderResponse
+	49, // 41: v1.AgentService.ListProviders:output_type -> v1.ListProvidersResponse
+	52, // 42: v1.AgentService.DiscoverModels:output_type -> v1.DiscoverModelsResponse
+	54, // 43: v1.AgentService.RegisterModel:output_type -> v1.RegisterModelResponse
+	56, // 44: v1.AgentService.ListModels:output_type -> v1.ListModelsResponse
+	34, // 45: v1.AgentService.SubscribeEvents:output_type -> v1.SystemEvent
+	37, // 46: v1.AgentService.GetActiveJobs:output_type -> v1.GetActiveJobsResponse
+	6,  // 47: v1.AgentService.GetConfig:output_type -> v1.ConfigResponse
+	6,  // 48: v1.AgentService.UpdateConfig:output_type -> v1.ConfigResponse
+	9,  // 49: v1.AgentService.ListSkills:output_type -> v1.ListSkillsResponse
+	11, // 50: v1.AgentService.GetSkillInfo:output_type -> v1.GetSkillInfoResponse
+	13, // 51: v1.AgentService.InstallSkill:output_type -> v1.InstallSkillResponse
+	15, // 52: v1.AgentService.DownloadSkill:output_type -> v1.DownloadSkillResponse
+	17, // 53: v1.AgentService.InjectSkill:output_type -> v1.InjectSkillResponse
+	19, // 54: v1.AgentService.InspectSkill:output_type -> v1.InspectSkillResponse
+	21, // 55: v1.AgentService.DeleteSkill:output_type -> v1.DeleteSkillResponse
+	23, // 56: v1.AgentService.TrustSkill:output_type -> v1.TrustSkillResponse
+	25, // 57: v1.AgentService.GenerateToken:output_type -> v1.GenerateTokenResponse
+	27, // 58: v1.AgentService.RevokeToken:output_type -> v1.RevokeTokenResponse
+	29, // 59: v1.AgentService.ListTokens:output_type -> v1.ListTokensResponse
+	35, // [35:60] is the sub-list for method output_type
+	10, // [10:35] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_api_v1_agent_proto_init() }
@@ -3202,7 +3588,7 @@ func file_api_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_v1_agent_proto_rawDesc), len(file_api_v1_agent_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   49,
+			NumMessages:   56,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

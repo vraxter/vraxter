@@ -41,9 +41,14 @@ func ParseAndLookup(urlStr string) ([]net.IP, string, error) {
 // IsAllowedNetwork parses a URL, resolves its IPs, and verifies if it is allowed
 // under the strict_local policy (must be a private/loopback IP OR explicitly whitelisted).
 func IsAllowedNetwork(urlStr string, whitelist []string) (bool, error) {
-	ips, host, err := ParseAndLookup(urlStr)
+	u, err := url.Parse(urlStr)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("invalid URL format: %w", err)
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		host = urlStr // Fallback if no scheme was provided
 	}
 
 	// Fast path: Check if the exact hostname or URL is whitelisted
@@ -51,6 +56,11 @@ func IsAllowedNetwork(urlStr string, whitelist []string) (bool, error) {
 		if host == w || urlStr == w {
 			return true, nil
 		}
+	}
+
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return false, fmt.Errorf("DNS resolution failed for host '%s': %w", host, err)
 	}
 
 	// Verify all resolved IPs

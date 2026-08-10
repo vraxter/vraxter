@@ -178,6 +178,14 @@ func (s *Store) initSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_embeddings_conv ON embeddings (conversation_id);
 
+	CREATE TABLE IF NOT EXISTS api_keys (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		key_hash TEXT UNIQUE NOT NULL,
+		scopes TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
 	`
 	_, err := s.Conn.Exec(schema)
 	if err != nil {

@@ -41,6 +41,9 @@ const (
 	AgentService_InspectSkill_FullMethodName          = "/v1.AgentService/InspectSkill"
 	AgentService_DeleteSkill_FullMethodName           = "/v1.AgentService/DeleteSkill"
 	AgentService_TrustSkill_FullMethodName            = "/v1.AgentService/TrustSkill"
+	AgentService_GenerateToken_FullMethodName         = "/v1.AgentService/GenerateToken"
+	AgentService_RevokeToken_FullMethodName           = "/v1.AgentService/RevokeToken"
+	AgentService_ListTokens_FullMethodName            = "/v1.AgentService/ListTokens"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -86,6 +89,10 @@ type AgentServiceClient interface {
 	InspectSkill(ctx context.Context, in *InspectSkillRequest, opts ...grpc.CallOption) (*InspectSkillResponse, error)
 	DeleteSkill(ctx context.Context, in *DeleteSkillRequest, opts ...grpc.CallOption) (*DeleteSkillResponse, error)
 	TrustSkill(ctx context.Context, in *TrustSkillRequest, opts ...grpc.CallOption) (*TrustSkillResponse, error)
+	// Auth & Tokens
+	GenerateToken(ctx context.Context, in *GenerateTokenRequest, opts ...grpc.CallOption) (*GenerateTokenResponse, error)
+	RevokeToken(ctx context.Context, in *RevokeTokenRequest, opts ...grpc.CallOption) (*RevokeTokenResponse, error)
+	ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error)
 }
 
 type agentServiceClient struct {
@@ -334,6 +341,36 @@ func (c *agentServiceClient) TrustSkill(ctx context.Context, in *TrustSkillReque
 	return out, nil
 }
 
+func (c *agentServiceClient) GenerateToken(ctx context.Context, in *GenerateTokenRequest, opts ...grpc.CallOption) (*GenerateTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GenerateTokenResponse)
+	err := c.cc.Invoke(ctx, AgentService_GenerateToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) RevokeToken(ctx context.Context, in *RevokeTokenRequest, opts ...grpc.CallOption) (*RevokeTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeTokenResponse)
+	err := c.cc.Invoke(ctx, AgentService_RevokeToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTokensResponse)
+	err := c.cc.Invoke(ctx, AgentService_ListTokens_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -377,6 +414,10 @@ type AgentServiceServer interface {
 	InspectSkill(context.Context, *InspectSkillRequest) (*InspectSkillResponse, error)
 	DeleteSkill(context.Context, *DeleteSkillRequest) (*DeleteSkillResponse, error)
 	TrustSkill(context.Context, *TrustSkillRequest) (*TrustSkillResponse, error)
+	// Auth & Tokens
+	GenerateToken(context.Context, *GenerateTokenRequest) (*GenerateTokenResponse, error)
+	RevokeToken(context.Context, *RevokeTokenRequest) (*RevokeTokenResponse, error)
+	ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -452,6 +493,15 @@ func (UnimplementedAgentServiceServer) DeleteSkill(context.Context, *DeleteSkill
 }
 func (UnimplementedAgentServiceServer) TrustSkill(context.Context, *TrustSkillRequest) (*TrustSkillResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TrustSkill not implemented")
+}
+func (UnimplementedAgentServiceServer) GenerateToken(context.Context, *GenerateTokenRequest) (*GenerateTokenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GenerateToken not implemented")
+}
+func (UnimplementedAgentServiceServer) RevokeToken(context.Context, *RevokeTokenRequest) (*RevokeTokenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeToken not implemented")
+}
+func (UnimplementedAgentServiceServer) ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTokens not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -856,6 +906,60 @@ func _AgentService_TrustSkill_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_GenerateToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GenerateTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).GenerateToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_GenerateToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).GenerateToken(ctx, req.(*GenerateTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_RevokeToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).RevokeToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_RevokeToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).RevokeToken(ctx, req.(*RevokeTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_ListTokens_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTokensRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ListTokens(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ListTokens_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ListTokens(ctx, req.(*ListTokensRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -942,6 +1046,18 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TrustSkill",
 			Handler:    _AgentService_TrustSkill_Handler,
+		},
+		{
+			MethodName: "GenerateToken",
+			Handler:    _AgentService_GenerateToken_Handler,
+		},
+		{
+			MethodName: "RevokeToken",
+			Handler:    _AgentService_RevokeToken_Handler,
+		},
+		{
+			MethodName: "ListTokens",
+			Handler:    _AgentService_ListTokens_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

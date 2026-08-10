@@ -137,3 +137,15 @@ func (c *ManagementClient) DeleteSkill(ctx context.Context, req *v1.DeleteSkillR
 func (c *ManagementClient) TrustSkill(ctx context.Context, req *v1.TrustSkillRequest) (*v1.TrustSkillResponse, error) {
 	return c.api.TrustSkill(ctx, req)
 }
+
+func (c *ManagementClient) GenerateToken(ctx context.Context, req *v1.GenerateTokenRequest) (*v1.GenerateTokenResponse, error) {
+	return c.api.GenerateToken(ctx, req)
+}
+
+func (c *ManagementClient) RevokeToken(ctx context.Context, req *v1.RevokeTokenRequest) (*v1.RevokeTokenResponse, error) {
+	return c.api.RevokeToken(ctx, req)
+}
+
+func (c *ManagementClient) ListTokens(ctx context.Context, req *v1.ListTokensRequest) (*v1.ListTokensResponse, error) {
+	return c.api.ListTokens(ctx, req)
+}

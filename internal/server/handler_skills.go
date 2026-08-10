@@ -9,6 +9,9 @@ import (
 )
 
 func (h *AgentHandler) ListSkills(ctx context.Context, req *v1.ListSkillsRequest) (*v1.ListSkillsResponse, error) {
+	if err := EnforceScope(ctx, "skills:read"); err != nil {
+		return nil, err
+	}
 	skills, err := h.skillService.ListSkills()
 	if err != nil {
 		return nil, err
@@ -35,6 +38,9 @@ func (h *AgentHandler) ListSkills(ctx context.Context, req *v1.ListSkillsRequest
 }
 
 func (h *AgentHandler) GetSkillInfo(ctx context.Context, req *v1.GetSkillInfoRequest) (*v1.GetSkillInfoResponse, error) {
+	if err := EnforceScope(ctx, "skills:read"); err != nil {
+		return nil, err
+	}
 	s, err := h.skillService.GetSkill(req.Id)
 	if err != nil {
 		return nil, err
@@ -58,6 +64,9 @@ func (h *AgentHandler) GetSkillInfo(ctx context.Context, req *v1.GetSkillInfoReq
 }
 
 func (h *AgentHandler) InstallSkill(ctx context.Context, req *v1.InstallSkillRequest) (*v1.InstallSkillResponse, error) {
+	if err := EnforceScope(ctx, "skills:write"); err != nil {
+		return nil, err
+	}
 	if h.config.PrivacyPolicy == "strict_local" {
 		return &v1.InstallSkillResponse{
 			Success: false,
@@ -68,6 +77,9 @@ func (h *AgentHandler) InstallSkill(ctx context.Context, req *v1.InstallSkillReq
 }
 
 func (h *AgentHandler) DownloadSkill(ctx context.Context, req *v1.DownloadSkillRequest) (*v1.DownloadSkillResponse, error) {
+	if err := EnforceScope(ctx, "skills:write"); err != nil {
+		return nil, err
+	}
 	if h.config.PrivacyPolicy == "strict_local" {
 		return &v1.DownloadSkillResponse{
 			Success: false,
@@ -78,6 +90,9 @@ func (h *AgentHandler) DownloadSkill(ctx context.Context, req *v1.DownloadSkillR
 }
 
 func (h *AgentHandler) InjectSkill(ctx context.Context, req *v1.InjectSkillRequest) (*v1.InjectSkillResponse, error) {
+	if err := EnforceScope(ctx, "skills:write"); err != nil {
+		return nil, err
+	}
 	err := h.skillService.RegisterFromWASM(req.FilePath)
 	if err != nil {
 		return &v1.InjectSkillResponse{Success: false, Message: err.Error()}, nil
@@ -86,6 +101,9 @@ func (h *AgentHandler) InjectSkill(ctx context.Context, req *v1.InjectSkillReque
 }
 
 func (h *AgentHandler) InspectSkill(ctx context.Context, req *v1.InspectSkillRequest) (*v1.InspectSkillResponse, error) {
+	if err := EnforceScope(ctx, "skills:read"); err != nil {
+		return nil, err
+	}
 	s, err := h.skillService.GetSkill(req.Id)
 	if err != nil {
 		return &v1.InspectSkillResponse{
@@ -118,6 +136,9 @@ func (h *AgentHandler) InspectSkill(ctx context.Context, req *v1.InspectSkillReq
 }
 
 func (h *AgentHandler) DeleteSkill(ctx context.Context, req *v1.DeleteSkillRequest) (*v1.DeleteSkillResponse, error) {
+	if err := EnforceScope(ctx, "skills:write"); err != nil {
+		return nil, err
+	}
 	err := h.skillService.DeleteSkill(req.Id)
 	if err != nil {
 		return &v1.DeleteSkillResponse{Success: false, Message: err.Error()}, nil
@@ -126,6 +147,9 @@ func (h *AgentHandler) DeleteSkill(ctx context.Context, req *v1.DeleteSkillReque
 }
 
 func (h *AgentHandler) TrustSkill(ctx context.Context, req *v1.TrustSkillRequest) (*v1.TrustSkillResponse, error) {
+	if err := EnforceScope(ctx, "skills:write"); err != nil {
+		return nil, err
+	}
 	s, err := h.skillService.GetSkill(req.Id)
 	if err != nil {
 		return &v1.TrustSkillResponse{Success: false, Message: err.Error()}, nil

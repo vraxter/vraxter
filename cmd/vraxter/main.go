@@ -75,7 +75,7 @@ func bootstrap() {
 			os.Exit(1)
 		}
 
-		// appStore has been initialized above
+		server.SetAPIKeyRepo(db.NewAPIKeyRepository(appStore))
 
 		appCrypto, err = security.NewCryptoService(appConfig.KeyPath)
 		if err != nil {
