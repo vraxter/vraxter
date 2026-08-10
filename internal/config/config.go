@@ -19,6 +19,7 @@ type Config struct {
 	PrivacyPolicy        string
 	HubURL               string
 	RequireSkillApproval bool
+	WhitelistedIPs       []string
 }
 
 type Settings struct {
@@ -26,6 +27,7 @@ type Settings struct {
 	PrivacyPolicy        string `json:"privacy_policy"`
 	HubURL               string `json:"hub_url"`
 	RequireSkillApproval bool   `json:"require_skill_approval"`
+	WhitelistedIPs       []string `json:"whitelisted_ips"`
 }
 
 // Load loads the minimal configuration from environment or system defaults
@@ -58,6 +60,7 @@ func Load() Config {
 	var privacy = "ask"
 	var hub = "https://hub.vraxter.com"
 	var requireSkillApproval = false
+	var whitelistedIPs []string
 
 	if data, err := os.ReadFile(settingsPath); err == nil {
 		var s Settings
@@ -72,6 +75,9 @@ func Load() Config {
 				hub = s.HubURL
 			}
 			requireSkillApproval = s.RequireSkillApproval
+			if len(s.WhitelistedIPs) > 0 {
+				whitelistedIPs = s.WhitelistedIPs
+			}
 		}
 	}
 	
@@ -101,6 +107,7 @@ func Load() Config {
 		PrivacyPolicy:        privacy,
 		HubURL:               hub,
 		RequireSkillApproval: requireSkillApproval,
+		WhitelistedIPs:       whitelistedIPs,
 	}
 }
 
@@ -111,6 +118,7 @@ func (c *Config) SaveSettings() error {
 		PrivacyPolicy:        c.PrivacyPolicy,
 		HubURL:               c.HubURL,
 		RequireSkillApproval: c.RequireSkillApproval,
+		WhitelistedIPs:       c.WhitelistedIPs,
 	}
 	data, _ := json.MarshalIndent(s, "", "  ")
 	return os.WriteFile(filepath.Join(c.AppDir, "settings.json"), data, 0600)

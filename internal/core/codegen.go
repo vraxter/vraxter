@@ -108,25 +108,18 @@ func (s *CodeGenService) GenerateAndCompile(
 		}
 
 		// Parse Schema and Code blocks
+		var permissions []string
 		schema := ""
 		code := ""
 		
-		if strings.Contains(content, "[VRAX_CODE]") {
-			parts := strings.SplitN(content, "[VRAX_CODE]", 2)
-			if len(parts) == 2 {
-				code = strings.TrimSpace(parts[1])
-				schemaPart := strings.TrimSpace(parts[0])
-				
-				if strings.HasPrefix(schemaPart, "[VRAX_SCHEMA]") {
-					schema = strings.TrimSpace(strings.TrimPrefix(schemaPart, "[VRAX_SCHEMA]"))
-				} else if strings.HasPrefix(schemaPart, "{") && strings.HasSuffix(schemaPart, "}") {
-					// Loose JSON parsing fallback (model forgot the marker but provided the object)
-					schema = schemaPart
-				}
-			}
+		content = strings.TrimSpace(content)
+		codeIdx := strings.Index(content, "[VRAX_CODE]")
+		if codeIdx != -1 {
+			code = strings.TrimSpace(content[codeIdx+len("[VRAX_CODE]"):])
+			content = content[:codeIdx]
 		} else {
 			// Absolute fallback for legacy models or unexpected formatting
-			code = strings.TrimSpace(content)
+			code = content
 			if strings.HasPrefix(code, "```") {
 				// Strip markdown if they ignored the rules
 				lines := strings.Split(code, "\n")
@@ -134,17 +127,43 @@ func (s *CodeGenService) GenerateAndCompile(
 					code = strings.Join(lines[1:len(lines)-1], "\n")
 				}
 			}
+			content = ""
+		}
+
+		schemaIdx := strings.Index(content, "[VRAX_SCHEMA]")
+		if schemaIdx != -1 {
+			schema = strings.TrimSpace(content[schemaIdx+len("[VRAX_SCHEMA]"):])
+			content = content[:schemaIdx]
+		} else if strings.Contains(content, "{") && strings.Contains(content, "}") {
+			start := strings.Index(content, "{")
+			end := strings.LastIndex(content, "}")
+			if start != -1 && end != -1 && end > start {
+				schema = strings.TrimSpace(content[start : end+1])
+			}
+		}
+
+		permIdx := strings.Index(content, "[VRAX_PERMISSIONS]")
+		if permIdx != -1 {
+			permStr := strings.TrimSpace(content[permIdx+len("[VRAX_PERMISSIONS]"):])
+			if permStr != "" && strings.ToLower(permStr) != "none" {
+				for _, p := range strings.Split(permStr, ",") {
+					pClean := strings.TrimSpace(p)
+					if pClean != "" {
+						permissions = append(permissions, pClean)
+					}
+				}
+			}
 		}
 
 		if s.Verbose {
-			slog.Info("CodeGen: received blocks", "codeBytes", len(code), "schema", schema, "attempt", attempt+1)
+			slog.Info("CodeGen: received blocks", "codeBytes", len(code), "schema", schema, "permissions", permissions, "attempt", attempt+1)
 		}
 
 		// Phase 2: Compile
 		s.emit(ctx, out, llm.EventTypeStatus, "🔨 Compiling and verifying skill...")
 		s.emit(ctx, out, llm.EventTypeToken, "🔨 Compiling and verifying skill...\n")
 
-		compileErr := s.Coder.CreateSkill(lang, name, description, schema, code)
+		compileErr := s.Coder.CreateSkill(lang, name, description, schema, code, permissions)
 		if compileErr != nil {
 			lastErr = compileErr
 			if s.Verbose {

@@ -40,6 +40,7 @@ const (
 	AgentService_InjectSkill_FullMethodName           = "/v1.AgentService/InjectSkill"
 	AgentService_InspectSkill_FullMethodName          = "/v1.AgentService/InspectSkill"
 	AgentService_DeleteSkill_FullMethodName           = "/v1.AgentService/DeleteSkill"
+	AgentService_TrustSkill_FullMethodName            = "/v1.AgentService/TrustSkill"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -84,6 +85,7 @@ type AgentServiceClient interface {
 	InjectSkill(ctx context.Context, in *InjectSkillRequest, opts ...grpc.CallOption) (*InjectSkillResponse, error)
 	InspectSkill(ctx context.Context, in *InspectSkillRequest, opts ...grpc.CallOption) (*InspectSkillResponse, error)
 	DeleteSkill(ctx context.Context, in *DeleteSkillRequest, opts ...grpc.CallOption) (*DeleteSkillResponse, error)
+	TrustSkill(ctx context.Context, in *TrustSkillRequest, opts ...grpc.CallOption) (*TrustSkillResponse, error)
 }
 
 type agentServiceClient struct {
@@ -322,6 +324,16 @@ func (c *agentServiceClient) DeleteSkill(ctx context.Context, in *DeleteSkillReq
 	return out, nil
 }
 
+func (c *agentServiceClient) TrustSkill(ctx context.Context, in *TrustSkillRequest, opts ...grpc.CallOption) (*TrustSkillResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TrustSkillResponse)
+	err := c.cc.Invoke(ctx, AgentService_TrustSkill_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -364,6 +376,7 @@ type AgentServiceServer interface {
 	InjectSkill(context.Context, *InjectSkillRequest) (*InjectSkillResponse, error)
 	InspectSkill(context.Context, *InspectSkillRequest) (*InspectSkillResponse, error)
 	DeleteSkill(context.Context, *DeleteSkillRequest) (*DeleteSkillResponse, error)
+	TrustSkill(context.Context, *TrustSkillRequest) (*TrustSkillResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -436,6 +449,9 @@ func (UnimplementedAgentServiceServer) InspectSkill(context.Context, *InspectSki
 }
 func (UnimplementedAgentServiceServer) DeleteSkill(context.Context, *DeleteSkillRequest) (*DeleteSkillResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteSkill not implemented")
+}
+func (UnimplementedAgentServiceServer) TrustSkill(context.Context, *TrustSkillRequest) (*TrustSkillResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TrustSkill not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -822,6 +838,24 @@ func _AgentService_DeleteSkill_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_TrustSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TrustSkillRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).TrustSkill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_TrustSkill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).TrustSkill(ctx, req.(*TrustSkillRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -904,6 +938,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteSkill",
 			Handler:    _AgentService_DeleteSkill_Handler,
+		},
+		{
+			MethodName: "TrustSkill",
+			Handler:    _AgentService_TrustSkill_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

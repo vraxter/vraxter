@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -116,58 +115,10 @@ func (rn *Runner) Close(ctx context.Context) error {
 	return rn.runtime.Close(ctx)
 }
 func (rn *Runner) Execute(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}) (*types.ExecutionResult, error) {
-	if manifest.Engine == "wasm" || manifest.Engine == "" {
-		return rn.executeWasm(ctx, manifest, params)
+	if manifest.Engine != "wasm" && manifest.Engine != "" {
+		return nil, fmt.Errorf("skill engine '%s' is not supported (only wasm is allowed)", manifest.Engine)
 	}
-	return rn.executeNative(ctx, manifest, params)
-}
-
-func (rn *Runner) executeNative(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}) (*types.ExecutionResult, error) {
-	reqPayload := types.SkillRequest{
-		JSONRPC: "2.0",
-		Method:  "execute",
-		Params:  params,
-		ID:      manifest.ID,
-	}
-
-	inputBytes, err := json.Marshal(reqPayload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode intent payload: %w", err)
-	}
-
-	execCtx, cancel := context.WithTimeout(ctx, rn.Timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(execCtx, manifest.Command)
-
-	cmd.Stdin = bytes.NewReader(inputBytes)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
-	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("skill execution timed out")
-		}
-		return nil, fmt.Errorf("skill execution failed: %v, stderr: %s", err, stderr.String())
-	}
-
-	var response types.SkillResponse
-	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
-		return nil, fmt.Errorf("failed to parse skill response payload: %w. Raw STDOUT: %s", err, stdout.String())
-	}
-
-	if response.Error != nil {
-		return nil, fmt.Errorf("skill returned RPC error: code %d, message: %s", response.Error.Code, response.Error.Message)
-	}
-
-	if response.Result == nil {
-		return nil, fmt.Errorf("malformed response: no result payload")
-	}
-
-	return response.Result, nil
+	return rn.executeWasm(ctx, manifest, params)
 }
 
 func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}) (*types.ExecutionResult, error) {

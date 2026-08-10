@@ -95,11 +95,12 @@ func (c *ManagementClient) GetConfig(ctx context.Context) (*v1.ConfigResponse, e
 	return c.api.GetConfig(ctx, &v1.GetConfigRequest{})
 }
 
-func (c *ManagementClient) UpdateConfig(ctx context.Context, privacyPolicy *string, hubURL *string, requireSkillApproval *bool) (*v1.ConfigResponse, error) {
+func (c *ManagementClient) UpdateConfig(ctx context.Context, privacyPolicy *string, hubURL *string, requireSkillApproval *bool, whitelistedIPs []string) (*v1.ConfigResponse, error) {
 	return c.api.UpdateConfig(ctx, &v1.UpdateConfigRequest{
 		PrivacyPolicy:        privacyPolicy,
 		HubUrl:               hubURL,
 		RequireSkillApproval: requireSkillApproval,
+		WhitelistedIps:       whitelistedIPs,
 	})
 }
 
@@ -131,4 +132,8 @@ func (c *ManagementClient) InspectSkill(ctx context.Context, req *v1.InspectSkil
 
 func (c *ManagementClient) DeleteSkill(ctx context.Context, req *v1.DeleteSkillRequest) (*v1.DeleteSkillResponse, error) {
 	return c.api.DeleteSkill(ctx, req)
+}
+
+func (c *ManagementClient) TrustSkill(ctx context.Context, req *v1.TrustSkillRequest) (*v1.TrustSkillResponse, error) {
+	return c.api.TrustSkill(ctx, req)
 }

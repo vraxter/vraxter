@@ -18,11 +18,14 @@ $Spec
 | Requirements: {{.Spec}}
 
 -> Output
-1. Output TWO distinct blocks using the following markers:
+1. Output THREE distinct blocks using the following markers:
+   - `[VRAX_PERMISSIONS]`: A comma-separated list of required capabilities (e.g., `network, fs_read:/tmp, fs_write:/var/log`). Output `none` if no permissions are needed.
    - `[VRAX_SCHEMA]`: A JSON object representing the expected JSON-RPC parameters (e.g. {"location": "string"}).
    - `[VRAX_CODE]`: The complete raw {{.Language}} source code.
 2. NO markdown backticks. NO explanations. NO leading/trailing text.
 3. Example:
+[VRAX_PERMISSIONS]
+network, fs_read:/tmp
 [VRAX_SCHEMA]
 {"url": "string"}
 [VRAX_CODE]

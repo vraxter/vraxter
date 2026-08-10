@@ -358,7 +358,7 @@ func (e *ExecutionEngine) handleCoderSkill(ctx context.Context, out chan<- llm.S
 	if e.Verbose {
 		slog.Info("Invoking Sandbox Coder", "lang", lang, "skill", name, "bytes", len(codePayload))
 	}
-	err := e.Coder.CreateSkill(lang, name, desc, "", codePayload)
+	err := e.Coder.CreateSkill(lang, name, desc, "", codePayload, nil)
 
 	if err != nil {
 		if e.Verbose {

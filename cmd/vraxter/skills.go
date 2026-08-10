@@ -255,6 +255,32 @@ var deleteSkillCmd = &cobra.Command{
 	},
 }
 
+var trustSkillCmd = &cobra.Command{
+	Use:   "trust <id>",
+	Short: "Manually elevate a skill's tier to Community Verified",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		if err != nil {
+			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
+			os.Exit(1)
+		}
+		defer gClient.Close()
+
+		res, err := gClient.TrustSkill(context.Background(), &v1.TrustSkillRequest{Id: args[0]})
+		if err != nil {
+			fmt.Printf("❌ Trust update failed: %v\n", err)
+			return
+		}
+
+		if !res.Success {
+			fmt.Printf("🚫 Failed: %s\n", res.Message)
+		} else {
+			fmt.Printf("✅ %s\n", res.Message)
+		}
+	},
+}
+
 func init() {
 	downloadSkillCmd.Flags().StringVar(&downloadDest, "dest", "./", "Destination directory to download the skill")
 	downloadSkillCmd.Flags().BoolVar(&downloadSrc, "include-source", false, "Download the source code zip as well")
@@ -266,6 +292,7 @@ func init() {
 	skillsCmd.AddCommand(injectSkillCmd)
 	skillsCmd.AddCommand(inspectSkillCmd)
 	skillsCmd.AddCommand(deleteSkillCmd)
+	skillsCmd.AddCommand(trustSkillCmd)
 
 	rootCmd.AddCommand(skillsCmd)
 }

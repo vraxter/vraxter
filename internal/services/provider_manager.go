@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/patagonicrune/vraxter/internal/db"
 	"github.com/patagonicrune/vraxter/internal/llm"
@@ -12,12 +11,13 @@ import (
 )
 
 type ProviderManager struct {
-	repo          *db.ProviderRepository
-	privacyPolicy string
+	repo           *db.ProviderRepository
+	privacyPolicy  string
+	whitelistedIPs []string
 }
 
-func NewProviderManager(repo *db.ProviderRepository, privacyPolicy string) *ProviderManager {
-	return &ProviderManager{repo: repo, privacyPolicy: privacyPolicy}
+func NewProviderManager(repo *db.ProviderRepository, privacyPolicy string, whitelistedIPs []string) *ProviderManager {
+	return &ProviderManager{repo: repo, privacyPolicy: privacyPolicy, whitelistedIPs: whitelistedIPs}
 }
 
 func (m *ProviderManager) AddProvider(ctx context.Context, name, pType, apiKey, baseURL string) (string, error) {
@@ -28,9 +28,12 @@ func (m *ProviderManager) AddProvider(ctx context.Context, name, pType, apiKey, 
 			return "", fmt.Errorf("network privacy policy is set to strict_local: cloud provider '%s' is blocked", pType)
 		}
 		if pType == "custom" && baseURL != "" {
-			// Extremely naive check for demonstration, real check should parse URL and verify private IP ranges
-			if strings.Contains(baseURL, "api.openai.com") || strings.Contains(baseURL, "api.anthropic.com") {
-				return "", fmt.Errorf("network privacy policy is set to strict_local: custom provider URL points to a public cloud API")
+			allowed, err := utils.IsAllowedNetwork(baseURL, m.whitelistedIPs)
+			if err != nil {
+				return "", fmt.Errorf("network verification failed: %w", err)
+			}
+			if !allowed {
+				return "", fmt.Errorf("network privacy policy is set to strict_local: custom provider URL points to an unapproved public IP")
 			}
 		}
 	}
@@ -113,6 +116,16 @@ func (m *ProviderManager) UpdateProvider(ctx context.Context, idOrName string, n
 	}
 	if baseURL != nil {
 		p.BaseURL = *baseURL
+	}
+
+	if m.privacyPolicy == "strict_local" && p.Type == "custom" && p.BaseURL != "" {
+		allowed, err := utils.IsAllowedNetwork(p.BaseURL, m.whitelistedIPs)
+		if err != nil {
+			return fmt.Errorf("network verification failed: %w", err)
+		}
+		if !allowed {
+			return fmt.Errorf("network privacy policy is set to strict_local: custom provider URL points to an unapproved public IP")
+		}
 	}
 
 	// Verify new config

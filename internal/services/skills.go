@@ -117,6 +117,10 @@ func (s *SkillService) GetSkill(id string) (types.SkillManifest, error) {
 	return types.SkillManifest{}, fmt.Errorf("skill '%s' not found", id)
 }
 
+func (s *SkillService) UpdateSkill(m types.SkillManifest) error {
+	return s.repo.UpsertSkill(m)
+}
+
 func (s *SkillService) DeleteSkill(id string) error {
 	// Ideally we would also delete the binary here
 	return s.repo.DeleteSkill(id)

@@ -352,5 +352,5 @@ func init() {
 func getProviderManager() *services.ProviderManager {
 	bootstrap() // Ensure appStore and appCrypto are ready
 	repo := db.NewProviderRepository(appStore, appCrypto)
-	return services.NewProviderManager(repo, appConfig.PrivacyPolicy)
+	return services.NewProviderManager(repo, appConfig.PrivacyPolicy, appConfig.WhitelistedIPs)
 }

@@ -69,7 +69,7 @@ var configSetCmd = &cobra.Command{
 			return
 		}
 
-		_, err = gClient.UpdateConfig(context.Background(), pp, hurl, rsa)
+		_, err = gClient.UpdateConfig(context.Background(), pp, hurl, rsa, nil)
 		if err != nil {
 			fmt.Printf("❌ Error updating config: %v\n", err)
 			return

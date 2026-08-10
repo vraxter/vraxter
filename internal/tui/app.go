@@ -1452,7 +1452,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	case "/start":
 		pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
 		mRepo := db.NewModelRepository(m.appStore, m.appCrypto)
-		pMgr := services.NewProviderManager(pRepo, "ask")
+		pMgr := services.NewProviderManager(pRepo, "ask", nil)
 		mMgr := services.NewModelManager(mRepo, pRepo)
 		m.ActiveSetup = NewStartupWizard(pMgr, mMgr)
 		return nil
@@ -1463,14 +1463,14 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		}
 		if cmd == "/providers setup" && len(parts) == 2 && parts[1] == "setup" {
 			repo := db.NewProviderRepository(m.appStore, m.appCrypto)
-			mgr := services.NewProviderManager(repo, "ask")
+			mgr := services.NewProviderManager(repo, "ask", nil)
 			m.ActiveSetup = NewProviderWizard(mgr)
 			return nil
 		}
 		if cmd == "/models setup" && len(parts) == 2 && parts[1] == "setup" {
 			pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
 			mRepo := db.NewModelRepository(m.appStore, m.appCrypto)
-			pMgr := services.NewProviderManager(pRepo, "ask")
+			pMgr := services.NewProviderManager(pRepo, "ask", nil)
 			mMgr := services.NewModelManager(mRepo, pRepo)
 			m.ActiveSetup = NewModelWizard(pMgr, mMgr)
 			return nil
@@ -1481,7 +1481,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 			pID := parts[1]
 			return func() tea.Msg {
 				repo := db.NewProviderRepository(m.appStore, m.appCrypto)
-				mgr := services.NewProviderManager(repo, "ask")
+				mgr := services.NewProviderManager(repo, "ask", nil)
 				models, err := mgr.DiscoverModels(m.ctx, pID)
 				if err != nil {
 					return cmdOutputMsg{input: cmd, output: fmt.Sprintf("❌ Discovery failed: %v", err)}

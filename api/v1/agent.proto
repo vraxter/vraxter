@@ -58,6 +58,7 @@ service AgentService {
   rpc InjectSkill(InjectSkillRequest) returns (InjectSkillResponse);
   rpc InspectSkill(InspectSkillRequest) returns (InspectSkillResponse);
   rpc DeleteSkill(DeleteSkillRequest) returns (DeleteSkillResponse);
+  rpc TrustSkill(TrustSkillRequest) returns (TrustSkillResponse);
 }
 
 message GetInfoRequest {}
@@ -79,12 +80,14 @@ message UpdateConfigRequest {
   optional string privacy_policy = 1;
   optional string hub_url = 2;
   optional bool require_skill_approval = 3;
+  repeated string whitelisted_ips = 4;
 }
 
 message ConfigResponse {
   string privacy_policy = 1;
   string hub_url = 2;
   bool require_skill_approval = 3;
+  repeated string whitelisted_ips = 4;
 }
 
 // --- Skills ---
@@ -158,6 +161,14 @@ message DeleteSkillRequest {
   string id = 1;
 }
 message DeleteSkillResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message TrustSkillRequest {
+  string id = 1;
+}
+message TrustSkillResponse {
   bool success = 1;
   string message = 2;
 }

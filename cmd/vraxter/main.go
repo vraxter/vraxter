@@ -105,7 +105,7 @@ func bootstrap() {
 		providerRepo := db.NewProviderRepository(appStore, appCrypto)
 		modelRepo := db.NewModelRepository(appStore, appCrypto)
 
-		appProviderManager = services.NewProviderManager(providerRepo, appConfig.PrivacyPolicy)
+		appProviderManager = services.NewProviderManager(providerRepo, appConfig.PrivacyPolicy, appConfig.WhitelistedIPs)
 		appModelManager = services.NewModelManager(modelRepo, providerRepo)
 
 		appStateManager, err = env.NewStateManager(appConfig.AppDir)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	v1 "github.com/patagonicrune/vraxter/api/v1"
+	"github.com/patagonicrune/vraxter/internal/utils"
 )
 
 func (h *AgentHandler) GetConfig(ctx context.Context, req *v1.GetConfigRequest) (*v1.ConfigResponse, error) {
@@ -12,6 +13,7 @@ func (h *AgentHandler) GetConfig(ctx context.Context, req *v1.GetConfigRequest) 
 		PrivacyPolicy:        h.config.PrivacyPolicy,
 		HubUrl:               h.config.HubURL,
 		RequireSkillApproval: h.config.RequireSkillApproval,
+		WhitelistedIps:       h.config.WhitelistedIPs,
 	}, nil
 }
 
@@ -25,6 +27,20 @@ func (h *AgentHandler) UpdateConfig(ctx context.Context, req *v1.UpdateConfigReq
 	if req.RequireSkillApproval != nil {
 		h.config.RequireSkillApproval = *req.RequireSkillApproval
 	}
+	if req.WhitelistedIps != nil {
+		h.config.WhitelistedIPs = req.WhitelistedIps
+		for _, ipStr := range req.WhitelistedIps {
+			ips, _, err := utils.ParseAndLookup(ipStr)
+			if err == nil {
+				for _, ip := range ips {
+					if utils.IsPublicIP(ip) {
+						fmt.Printf("⚠️ SECURITY WARNING: You have whitelisted a public IP/Hostname (%s). This breaches the strict_local air-gap policy.\n", ipStr)
+						break
+					}
+				}
+			}
+		}
+	}
 
 	if err := h.config.SaveSettings(); err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
@@ -34,5 +50,6 @@ func (h *AgentHandler) UpdateConfig(ctx context.Context, req *v1.UpdateConfigReq
 		PrivacyPolicy:        h.config.PrivacyPolicy,
 		HubUrl:               h.config.HubURL,
 		RequireSkillApproval: h.config.RequireSkillApproval,
+		WhitelistedIps:       h.config.WhitelistedIPs,
 	}, nil
 }

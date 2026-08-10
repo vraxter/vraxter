@@ -33,7 +33,7 @@ type GoCoder struct {
 
 func (c *GoCoder) Language() string { return "go" }
 
-func (c *GoCoder) Compile(name, description, paramsSchema, code string) error {
+func (c *GoCoder) Compile(name, description, paramsSchema, code string, permissions []string) error {
 	if !c.TM.IsReady("go") {
 		if err := c.TM.SetupSDK("go"); err != nil {
 			return err
@@ -152,6 +152,7 @@ func (c *GoCoder) Compile(name, description, paramsSchema, code string) error {
 		Version:      "1.0.0",
 		Tier:         types.Tier2CommunityVerified,
 		Checksum:     checksum,
+		Permissions:  permissions,
 	}
 
 	// 7. Execution Dry-Run Verification (Failsafe)

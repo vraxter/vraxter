@@ -31,7 +31,7 @@ type RustCoder struct {
 
 func (c *RustCoder) Language() string { return "rust" }
 
-func (c *RustCoder) Compile(name, description, paramsSchema, code string) error {
+func (c *RustCoder) Compile(name, description, paramsSchema, code string, permissions []string) error {
 	if !c.TM.IsReady("rust") {
 		if err := c.TM.SetupSDK("rust"); err != nil {
 			return err
@@ -74,6 +74,7 @@ func (c *RustCoder) Compile(name, description, paramsSchema, code string) error 
 		Version:      "1.0.0",
 		Tier:         types.Tier2CommunityVerified,
 		Checksum:     checksum,
+		Permissions:  permissions,
 	}
 
 	// 7. Execution Dry-Run Verification (Failsafe)

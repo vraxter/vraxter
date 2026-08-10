@@ -5,6 +5,7 @@ import (
 	"fmt"
 	
 	v1 "github.com/patagonicrune/vraxter/api/v1"
+	"github.com/patagonicrune/vraxter/pkg/types"
 )
 
 func (h *AgentHandler) ListSkills(ctx context.Context, req *v1.ListSkillsRequest) (*v1.ListSkillsResponse, error) {
@@ -85,12 +86,34 @@ func (h *AgentHandler) InjectSkill(ctx context.Context, req *v1.InjectSkillReque
 }
 
 func (h *AgentHandler) InspectSkill(ctx context.Context, req *v1.InspectSkillRequest) (*v1.InspectSkillResponse, error) {
-	// Verify signature checksum logic mocked for now, to be expanded if skillService adds Verify
+	s, err := h.skillService.GetSkill(req.Id)
+	if err != nil {
+		return &v1.InspectSkillResponse{
+			IsValid: false,
+			Message: fmt.Sprintf("Failed to load skill: %v", err),
+		}, nil
+	}
+
+	actualHash, err := h.skillService.CalculateHash(s.Command)
+	if err != nil {
+		return &v1.InspectSkillResponse{
+			IsValid: false,
+			ExpectedChecksum: s.Checksum,
+			Message: fmt.Sprintf("Failed to read skill binary: %v", err),
+		}, nil
+	}
+
+	isValid := actualHash == s.Checksum
+	msg := "Checksum matched. Skill is valid."
+	if !isValid {
+		msg = "DANGER: Checksum mismatch! The binary has been modified."
+	}
+
 	return &v1.InspectSkillResponse{
-		IsValid:          true,
-		ExpectedChecksum: "hash",
-		ActualChecksum:   "hash",
-		Message:          "Checksum matched. Skill is valid.",
+		IsValid:          isValid,
+		ExpectedChecksum: s.Checksum,
+		ActualChecksum:   actualHash,
+		Message:          msg,
 	}, nil
 }
 
@@ -100,4 +123,18 @@ func (h *AgentHandler) DeleteSkill(ctx context.Context, req *v1.DeleteSkillReque
 		return &v1.DeleteSkillResponse{Success: false, Message: err.Error()}, nil
 	}
 	return &v1.DeleteSkillResponse{Success: true, Message: "Skill deleted successfully."}, nil
+}
+
+func (h *AgentHandler) TrustSkill(ctx context.Context, req *v1.TrustSkillRequest) (*v1.TrustSkillResponse, error) {
+	s, err := h.skillService.GetSkill(req.Id)
+	if err != nil {
+		return &v1.TrustSkillResponse{Success: false, Message: err.Error()}, nil
+	}
+	
+	s.Tier = types.Tier2CommunityVerified
+	if err := h.skillService.UpdateSkill(s); err != nil {
+		return &v1.TrustSkillResponse{Success: false, Message: fmt.Sprintf("Failed to save skill: %v", err)}, nil
+	}
+
+	return &v1.TrustSkillResponse{Success: true, Message: fmt.Sprintf("Skill '%s' is now trusted.", s.Name)}, nil
 }
