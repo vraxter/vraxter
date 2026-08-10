@@ -18,6 +18,7 @@ var (
 	codegenTpl      *template.Template
 	GoBoilerplate   string
 	RustBoilerplate string
+	ZigBoilerplate  string
 )
 
 func init() {
@@ -93,6 +94,9 @@ func init() {
 	GoBoilerplate = string(goBytes)
 	rustBytes, _ := promptFiles.ReadFile("boilerplate_rust.vrx")
 	RustBoilerplate = string(rustBytes)
+
+	zigBytes, _ := promptFiles.ReadFile("boilerplate_zig.vrx")
+	ZigBoilerplate = string(zigBytes)
 }
 
 type BaseSystemParams struct {
@@ -109,6 +113,7 @@ type BaseSystemParams struct {
 	SemanticMemory      string
 	GoBoilerplate       string
 	RustBoilerplate     string
+	ZigBoilerplate      string
 }
 
 type SpecialistParams struct {
@@ -124,6 +129,7 @@ type SpecialistParams struct {
 	SemanticMemory      string
 	GoBoilerplate       string
 	RustBoilerplate     string
+	ZigBoilerplate      string
 	MarkerChat          string
 	MarkerTool          string
 	MarkerCode          string
@@ -150,6 +156,9 @@ func RenderBaseSystem(params BaseSystemParams) (string, error) {
 	if params.RustBoilerplate == "" {
 		params.RustBoilerplate = RustBoilerplate
 	}
+	if params.ZigBoilerplate == "" {
+		params.ZigBoilerplate = ZigBoilerplate
+	}
 
 	var buf bytes.Buffer
 	if err := baseSystemTpl.Execute(&buf, params); err != nil {
@@ -164,6 +173,9 @@ func RenderSpecialist(params SpecialistParams) (string, error) {
 	}
 	if params.RustBoilerplate == "" {
 		params.RustBoilerplate = RustBoilerplate
+	}
+	if params.ZigBoilerplate == "" {
+		params.ZigBoilerplate = ZigBoilerplate
 	}
 
 	var buf bytes.Buffer
@@ -188,6 +200,8 @@ func RenderCodeGen(params CodeGenParams) (string, error) {
 	if params.Boilerplate == "" {
 		if params.Language == "rust" {
 			params.Boilerplate = RustBoilerplate
+		} else if params.Language == "zig" {
+			params.Boilerplate = ZigBoilerplate
 		} else {
 			params.Boilerplate = GoBoilerplate
 		}

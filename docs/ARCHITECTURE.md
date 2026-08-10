@@ -12,8 +12,9 @@ The daemon is the primary source of truth. It manages:
 - **Persistence**: SQLite-backed history, specialists, and model configurations.
 - **Environmental Context Engine**: A thread-safe `StateManager` that manages dynamic `ModeConfig` templates (e.g. ambient lighting, music).
 - **Orchestration**: The request lifecycle from intent resolution to execution.
-- **Skill Runner**: The Wazero-powered WASM sandbox.
+- **Skill Runner**: The Wazero-powered WASM sandbox supporting Go, Rust, and Zig.
 - **Intelligence**: Model routing and multi-provider coordination.
+- **Auth Pipeline**: Scoped-token enforcement and master key dual-authentication.
 
 ### 2. The Connect RPC Layer
 - **Protobuf-Defined**: Every interaction is type-safe and defined in `api/v1`.

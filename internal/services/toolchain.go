@@ -29,7 +29,7 @@ func NewToolchainManager(sdkDir string) *ToolchainManager {
 }
 
 func (m *ToolchainManager) ProactiveSetup() {
-	langs := []string{"tinygo", "go", "rust"}
+	langs := []string{"tinygo", "go", "rust", "zig"}
 	for _, lang := range langs {
 		if !m.IsReady(lang) {
 			fmt.Printf("🚀 Proactive Toolchain: %s is missing. Starting background prep...\n", lang)
@@ -86,6 +86,20 @@ func (m *ToolchainManager) GetRustcPath() string {
 	return path
 }
 
+func (m *ToolchainManager) GetZigPath() string {
+	hermeticZig := filepath.Join(m.sdkDir, "zig", "zig")
+	if runtime.GOOS == "windows" {
+		hermeticZig += ".exe"
+	}
+
+	if _, err := os.Stat(hermeticZig); err == nil {
+		return hermeticZig
+	}
+
+	path, _ := exec.LookPath("zig")
+	return path
+}
+
 func (m *ToolchainManager) IsReady(lang string) bool {
 	switch lang {
 	case "go":
@@ -94,6 +108,8 @@ func (m *ToolchainManager) IsReady(lang string) bool {
 		return m.GetTinyGoPath() != ""
 	case "rust":
 		return m.GetRustcPath() != ""
+	case "zig":
+		return m.GetZigPath() != ""
 	default:
 		return false
 	}
@@ -205,6 +221,38 @@ func (m *ToolchainManager) SetupSDK(lang string) error {
 		os.Remove(tmpFile)
 		return nil
 
+	case "zig":
+		url := m.getZigURL()
+		if url == "" {
+			return fmt.Errorf("unsupported platform for Zig automatic setup: %s/%s", runtime.GOOS, runtime.GOARCH)
+		}
+
+		tmpFile := filepath.Join(os.TempDir(), "vraxter-zig-sdk.tar.xz")
+		if runtime.GOOS == "windows" {
+			tmpFile = filepath.Join(os.TempDir(), "vraxter-zig-sdk.zip")
+		}
+
+		fmt.Printf("📥 Downloading Zig SDK for %s/%s...\n", runtime.GOOS, runtime.GOARCH)
+		if err := utils.DownloadFile(tmpFile, url); err != nil {
+			return err
+		}
+
+		fmt.Printf("📦 Extracting Zig SDK...\n")
+		os.MkdirAll(dest, 0755)
+		var err error
+		if runtime.GOOS == "windows" {
+			err = utils.ExtractZip(tmpFile, dest)
+		} else {
+			err = utils.ExtractTarXz(tmpFile, dest)
+		}
+		if err != nil {
+			return err
+		}
+
+		utils.CleanupFolder(dest)
+		os.Remove(tmpFile)
+		return nil
+
 	default:
 		return fmt.Errorf("unsupported language: %s", lang)
 	}
@@ -277,4 +325,30 @@ func (m *ToolchainManager) getRustURL() string {
 	}
 
 	return fmt.Sprintf("https://static.rust-lang.org/dist/rust-%s-%s.tar.gz", version, target)
+}
+
+func (m *ToolchainManager) getZigURL() string {
+	const version = "0.13.0"
+	var osName, arch, ext string
+
+	switch runtime.GOOS {
+	case "linux":
+		osName, ext = "linux", "tar.xz"
+	case "darwin":
+		osName, ext = "macos", "tar.xz"
+	case "windows":
+		osName, ext = "windows", "zip"
+	default:
+		return ""
+	}
+
+	if runtime.GOARCH == "amd64" {
+		arch = "x86_64"
+	} else if runtime.GOARCH == "arm64" {
+		arch = "aarch64"
+	} else {
+		return ""
+	}
+
+	return fmt.Sprintf("https://ziglang.org/download/%s/zig-%s-%s-%s.%s", version, osName, arch, version, ext)
 }

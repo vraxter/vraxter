@@ -6,7 +6,9 @@ import (
 	"compress/gzip"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"fmt"
 )
 
 // ExtractTarGz extracts a .tar.gz file to a destination directory.
@@ -98,6 +100,17 @@ func ExtractZip(src, dest string) error {
 
 		srcFile.Close()
 		dstFile.Close()
+	}
+	return nil
+}
+
+// ExtractTarXz extracts a .tar.xz file using the system's tar command.
+// This requires 'tar' (with xz support) to be installed on the host.
+func ExtractTarXz(src, dest string) error {
+	cmd := exec.Command("tar", "-xf", src, "-C", dest)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tar -xf failed: %v, output: %s", err, string(out))
 	}
 	return nil
 }

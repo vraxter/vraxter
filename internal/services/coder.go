@@ -23,6 +23,7 @@ func NewCoderService(repo *db.SkillRepository, tm *ToolchainManager, skillsDir s
 	// Register Standard Coders
 	s.RegisterCoder(&coders.GoCoder{Repo: repo, TM: tm, SkillsDir: skillsDir, Runner: runner})
 	s.RegisterCoder(&coders.RustCoder{Repo: repo, TM: tm, SkillsDir: skillsDir, Runner: runner})
+	s.RegisterCoder(&coders.ZigCoder{Repo: repo, TM: tm, SkillsDir: skillsDir, Runner: runner})
 
 	return s
 }

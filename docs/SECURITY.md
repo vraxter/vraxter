@@ -22,8 +22,12 @@ Every skill registered in Vraxter includes a **SHA-256 Checksum**.
 ## Credential Management
 
 - **AES-256-GCM Encryption**: All LLM Provider API keys are encrypted before being saved to the SQLite database.
-- **Key Location**: The master encryption key is kept in a separate file (usually `~/.config/vraxter/vrax.key`) with restricted OS permissions (0600).
 - **In-Memory Hygiene**: Sensitive tokens are purged from memory once the gRPC stream connection is closed.
+
+### Daemon Authentication & Scoped Tokens
+Vraxter manages multiple clients securely through a dual-authentication mechanism:
+- **Root TUI Access**: The workstation interface authenticates to the `vraxterd` engine using a physically secured master key (`~/.config/vraxter/daemon.key`), granting it full root access (`["*"]`).
+- **Scoped External Tokens**: External clients (e.g., Dashboards, Smart Speakers) authenticate using dynamically generated API tokens. These are strictly scoped to specific actions using `vraxter tokens create <name> --scopes="chat:write,skills:read"` to completely eliminate lateral privilege escalation.
 
 
 ## Trust Tiers
@@ -31,7 +35,7 @@ Every skill registered in Vraxter includes a **SHA-256 Checksum**.
 Vraxter classifies tools into trust tiers:
 - **Tier 1 (Official)**: Tools signed by PatagonicRune. Always trusted.
 - **Tier 2 (Trusted Community)**: Tools with high reputation and usage.
-- **Tier 3 (Unverified)**: Manually registered scripts. These require explicit user `trust` via the CLI before they can run outside the narrowest sandbox.
+- **Tier 3 (Unverified)**: Manually registered scripts. These require explicit user `trust` via the CLI (`vraxter skills trust <id>`) before they can run outside the narrowest sandbox.
 
 
 ## Data Sovereignty

@@ -1,14 +1,13 @@
 # Vraxter Skills Development Guide
 
-A **Skill** in Vraxter is an executable plugin that allows the agent to perform real-world actions. Vraxter supports both **WASM Isolation** and **Native OS** execution engines.
+A **Skill** in Vraxter is an executable plugin that allows the agent to perform real-world actions. Vraxter runs all skills exclusively within a hardened **WASM Isolation** engine.
 
-
-## WASM Isolation Engine (Preferred)
+## WASM Isolation Engine
 
 Vraxter uses the **Wazero** runtime to execute skills in a hardened sandbox. This is the safest way to extend Vraxter's capabilities.
 
 ### 1. Requirements
-- A language that compiles to WASM/WASI (Go, Rust).
+- A language that compiles to WASM/WASI (Go, Rust, Zig).
 - No direct host access (Network/FS access must be granted via Permissions).
 
 ### 2. Implementation Pattern (Go Example)
@@ -43,7 +42,7 @@ Permissions are declared in the Skill Manifest:
 Vraxter's most powerful feature is its ability to **generate its own skills**.
 When you ask Vraxter to do something it doesn't have a tool for:
 1. It analyzes the requirement.
-2. It generates the Go or Rust code for a new tool.
+2. It generates the Go, Rust, or Zig code for a new tool.
 3. It compiles the code to WASM.
 4. **Dry-Run Validation Pipeline**: The engine immediately executes the compiled WASM binary in a sandboxed test environment. If the skill crashes or fails validation, it is automatically purged.
 5. Once verified, it registers the tool in its local DB and records its SHA-256 checksum for secure execution.
@@ -59,13 +58,13 @@ Vraxter ships with native sensory capabilities built directly into the Orchestra
 
 ## Registering a Skill Manually
 
-Skills can be added via the CLI:
+Skills can be added via the CLI from an existing compiled WASM binary:
 ```bash
-vraxter add --id my-tool --desc "Scans for logic errors" --cmd "./bin/tool.wasm" --engine wasm
+vraxter skills inject ./bin/tool.wasm
 ```
 
 ### Manifest Fields:
 - **`ID`**: Unique identifier (e.g., `git-diff-analyzer`).
-- **`Engine`**: `wasm` or `native`.
+- **`Engine`**: Always `wasm`.
 - **`Checksum`**: SHA-256 hash (Required for unverified skills).
 - **`Tier`**: Defines the trust level (Official vs. Unverified).

@@ -13,7 +13,7 @@ Protocol = [
 ]
 
 @System.WasmProtocol
-Terminology = "A 'skill' in Vraxter is an internal, executable plugin compiled to WASM. When the user asks to create a skill, use the 'vraxter-coder' tool with a name, description, and detailed spec. Set language to 'go' (default) or 'rust' (for hardware/low-level communication). Vraxter will auto-generate and compile the code. You do NOT need to write any source code."
+Terminology = "A 'skill' in Vraxter is an internal, executable plugin compiled to WASM. When the user asks to create a skill, use the 'vraxter-coder' tool with a name, description, and detailed spec. Set language to 'go' (default), 'rust', or 'zig'. Vraxter will auto-generate and compile the code. You do NOT need to write any source code."
 Execution = "Only when absolutely required, output exactly 2 DISTINCT blocks: {{.MarkerChat}} then {{.MarkerTool}} (calling vraxter-coder). You do NOT need to provide raw source code."
 
 @System.Rules

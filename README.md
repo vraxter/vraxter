@@ -20,7 +20,7 @@ Vraxter manages dynamic `ModeConfig` templates (e.g., "Deep Work", "D&D Party") 
 Vraxter doesn't just generate text; it solves problems by iterating through an autonomous cycle:
 - **Analyze & Plan**: Decomposes complex queries into actionable phases using its internal Planner.
 - **Multimodal Senses**: Native Official Skills allow Vraxter to see images, hear audio, and synthesize speech targeting specific physical rooms.
-- **WASM Skill Execution**: Runs highly performant, sandboxed tools compiled to WebAssembly.
+- **WASM Skill Execution**: Runs highly performant, sandboxed tools compiled to WebAssembly (Go, Rust, Zig).
 
 ### 4. Specialist Swarm
 Vraxter manages a roster of domain-specific sub-agents (e.g., Security Auditor, Frontend Architect) that can be delegated to for hyper-focused reasoning. The Supervisor engine orchestrates handoffs seamlessly.
@@ -87,6 +87,8 @@ Vraxter features a sophisticated "Slash Command" system for workstation manageme
 
 - `vraxter providers discover/setup`: Manage API keys.
 - `vraxter skills list/inject/inspect`: Manage WASM binaries.
+- `vraxter skills trust <id>`: Elevate unverified scripts to community-trusted tier.
+- `vraxter tokens create/ls/revoke`: Manage granular scoped-access for external clients.
 - `vraxter config set privacy_policy strict_local`: Enforce Air-Gapped execution policies.
 - `vraxter config set require_skill_approval true`: Enforce Human-In-The-Loop (HITL) manual skill approvals for strict execution governance.
 
@@ -111,7 +113,7 @@ Vraxter implements a **Secure-by-Design** philosophy for Enterprise environments
 - **Sandbox Isolation**: The WASM runtime restricts tool access to specific file paths using strict capabilities-based security.
 - **Strict Privacy Policies**: Built-in network routing guards. Setting `strict_local` blocks all outbound cloud APIs and Hub integrations, allowing only local IP subnets (`vLLM`, `127.0.0.1`).
 - **Human-In-The-Loop (HITL) Approvals**: Enabling `require_skill_approval` halts execution over the Connect RPC stream and emits a `SKILL_APPROVAL_REQUEST`, requiring explicit client authorization before any dynamic code or WASM payload executes.
-- **Daemon Authentication**: Local gRPC IPC endpoints are protected by auto-generated 256-bit API keys (`~/.vraxter/daemon.key`) using constant-time comparison, stopping lateral privilege escalation.
+- **Daemon Authentication & Scoped Tokens**: Local IPC endpoints use an auto-generated master key (`~/.vraxter/daemon.key`), while external dashboards and IoT clients use granular, dynamically generated API Tokens (e.g. `skills:read` scopes) to eliminate lateral privilege escalation.
 - **Cryptographic Verification**: `vraxter skills inspect` validates SHA-256 hashes of downloaded WASM binaries against database checksums before execution.
 - **Dry-Run Validation Pipeline**: Every skill undergoes a sandboxed dry-run execution verification before being signed and persisted to prevent corrupted or malicious binaries from entering the local filesystem.
 - **Checksum Verification**: Every Skill binary is hashed (SHA-256) to prevent local tampering or hijacking.

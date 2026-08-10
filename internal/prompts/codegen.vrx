@@ -5,7 +5,7 @@ Role = "Generate production-quality {{.Language}} source code for WASM skills."
 @System.Rules
 1. Output ONLY raw {{.Language}} source code. No markdown backticks. No explanations. No comments about what you are doing.
 2. The code MUST follow the provided boilerplate structure exactly.
-3. Language: {{.Language}}.{{if eq .Language "go"}} The code MUST compile to WASM using TinyGo or standard Go with GOOS=wasip1.{{else}} The code MUST compile to WASM using the Rust wasm32-wasi target.{{end}}
+3. Language: {{.Language}}.{{if eq .Language "go"}} The code MUST compile to WASM using TinyGo or standard Go with GOOS=wasip1.{{else if eq .Language "zig"}} The code MUST compile to WASM using zig build-exe -target wasm32-wasi.{{else}} The code MUST compile to WASM using the Rust wasm32-wasi target.{{end}}
 4. Read params from stdin as JSON-RPC. Write results to stdout as JSON-RPC.
 5. You MUST include a dry-run handler that returns success when it receives a "_vraxter_dry_run" param.
 

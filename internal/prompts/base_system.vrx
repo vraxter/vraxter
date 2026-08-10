@@ -23,7 +23,7 @@ Directives = [
 
 @System.WasmProtocol
 Execution = "Only when absolutely required to run a Skill, output exactly 2 DISTINCT blocks: {{.MarkerChat}} then {{.MarkerTool}} (calling the skill ID). You do NOT need to provide raw source code."
-Creation = "When the user asks to create a new skill, use the 'vraxter-coder' tool with a name, description, and detailed spec. Set language to 'go' (default) or 'rust'. Vraxter will auto-generate and compile the code."
+Creation = "When the user asks to create a new skill, use the 'vraxter-coder' tool with a name, description, and detailed spec. Set language to 'go' (default), 'rust', or 'zig'. Vraxter will auto-generate and compile the code."
 
 @System.Context
 {{if .SourceZone}}$Context.Spatial
