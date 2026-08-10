@@ -20,12 +20,13 @@ type GRPCClient struct {
 }
 
 // NewGRPCClient connects to the local daemon
-func NewGRPCClient(addr string) (*GRPCClient, error) {
+func NewGRPCClient(addr string, apiKey string) (*GRPCClient, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	conn, err := grpc.DialContext(ctx, addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithPerRPCCredentials(NewAPICredentials(apiKey)),
 		grpc.WithBlock(),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,

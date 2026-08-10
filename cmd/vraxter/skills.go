@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/services"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	v1 "github.com/patagonicrune/vraxter/api/v1"
+	"github.com/patagonicrune/vraxter/internal/client"
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +17,9 @@ var (
 	sCommand  string
 	sEngine   string
 	sOfficial bool
+	
+	downloadDest string
+	downloadSrc  bool
 )
 
 var skillsCmd = &cobra.Command{
@@ -31,16 +31,20 @@ var listSkillsCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all installed skills with their Vraxter Shield trust status",
 	Run: func(cmd *cobra.Command, args []string) {
-		repo := db.NewSkillRepository(appStore)
-		service := services.NewSkillService(repo, appConfig.SkillsDir)
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		if err != nil {
+			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
+			os.Exit(1)
+		}
+		defer gClient.Close()
 
-		all, err := service.ListSkills()
+		res, err := gClient.ListSkills(context.Background(), &v1.ListSkillsRequest{})
 		if err != nil {
 			fmt.Printf("❌ Error listing skills: %v\n", err)
 			return
 		}
 
-		if len(all) == 0 {
+		if len(res.Skills) == 0 {
 			fmt.Println("\n📭 No skills installed yet. Let Vraxter create one for you!")
 			return
 		}
@@ -50,7 +54,7 @@ var listSkillsCmd = &cobra.Command{
 		fmt.Printf("%-20s %-30s %-15s %-10s %-8s\n", "ID", "NAME", "TRUST", "ENGINE", "PARAMS")
 		fmt.Println("------------------------------------------------------------------------------------------------")
 
-		for _, s := range all {
+		for _, s := range res.Skills {
 			trust := "Community"
 			if s.IsOfficial {
 				trust = "🟢 Official"
@@ -61,12 +65,12 @@ var listSkillsCmd = &cobra.Command{
 			}
 
 			params := "No"
-			if s.ParamsSchema != "" {
+			if s.HasParams {
 				params = "Yes"
 			}
 
 			fmt.Printf("%-20s %-30s %-15s %-10s %-8s\n",
-				s.ID, s.Name, trust, s.Engine, params)
+				s.Id, s.Name, trust, s.Engine, params)
 		}
 		fmt.Println("------------------------------------------------------------------------------------------------")
 	},
@@ -78,225 +82,190 @@ var infoSkillCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		id := args[0]
-		repo := db.NewSkillRepository(appStore)
-		s, err := repo.FindSkill(id)
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
 		if err != nil {
-			fmt.Printf("❌ Skill '%s' not found.\n", id)
+			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
+			os.Exit(1)
+		}
+		defer gClient.Close()
+
+		res, err := gClient.GetSkillInfo(context.Background(), &v1.GetSkillInfoRequest{Id: id})
+		if err != nil {
+			fmt.Printf("❌ Skill not found: %v\n", err)
 			return
 		}
 
-		fmt.Printf("\n◈ SKILL INFO: %s\n", s.Name)
-		fmt.Println("------------------------------------------------------------------------------------------------")
-		fmt.Printf("%-20s: %s\n", "ID", s.ID)
-		fmt.Printf("%-20s: %s\n", "Description", s.Description)
-		fmt.Printf("%-20s: %s (%s)\n", "Language", s.Language, s.Engine)
-		fmt.Printf("%-20s: %s\n", "Version", s.Version)
-		fmt.Printf("%-20s: %s\n", "Path", s.Command)
-		
-		trust := "Community"
-		if s.IsOfficial {
-			trust = "🛡️  Vraxter Official (Trusted)"
-		}
-		fmt.Printf("%-20s: %s\n", "Trust Level", trust)
-
-		if s.ParamsSchema != "" {
-			fmt.Printf("\n📋 PARAMETERS SCHEMA:\n%s\n", s.ParamsSchema)
-		} else if s.ParamRegex != "" {
-			fmt.Printf("\n📋 PARAMETERS (Regex Matcher):\n   %s\n", s.ParamRegex)
-		} else {
-			fmt.Printf("\n📋 PARAMETERS: No strict schema defined (uses Natural Language).\n")
-		}
+		s := res.Skill
+		fmt.Printf("\n📦 Skill: %s\n", s.Id)
+		fmt.Println("----------------------------------------")
+		fmt.Printf("Name:        %s\n", s.Name)
+		fmt.Printf("Description: %s\n", s.Description)
+		fmt.Printf("Version:     %s\n", s.Version)
+		fmt.Printf("Engine:      %s\n", s.Engine)
+		fmt.Printf("Checksum:    %s\n", s.Checksum)
+		fmt.Printf("Official:    %v\n", s.IsOfficial)
+		fmt.Printf("Tier:        %d\n", s.Tier)
 
 		if len(s.Permissions) > 0 {
-			fmt.Printf("\n%-20s: %s\n", "PERMISSIONS", strings.Join(s.Permissions, ", "))
-		}
-
-		if len(s.Examples) > 0 {
-			fmt.Printf("\n💡 USAGE EXAMPLES:\n")
-			for _, ex := range s.Examples {
-				fmt.Printf("  • %s\n", ex)
+			fmt.Println("\n🔒 Permissions Requested:")
+			for _, p := range s.Permissions {
+				fmt.Printf("  - %s\n", p)
 			}
 		}
-		fmt.Println("------------------------------------------------------------------------------------------------")
+
+		if res.Schema != "" {
+			fmt.Println("\n🔧 Parameter Schema:")
+			fmt.Println(res.Schema)
+		}
 	},
 }
 
-var registerSkillCmd = &cobra.Command{
-	Use:   "register",
-	Short: "Manually register a pre-compiled binary or WASM skill",
-	Run: func(cmd *cobra.Command, args []string) {
-		repo := db.NewSkillRepository(appStore)
-		service := services.NewSkillService(repo, appConfig.SkillsDir)
-
-		// Create Manifest
-		manifest := types.SkillManifest{
-			ID:          sID,
-			Name:        sName,
-			Description: sDesc,
-			Command:     sCommand,
-			Engine:      sEngine,
-			IsOfficial:  sOfficial,
-			Version:     "1.0.0",
-			Language:    "go/wasm",
-			Tier:        types.Tier3Unverified,
-		}
-
-		if manifest.IsOfficial {
-			manifest.Tier = types.Tier1Official
-		}
-
-		err := service.InstallSkill(manifest)
-		if err != nil {
-			fmt.Printf("❌ Failed to install skill: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Printf("✅ Skill '%s' [%s] installed successfully.\n", sName, sID)
-		fmt.Printf("🛡️  Vraxter Shield is protecting this skill with Checksum validation.\n")
-	},
-}
-
-var trustSkillCmd = &cobra.Command{
-	Use:   "trust <id>",
-	Short: "Locally trust a skill, bypassing the Community Shield restrictions",
+var installSkillCmd = &cobra.Command{
+	Use:   "install <hub_id>",
+	Short: "Install a skill from the Vraxter Hub",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		id := args[0]
-		repo := db.NewSkillRepository(appStore)
-
-		all, err := repo.GetAllSkills()
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
 		if err != nil {
-			fmt.Printf("❌ Error accessing skills db: %v\n", err)
+			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
 		}
+		defer gClient.Close()
 
-		var target *types.SkillManifest
-		for _, s := range all {
-			if s.ID == id {
-				target = &s
-				break
-			}
-		}
-
-		if target == nil {
-			fmt.Printf("❌ Skill '%s' not found.\n", id)
-			os.Exit(1)
-		}
-
-		target.IsOfficial = true
-		target.Tier = types.Tier1Official
-
-		err = repo.UpsertSkill(*target)
+		res, err := gClient.InstallSkill(context.Background(), &v1.InstallSkillRequest{Id: args[0]})
 		if err != nil {
-			fmt.Printf("❌ Failed to update skill trust status: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Printf("✅ VRAXTER SHIELD: Skill '%s' is now locally trusted and authorized to run.\n", id)
-	},
-}
-
-var autoAddSkillCmd = &cobra.Command{
-	Use:   "add <name> <description>",
-	Short: "Auto-generate and compile a new WASM skill from a natural language description",
-	Args:  cobra.MinimumNArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
-		bootstrap()
-
-		name := args[0]
-		desc := strings.Join(args[1:], " ")
-
-		codegen := appEngine.GetCodeGen()
-		if codegen == nil {
-			fmt.Println("❌ Error: CodeGen engine not available.")
+			fmt.Printf("❌ Installation failed: %v\n", err)
 			return
 		}
 
-		out := make(chan llm.StreamEvent, 10)
-		ctx := context.Background()
-
-		go func() {
-			_ = codegen.GenerateAndCompile(ctx, out, name, desc, desc, "go")
-			close(out)
-		}()
-
-		for event := range out {
-			switch event.Type {
-			case llm.EventTypeStatus:
-				fmt.Printf("💡 %s\n", event.Content)
-			case llm.EventTypeToken:
-				fmt.Print(event.Content)
-			case llm.EventTypeError:
-				fmt.Printf("\n❌ Error: %v\n", event.Err)
-			}
+		if !res.Success {
+			fmt.Printf("🚫 Blocked: %s\n", res.Message)
+		} else {
+			fmt.Printf("✅ Success: %s\n", res.Message)
 		}
-		fmt.Println()
 	},
 }
 
-var execSkillCmd = &cobra.Command{
-	Use:   "exec [skill_id] [params...]",
-	Short: "Execute a skill completely natively without involving the LLM",
-	Args:  cobra.MinimumNArgs(1),
+var downloadSkillCmd = &cobra.Command{
+	Use:   "download <hub_id>",
+	Short: "Download a skill without installing it",
+	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		skillID := args[0]
-		paramStr := ""
-		if len(args) > 1 {
-			paramStr = strings.Join(args[1:], " ")
-		}
-
-		ctx := cmd.Context()
-		sessionID := resolveSession()
-
-		// Bootstrap the entire engine quietly if needed
-		// (main.go PersistentPreRun should cover it, but just in case)
-
-		fmt.Printf("🚀 Firing native local execution for [%s]...\n", skillID)
-
-		query := fmt.Sprintf("!%s %s", skillID, paramStr)
-		stream, err := appEngine.ProcessRawIntent(ctx, sessionID, query, agentFlag, "", "", "")
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
 		if err != nil {
-			fmt.Printf("❌ Engine Fast-Path Error: %v\n", err)
+			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
+			os.Exit(1)
+		}
+		defer gClient.Close()
+
+		res, err := gClient.DownloadSkill(context.Background(), &v1.DownloadSkillRequest{
+			Id: args[0],
+			DestPath: downloadDest,
+			IncludeSource: downloadSrc,
+		})
+		if err != nil {
+			fmt.Printf("❌ Download failed: %v\n", err)
 			return
 		}
 
-		processStream(stream)
+		if !res.Success {
+			fmt.Printf("🚫 Blocked: %s\n", res.Message)
+		} else {
+			fmt.Printf("✅ Success: %s\n", res.Message)
+		}
+	},
+}
+
+var injectSkillCmd = &cobra.Command{
+	Use:   "inject <path_to_wasm>",
+	Short: "Locally inject an offline .wasm skill file into the engine",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		if err != nil {
+			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
+			os.Exit(1)
+		}
+		defer gClient.Close()
+
+		res, err := gClient.InjectSkill(context.Background(), &v1.InjectSkillRequest{FilePath: args[0]})
+		if err != nil {
+			fmt.Printf("❌ Injection failed: %v\n", err)
+			return
+		}
+
+		if !res.Success {
+			fmt.Printf("🚫 Failed: %s\n", res.Message)
+		} else {
+			fmt.Printf("✅ Success: %s (ID: %s)\n", res.Message, res.SkillId)
+		}
+	},
+}
+
+var inspectSkillCmd = &cobra.Command{
+	Use:   "inspect <id>",
+	Short: "Verify the cryptographic hash of an installed skill",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		if err != nil {
+			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
+			os.Exit(1)
+		}
+		defer gClient.Close()
+
+		res, err := gClient.InspectSkill(context.Background(), &v1.InspectSkillRequest{Id: args[0]})
+		if err != nil {
+			fmt.Printf("❌ Inspection failed: %v\n", err)
+			return
+		}
+
+		if !res.IsValid {
+			fmt.Printf("🛑 SECURITY WARNING: %s\n", res.Message)
+			fmt.Printf("Expected: %s\nActual:   %s\n", res.ExpectedChecksum, res.ActualChecksum)
+		} else {
+			fmt.Printf("🛡️ Validated: %s\n", res.Message)
+		}
 	},
 }
 
 var deleteSkillCmd = &cobra.Command{
 	Use:   "delete <id>",
-	Short: "Delete a skill from Vraxter",
+	Short: "Delete an installed skill",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		id := args[0]
-		repo := db.NewSkillRepository(appStore)
-		err := repo.DeleteSkill(id)
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
 		if err != nil {
-			fmt.Printf("❌ Failed to delete skill: %v\n", err)
+			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✅ Skill '%s' deleted successfully.\n", id)
+		defer gClient.Close()
+
+		res, err := gClient.DeleteSkill(context.Background(), &v1.DeleteSkillRequest{Id: args[0]})
+		if err != nil {
+			fmt.Printf("❌ Deletion failed: %v\n", err)
+			return
+		}
+
+		if !res.Success {
+			fmt.Printf("🚫 Failed: %s\n", res.Message)
+		} else {
+			fmt.Printf("🗑️ %s\n", res.Message)
+		}
 	},
 }
 
 func init() {
-	registerSkillCmd.Flags().StringVar(&sID, "id", "", "Unique Alias ID for the skill (e.g., hello-tool)")
-	registerSkillCmd.Flags().StringVar(&sName, "name", "", "Display name")
-	registerSkillCmd.Flags().StringVar(&sDesc, "desc", "", "Description for the AI to understand use-case")
-	registerSkillCmd.Flags().StringVar(&sCommand, "path", "", "Path to .wasm file or system command")
-	registerSkillCmd.Flags().StringVar(&sEngine, "engine", "wasm", "Execution engine (wasm, native)")
-	registerSkillCmd.Flags().BoolVar(&sOfficial, "official", false, "Mark as official Vraxter tool")
-
-	registerSkillCmd.MarkFlagRequired("id")
-	registerSkillCmd.MarkFlagRequired("name")
-	registerSkillCmd.MarkFlagRequired("path")
-
+	downloadSkillCmd.Flags().StringVar(&downloadDest, "dest", "./", "Destination directory to download the skill")
+	downloadSkillCmd.Flags().BoolVar(&downloadSrc, "include-source", false, "Download the source code zip as well")
+	
 	skillsCmd.AddCommand(listSkillsCmd)
 	skillsCmd.AddCommand(infoSkillCmd)
-	skillsCmd.AddCommand(autoAddSkillCmd)
-	skillsCmd.AddCommand(registerSkillCmd)
-	skillsCmd.AddCommand(trustSkillCmd)
-	skillsCmd.AddCommand(execSkillCmd)
+	skillsCmd.AddCommand(installSkillCmd)
+	skillsCmd.AddCommand(downloadSkillCmd)
+	skillsCmd.AddCommand(injectSkillCmd)
+	skillsCmd.AddCommand(inspectSkillCmd)
 	skillsCmd.AddCommand(deleteSkillCmd)
+
+	rootCmd.AddCommand(skillsCmd)
 }

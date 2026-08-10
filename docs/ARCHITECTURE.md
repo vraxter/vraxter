@@ -20,7 +20,10 @@ The daemon is the primary source of truth. It manages:
 - **Client-Agnostic HTTP/2**: Vraxter transitioned from pure gRPC to Connect RPC, allowing standard web clients (like fetch) to interact seamlessly without proxying.
 - **Streaming**: Supports bidirectional streaming for real-time LLM token delivery and tool output updates.
 
-### 3. Spatial & Identity Concurrency
+### 3. The Global Event Bus
+Vraxter implements a centralized, asynchronous event streaming pipeline. The Event Bus emits standardized events (`SKILL_APPROVAL_REQUEST`, `TOOL_CALL`, system statuses) ensuring all connected clients, regardless of type, can react in real-time to the engine's internal operations without polling.
+
+### 4. Spatial & Identity Concurrency
 The engine natively supports serving multiple physical rooms simultaneously.
 - **Spatial Isolation**: Requests containing a `source_zone` (e.g. "living_room") instantiate separate conversation memory streams.
 - **Unified Device Mapping**: The `SpatialService` merges internal `spatial.json` mapping with Google Home SDK data so the AI knows exactly which speakers (`[Nest Audio, TV]`) exist in which rooms.

@@ -35,6 +35,7 @@ type ExecutionEngine struct {
 	RestoreModelDelegate  func(sessionID string)
 	ResolveSpecialistDelegate func(ctx context.Context, query string) (*types.Specialist, error)
 	GetActiveModelConfigDelegate func(sessionID string) (types.ModelConfig, error)
+	RequireSkillApproval bool
 }
 
 // NewExecutionEngine creates a new ExecutionEngine.
@@ -47,6 +48,7 @@ func NewExecutionEngine(
 	jobManager *JobManager,
 	codegen *CodeGenService,
 	verbose bool,
+	requireSkillApproval bool,
 ) *ExecutionEngine {
 	return &ExecutionEngine{
 		Registry: registry,
@@ -57,6 +59,7 @@ func NewExecutionEngine(
 		JobManager: jobManager,
 		CodeGen:    codegen,
 		Verbose:  verbose,
+		RequireSkillApproval: requireSkillApproval,
 	}
 }
 
@@ -185,7 +188,7 @@ func (e *ExecutionEngine) ExecutePipeline(ctx context.Context, in <-chan types.E
 				toolP := payloadMap["tool_payload"]
 				codeP := payloadMap["code_payload"]
 				if feedback := e.DispatchToolPayload(ctx, out, toolP, codeP, conversationID); feedback != "" {
-					// Persist intermediate text before breaking off for retry
+					// Persist intermediate text before breaking off for retry or yield
 					if assistantText != "" {
 						e.ChatRepo.SaveMessage(&types.Message{
 							ID:             uuid.New().String(),
@@ -195,6 +198,11 @@ func (e *ExecutionEngine) ExecutePipeline(ctx context.Context, in <-chan types.E
 							Timestamp:      time.Now(),
 						})
 					}
+
+					if feedback == "!YIELD_FOR_APPROVAL" {
+						return feedback
+					}
+					
 					return feedback
 				}
 			}
@@ -391,6 +399,16 @@ func (e *ExecutionEngine) HandleStandardSkill(ctx context.Context, out chan<- ll
 		msg := fmt.Sprintf("\n⚡ Spawned Daemon Job for '%s' (Job ID: %s)", skillID, jobID)
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: msg})
 		return fmt.Sprintf("DAEMON SPAWNED: Skill '%s' is now running in the background with Job ID: %s. You will be notified when it completes.", skillID, jobID)
+	}
+
+	if e.RequireSkillApproval {
+		payloadBytes, _ := json.Marshal(call)
+		e.emitEvent(ctx, out, llm.StreamEvent{
+			Type:    llm.EventTypeSkillApprovalRequest,
+			Content: string(payloadBytes),
+			SkillID: skillID,
+		})
+		return "!YIELD_FOR_APPROVAL" // Magic string intercepted by the ExecutionEngine
 	}
 
 	result, err := e.Runner.Execute(ctx, *manifest, call.Params)

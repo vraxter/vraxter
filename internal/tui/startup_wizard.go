@@ -12,6 +12,7 @@ type StartupWizardState int
 
 const (
 	StateSplash StartupWizardState = iota
+	StateImplementation
 	StateUserProfile
 	StateProviderConfig
 	StateModelRegister
@@ -31,6 +32,8 @@ type StartupWizard struct {
 	// Dependencies for child creation
 	provMgr  *services.ProviderManager
 	modelMgr *services.ModelManager
+
+	SelectedImplementation string
 
 	quitting bool
 	Done     bool
@@ -62,10 +65,39 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.state == StateSplash {
 			if msg.String() == "enter" {
-				m.state = StateUserProfile
-				return m, m.userWizard.Init()
+				m.state = StateImplementation
+				return m, nil
 			}
 			if msg.String() == "esc" {
+				m.quitting = true
+				m.Done = true
+				return m, nil
+			}
+		}
+		
+		if m.state == StateImplementation {
+			switch msg.String() {
+			case "h", "H":
+				m.SelectedImplementation = "habitat"
+				m.state = StateUserProfile
+				return m, m.userWizard.Init()
+			case "f", "F":
+				m.SelectedImplementation = "facility"
+				m.state = StateUserProfile
+				return m, m.userWizard.Init()
+			case "e", "E":
+				m.SelectedImplementation = "enterprise"
+				m.state = StateUserProfile
+				return m, m.userWizard.Init()
+			case "s", "S":
+				m.SelectedImplementation = "sovereign"
+				m.state = StateUserProfile
+				return m, m.userWizard.Init()
+			case "c", "C":
+				m.SelectedImplementation = "core"
+				m.state = StateUserProfile
+				return m, m.userWizard.Init()
+			case "esc":
 				m.quitting = true
 				m.Done = true
 				return m, nil
@@ -129,6 +161,8 @@ func (m *StartupWizard) View() tea.View {
 	switch m.state {
 	case StateSplash:
 		content = m.renderSplash()
+	case StateImplementation:
+		content = m.renderImplementationSelector()
 	case StateUserProfile:
 		content = m.userWizard.View().Content
 	case StateProviderConfig:
@@ -188,6 +222,36 @@ func (m *StartupWizard) renderFinished() string {
 	))
 
 	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorGold).Render("Press ENTER to enter the workstation..."))
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("#2a2a2a")).
+		Padding(1, 2).
+		Width(width).
+		Render(s.String())
+}
+
+func (m *StartupWizard) renderImplementationSelector() string {
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+
+	var s strings.Builder
+	s.WriteString("\n\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("    ◈ SELECT IMPLEMENTATION WORLD") + "\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("    Vraxter activates different powers based on your environment.") + "\n\n")
+
+	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Width(width - 8).Render(
+		"Please select your implementation type:\n\n" +
+			" [c] Core        (Engineering Workstation & Local Skills)\n" +
+			" [h] Habitat     (Spatial Awareness & IoT Routing)\n" +
+			" [f] Facility    (Building Management Systems)\n" +
+			" [e] Enterprise  (Air-Gapped Telemetry, RBAC)\n" +
+			" [s] Sovereign   (All Powers Unlocked)\n",
+	))
+
+	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorGold).Render("Press the corresponding key to select..."))
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).

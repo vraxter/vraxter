@@ -12,7 +12,7 @@ import (
 	// Trigger side-effect registration of LLM adapters
 	_ "github.com/patagonicrune/vraxter/internal/llm/anthropic"
 	_ "github.com/patagonicrune/vraxter/internal/llm/google"
-	_ "github.com/patagonicrune/vraxter/internal/llm/ollama"
+	_ "github.com/patagonicrune/vraxter/internal/llm/custom"
 	_ "github.com/patagonicrune/vraxter/internal/llm/openai"
 )
 

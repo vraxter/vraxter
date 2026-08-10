@@ -50,7 +50,7 @@ func executeDiscovery(providerID string) {
 
 	// 1. Try gRPC (Bypass for internal TUI sessions to preserve rich metadata)
 	if os.Getenv("VRAXTER_INTERNAL_SESSION") != "true" {
-		gClient, err := client.NewManagementClient(":50051")
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
 		if err == nil {
 			defer gClient.Close()
 			models, err := gClient.DiscoverModels(ctx, providerID)
@@ -117,7 +117,7 @@ var providersSupportedCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// 1. Try gRPC
-		gClient, err := client.NewManagementClient(":50051")
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
 		if err == nil {
 			defer gClient.Close()
 			list, err := gClient.GetSupportedProviders(ctx)
@@ -166,7 +166,7 @@ var providersAddCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// 1. Try gRPC
-		gClient, err := client.NewManagementClient(":50051")
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
 		if err == nil {
 			defer gClient.Close()
 			id, err := gClient.ConfigureProvider(ctx, name, pType, key, url)
@@ -352,5 +352,5 @@ func init() {
 func getProviderManager() *services.ProviderManager {
 	bootstrap() // Ensure appStore and appCrypto are ready
 	repo := db.NewProviderRepository(appStore, appCrypto)
-	return services.NewProviderManager(repo)
+	return services.NewProviderManager(repo, appConfig.PrivacyPolicy)
 }

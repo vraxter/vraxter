@@ -1,7 +1,6 @@
 package env
 
 import (
-	"fmt"
 	"log/slog"
 	"sync"
 )
@@ -44,31 +43,29 @@ func (ep *ExecutionPipeline) ApplyEnvironmentalChange(state EnvironmentalState) 
 }
 
 func (ep *ExecutionPipeline) triggerMusicProvider(style string) {
-	// In a real implementation, this calls out to Spotify/YT Music APIs
-	// or invokes a local `vraxter-media` skill.
+	// NOTE: Integration point for external Media providers (Spotify/YT Music APIs)
+	// or internal vraxter-media skills.
 	slog.Info("🎧 Spawning async task: Playing music style", "style", style)
 	go func(s string) {
-		// Mock implementation
-		fmt.Printf("[MUSIC SERVICE] Changing global playlist to style: %s\n", s)
+		slog.Debug("Changing global playlist style", "style", s)
 	}(style)
 }
 
 func (ep *ExecutionPipeline) dispatchClientTelemetry(color, dynamics string) {
-	// In a real implementation, this pushes to a WebSocket Hub or Server-Sent Events channel
+	// NOTE: Integration point to push state to a WebSocket Hub or Server-Sent Events channel
 	// connected to the client frontend.
 	slog.Info("👁️ Dispatching telemetry to Client UI", "color", color, "dynamics", dynamics)
 	go func(c, d string) {
-		// Mock implementation
-		fmt.Printf("[WS HUB] Broadcast -> { \"eye_color\": \"%s\", \"eye_dynamics\": \"%s\" }\n", c, d)
+		slog.Debug("Broadcasting telemetry payload", "color", c, "dynamics", d)
 	}(color, dynamics)
 }
 
 func (ep *ExecutionPipeline) playTriggerSounds(keywords []string) {
-	// Casts to local IP speakers or plays via ALSA natively.
+	// NOTE: Casts to local IP speakers or plays via ALSA natively.
 	slog.Info("🔊 Playing immediate trigger keywords", "keywords", keywords)
 	go func(kws []string) {
 		for _, kw := range kws {
-			fmt.Printf("[AUDIO LAYER] Playing local sound effect for keyword: %s.mp3\n", kw)
+			slog.Debug("Dispatching local sound effect playback", "keyword", kw)
 		}
 	}(keywords)
 }

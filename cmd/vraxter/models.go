@@ -39,7 +39,7 @@ var listModelsCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// 1. Try gRPC first
-		gClient, err := client.NewManagementClient(":50051")
+		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
 		if err == nil {
 			defer gClient.Close()
 			models, err := gClient.ListModels(ctx, modelFilterProv)

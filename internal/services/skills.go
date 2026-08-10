@@ -103,3 +103,36 @@ func (s *SkillService) LoadAllIntoRegistry(reg *skills.Registry) error {
 func (s *SkillService) ListSkills() ([]types.SkillManifest, error) {
 	return s.repo.GetAllSkills()
 }
+
+func (s *SkillService) GetSkill(id string) (types.SkillManifest, error) {
+	all, err := s.ListSkills()
+	if err != nil {
+		return types.SkillManifest{}, err
+	}
+	for _, sm := range all {
+		if sm.ID == id {
+			return sm, nil
+		}
+	}
+	return types.SkillManifest{}, fmt.Errorf("skill '%s' not found", id)
+}
+
+func (s *SkillService) DeleteSkill(id string) error {
+	// Ideally we would also delete the binary here
+	return s.repo.DeleteSkill(id)
+}
+
+func (s *SkillService) RegisterFromWASM(path string) error {
+	id := filepath.Base(path)
+	id = id[:len(id)-len(filepath.Ext(id))]
+
+	m := types.SkillManifest{
+		ID:          id,
+		Name:        id,
+		Description: "Injected local skill",
+		Version:     "1.0.0",
+		Engine:      "wasm",
+		Command:     path,
+	}
+	return s.InstallSkill(m)
+}

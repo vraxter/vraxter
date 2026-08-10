@@ -5,10 +5,14 @@ import (
 	"crypto/md5"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +22,7 @@ import (
 	"github.com/patagonicrune/vraxter/internal/core"
 	"github.com/patagonicrune/vraxter/internal/db"
 	"github.com/patagonicrune/vraxter/internal/env"
+	"github.com/patagonicrune/vraxter/internal/features"
 	"github.com/patagonicrune/vraxter/internal/llm"
 	"github.com/patagonicrune/vraxter/internal/security"
 	"github.com/patagonicrune/vraxter/internal/server"
@@ -25,7 +30,6 @@ import (
 	"github.com/patagonicrune/vraxter/internal/skills"
 	"github.com/patagonicrune/vraxter/internal/tui"
 	"github.com/spf13/cobra"
-	"net/http"
 )
 
 var (
@@ -35,6 +39,7 @@ var (
 	appEngine   *core.Engine
 	appProviderManager *services.ProviderManager
 	appModelManager    *services.ModelManager
+	appSkillService    *services.SkillService
 	appStateManager    *env.StateManager
 	appPipeline        *env.ExecutionPipeline
 	agentFlag          string
@@ -42,6 +47,7 @@ var (
 	modelFlag          string
 	newFlag            bool
 	verboseFlag        bool
+	daemonKey          string
 
 	bootstrapOnce sync.Once
 )
@@ -55,6 +61,12 @@ func bootstrap() {
 		if err == nil {
 			log.SetOutput(logFile)
 			log.Println("--- Vraxter Engine Started ---")
+		}
+
+		daemonKey, err = security.GetOrCreateDaemonKey(appConfig.AppDir)
+		if err != nil {
+			fmt.Printf("Fatal: Error securing Daemon API Key: %v\n", err)
+			os.Exit(1)
 		}
 
 		appStore, err = db.NewStore(appConfig.DBPath)
@@ -75,8 +87,8 @@ func bootstrap() {
 		runner := skills.NewRunner()
 
 		skillRepo := db.NewSkillRepository(appStore)
-		skillService := services.NewSkillService(skillRepo, appConfig.SkillsDir)
-		if err := skillService.LoadAllIntoRegistry(registry); err != nil {
+		appSkillService = services.NewSkillService(skillRepo, appConfig.SkillsDir)
+		if err := appSkillService.LoadAllIntoRegistry(registry); err != nil {
 			fmt.Printf("Warning: Startup Skill synchronization failed: %v\n", err)
 		}
 
@@ -84,7 +96,7 @@ func bootstrap() {
 		coder := services.NewCoderService(skillRepo, tm, appConfig.SkillsDir, runner)
 		spatialSvc := services.NewSpatialService(appConfig.EnableGoogleHome, appConfig.SpatialConfigPath)
 
-		appEngine, err = core.NewEngine(appStore, appCrypto, registry, runner, coder, spatialSvc, verboseFlag, appConfig.AppDir)
+		appEngine, err = core.NewEngine(appStore, appCrypto, registry, runner, coder, spatialSvc, verboseFlag, appConfig.AppDir, appConfig.RequireSkillApproval)
 		if err != nil {
 			fmt.Printf("Fatal: Core Engine initialization failed: %v\n", err)
 			os.Exit(1)
@@ -93,7 +105,7 @@ func bootstrap() {
 		providerRepo := db.NewProviderRepository(appStore, appCrypto)
 		modelRepo := db.NewModelRepository(appStore, appCrypto)
 
-		appProviderManager = services.NewProviderManager(providerRepo)
+		appProviderManager = services.NewProviderManager(providerRepo, appConfig.PrivacyPolicy)
 		appModelManager = services.NewModelManager(modelRepo, providerRepo)
 
 		appStateManager, err = env.NewStateManager(appConfig.AppDir)
@@ -107,6 +119,9 @@ func bootstrap() {
 		if err := db.RenameProviderType(appStore, "gemini", "google"); err != nil {
 			log.Printf("Warning: gemini->google migration failed: %v", err)
 		}
+
+		// 4. Activate World Powers
+		features.ActivateForWorld(appConfig.Implementation)
 	})
 }
 
@@ -209,11 +224,11 @@ var rootCmd = &cobra.Command{
 
 		// 2. Strict Remote Mode (gRPC Daemon)
 		fmt.Printf("🔍 Connecting to Vraxter Daemon...")
-		gClient, err := client.NewGRPCClient(":50051")
+		gClient, err := client.NewGRPCClient("127.0.0.1:50051", daemonKey)
 		if err != nil {
 			fmt.Println(" [SPAWNING BACKGROUND DAEMON]")
 			spawnEphemeralDaemon()
-			gClient, _ = client.NewGRPCClient(":50051") // Connect to newly spawned daemon
+			gClient, _ = client.NewGRPCClient("127.0.0.1:50051", daemonKey) // Connect to newly spawned daemon
 		} else {
 			fmt.Println(" [CONNECTED]")
 		}
@@ -300,9 +315,20 @@ func processStream(stream <-chan llm.StreamEvent) {
 // spawnEphemeralDaemon secretly boots the gRPC server within the current process if one doesn't exist
 func spawnEphemeralDaemon() {
 	bootstrap()
+	
+	lis, err := net.Listen("tcp", "127.0.0.1:50051")
+	if err != nil {
+		fmt.Printf("Fatal: failed to listen on port: %v\n", err)
+		os.Exit(1)
+	}
+
+	srv := server.BuildServer(appEngine, appProviderManager, appModelManager, appSkillService, &appConfig, daemonKey)
 	ready := make(chan bool)
 	go func() {
-		server.Start(appEngine, appProviderManager, appModelManager, ready)
+		ready <- true
+		if err := srv.Serve(lis); err != nil {
+			fmt.Printf("Fatal: ephemeral gRPC server error: %v\n", err)
+		}
 	}()
 	<-ready
 }
@@ -313,26 +339,55 @@ var serverCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		bootstrap() // Server MUST have the full engine loaded
 
-		ready := make(chan bool)
+		lis, err := net.Listen("tcp", "127.0.0.1:50051")
+		if err != nil {
+			fmt.Printf("Fatal: failed to listen on port: %v\n", err)
+			os.Exit(1)
+		}
+
+		grpcServer := server.BuildServer(appEngine, appProviderManager, appModelManager, appSkillService, &appConfig, daemonKey)
+
 		go func() {
-			server.Start(appEngine, appProviderManager, appModelManager, ready)
+			if err := grpcServer.Serve(lis); err != nil {
+				fmt.Printf("Fatal: gRPC server error: %v\n", err)
+			}
 		}()
 
-		<-ready
-		fmt.Println("🚀 Vraxter Engine (gRPC) is Online.")
+		fmt.Println("🚀 Vraxter Engine (gRPC) is Online on 127.0.0.1:50051")
 
 		// Start Connect RPC Server
 		mux := http.NewServeMux()
 		server.RegisterEnvService(mux, appStateManager, appPipeline)
 
-		fmt.Println("🌍 Connect RPC API listening on :8080 (HTTP)")
+		httpServer := &http.Server{
+			Addr:    "127.0.0.1:8080",
+			Handler: server.HTTPAuthMiddleware(daemonKey, mux),
+		}
+
+		fmt.Println("🌍 Connect RPC API listening on 127.0.0.1:8080 (HTTP)")
 		go func() {
-			if err := http.ListenAndServe(":8080", mux); err != nil {
+			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				fmt.Printf("Fatal: HTTP server error: %v\n", err)
 			}
 		}()
 
-		select {} // Block main thread
+		// Graceful Shutdown Trapping
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+		<-stop
+
+		fmt.Println("\n🛑 Shutting down Vraxter Daemon gracefully...")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := httpServer.Shutdown(ctx); err != nil {
+			fmt.Printf("HTTP Server shutdown error: %v\n", err)
+		}
+
+		grpcServer.GracefulStop()
+		appStore.Close()
+		fmt.Println("✅ Vraxter stopped successfully.")
 	},
 }
 
@@ -346,7 +401,7 @@ var daemonStopCmd = &cobra.Command{
 	Short: "Gracefully shuts down the background daemon",
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
-		gClient, err := client.NewGRPCClient(":50051")
+		gClient, err := client.NewGRPCClient("127.0.0.1:50051", daemonKey)
 		if err != nil {
 			fmt.Println("❌ Daemon is not running or unreachable.")
 			return
@@ -377,7 +432,7 @@ func init() {
 
 // connectOrSpawn attempts to connect to a daemon, spawning one if invisible
 func connectOrSpawn(ctx context.Context) (*client.GRPCClient, error) {
-	gClient, err := client.NewGRPCClient(":50051")
+	gClient, err := client.NewGRPCClient("127.0.0.1:50051", daemonKey)
 	if err == nil {
 		return gClient, nil
 	}
@@ -385,7 +440,7 @@ func connectOrSpawn(ctx context.Context) (*client.GRPCClient, error) {
 	fmt.Printf("🔍 Spawning Background Daemon... ")
 	spawnEphemeralDaemon()
 	time.Sleep(100 * time.Millisecond) // Warm-up
-	gClient, err = client.NewGRPCClient(":50051")
+	gClient, err = client.NewGRPCClient("127.0.0.1:50051", daemonKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect even after spawn: %w", err)
 	}

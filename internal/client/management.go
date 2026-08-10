@@ -13,8 +13,11 @@ type ManagementClient struct {
 	api  v1.AgentServiceClient
 }
 
-func NewManagementClient(addr string) (*ManagementClient, error) {
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+func NewManagementClient(addr string, apiKey string) (*ManagementClient, error) {
+	conn, err := grpc.Dial(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithPerRPCCredentials(NewAPICredentials(apiKey)),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -84,4 +87,48 @@ func (c *ManagementClient) GetSupportedProviders(ctx context.Context) ([]string,
 		return nil, err
 	}
 	return resp.Providers, nil
+}
+
+// --- Config Management ---
+
+func (c *ManagementClient) GetConfig(ctx context.Context) (*v1.ConfigResponse, error) {
+	return c.api.GetConfig(ctx, &v1.GetConfigRequest{})
+}
+
+func (c *ManagementClient) UpdateConfig(ctx context.Context, privacyPolicy *string, hubURL *string, requireSkillApproval *bool) (*v1.ConfigResponse, error) {
+	return c.api.UpdateConfig(ctx, &v1.UpdateConfigRequest{
+		PrivacyPolicy:        privacyPolicy,
+		HubUrl:               hubURL,
+		RequireSkillApproval: requireSkillApproval,
+	})
+}
+
+// --- Skills Management ---
+
+func (c *ManagementClient) ListSkills(ctx context.Context, req *v1.ListSkillsRequest) (*v1.ListSkillsResponse, error) {
+	return c.api.ListSkills(ctx, req)
+}
+
+func (c *ManagementClient) GetSkillInfo(ctx context.Context, req *v1.GetSkillInfoRequest) (*v1.GetSkillInfoResponse, error) {
+	return c.api.GetSkillInfo(ctx, req)
+}
+
+func (c *ManagementClient) InstallSkill(ctx context.Context, req *v1.InstallSkillRequest) (*v1.InstallSkillResponse, error) {
+	return c.api.InstallSkill(ctx, req)
+}
+
+func (c *ManagementClient) DownloadSkill(ctx context.Context, req *v1.DownloadSkillRequest) (*v1.DownloadSkillResponse, error) {
+	return c.api.DownloadSkill(ctx, req)
+}
+
+func (c *ManagementClient) InjectSkill(ctx context.Context, req *v1.InjectSkillRequest) (*v1.InjectSkillResponse, error) {
+	return c.api.InjectSkill(ctx, req)
+}
+
+func (c *ManagementClient) InspectSkill(ctx context.Context, req *v1.InspectSkillRequest) (*v1.InspectSkillResponse, error) {
+	return c.api.InspectSkill(ctx, req)
+}
+
+func (c *ManagementClient) DeleteSkill(ctx context.Context, req *v1.DeleteSkillRequest) (*v1.DeleteSkillResponse, error) {
+	return c.api.DeleteSkill(ctx, req)
 }

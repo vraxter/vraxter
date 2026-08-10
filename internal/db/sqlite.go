@@ -52,6 +52,10 @@ func NewStore(dbPath string) (*Store, error) {
 		}
 	}
 
+	// Restrict open connections to serialize writes at the Go level and prevent 'database is locked' errors.
+	// WAL mode will handle the underlying SQLite synchronization.
+	db.SetMaxOpenConns(1)
+
 	store := &Store{Conn: db}
 
 	// Bootstrap required tables

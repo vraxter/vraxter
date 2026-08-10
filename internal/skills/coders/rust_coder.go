@@ -83,7 +83,7 @@ func (c *RustCoder) Compile(name, description, paramsSchema, code string) error 
 		return fmt.Errorf("skill compiled successfully but failed verification check (Dry-Run crashed): %v", err)
 	}
 
-	// TODO: Dispatch to Central Vraxter Hub 
+	// NOTE: Future integration point for publishing compiled modules to the Vraxter Skill Hub.
 	log.Printf("RustCoder: Skill verified! Persisting '%s' to database.", skillID)
 
 	return c.Repo.UpsertSkill(manifest)

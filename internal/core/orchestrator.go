@@ -73,6 +73,7 @@ func NewOrchestrator(
 	spatialSvc *services.SpatialService,
 	verbose bool,
 	routingOverrides map[string]string, // from routing.yaml: useCase → modelID
+	requireSkillApproval bool,
 ) (*Orchestrator, error) {
 	modelsRepo := db.NewModelRepository(store, crypto)
 	chatRepo := db.NewChatRepository(store)
@@ -122,7 +123,7 @@ func NewOrchestrator(
 		SpatialSvc:       spatialSvc,
 		UserRepo:         db.NewUserRepository(store),
 		Resolver:         NewIntentResolver(reg, router, skillRepo, specRepo),
-		ExecEngine:       NewExecutionEngine(reg, run, coder, chatRepo, specRepo, jobMgr, codegen, verbose),
+		ExecEngine:       NewExecutionEngine(reg, run, coder, chatRepo, specRepo, jobMgr, codegen, verbose, requireSkillApproval),
 		StreamCoord:      NewStreamCoordinator(router, verbose),
 		Planner:          NewPlanner(chatRepo, router),
 		MemorySvc:        services.NewMemoryService(memoryRepo, router),
@@ -626,6 +627,58 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 			result := o.ExecEngine.HandleStandardSkill(ctx, out, types.ToolCall{SkillID: skillID}, skillID)
 			out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ **Result:**\n%s\n", result)}
 			return
+		}
+
+		if strings.HasPrefix(trimmedText, "!APPROVE_SKILL") {
+			o.mu.RUnlock()
+			payloadStr := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!APPROVE_SKILL"))
+			var call types.ToolCall
+			if err := json.Unmarshal([]byte(payloadStr), &call); err == nil {
+				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ **Skill Execution Approved:** `%s`\n", call.SkillID)}
+				// Force execution directly (bypassing approval loop by turning it off temporarily just for this synchronous call)
+				o.ExecEngine.RequireSkillApproval = false
+				result := o.ExecEngine.HandleStandardSkill(ctx, out, call, call.SkillID)
+				o.ExecEngine.RequireSkillApproval = true // Restore
+
+				// Save the tool output so the LLM context is updated
+				o.ChatRepo.SaveMessage(&types.Message{
+					ID:             uuid.New().String(),
+					ConversationID: conversationID,
+					Role:           "assistant",
+					Content:        fmt.Sprintf("[%s]: %s", call.SkillID, result),
+					Timestamp:      time.Now(),
+				})
+				
+				// Re-prompt the LLM to continue reasoning
+				trimmedText = "!CONTINUE_REASONING" // Will fall through to standard LLM generation
+			} else {
+				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: Invalid payload for skill approval.\n"}
+				return
+			}
+		}
+
+		if strings.HasPrefix(trimmedText, "!REJECT_SKILL") {
+			o.mu.RUnlock()
+			payloadStr := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!REJECT_SKILL"))
+			var call types.ToolCall
+			if err := json.Unmarshal([]byte(payloadStr), &call); err == nil {
+				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n❌ **Skill Execution Rejected:** `%s`\n", call.SkillID)}
+				
+				// Save the tool output as rejected so the LLM context is updated
+				o.ChatRepo.SaveMessage(&types.Message{
+					ID:             uuid.New().String(),
+					ConversationID: conversationID,
+					Role:           "assistant",
+					Content:        fmt.Sprintf("[%s]: SYSTEM ERROR: The execution of this skill was REJECTED by the user due to Security Policies. You MUST try an alternative approach or ask the user for permission.", call.SkillID),
+					Timestamp:      time.Now(),
+				})
+				
+				// Re-prompt the LLM to continue reasoning
+				trimmedText = "!CONTINUE_REASONING" // Will fall through to standard LLM generation
+			} else {
+				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: Invalid payload for skill rejection.\n"}
+				return
+			}
 		}
 
 		if strings.HasPrefix(trimmedText, "!EXECUTE_PLAN") {

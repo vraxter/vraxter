@@ -7,6 +7,7 @@ import (
 	"time"
 
 	v1 "github.com/patagonicrune/vraxter/api/v1"
+	"github.com/patagonicrune/vraxter/internal/config"
 	"github.com/patagonicrune/vraxter/internal/core"
 	"github.com/patagonicrune/vraxter/internal/llm"
 	"github.com/patagonicrune/vraxter/internal/services"
@@ -18,13 +19,17 @@ type AgentHandler struct {
 	engine          *core.Engine
 	providerManager *services.ProviderManager
 	modelManager    *services.ModelManager
+	skillService    *services.SkillService
+	config          *config.Config
 }
 
-func NewAgentHandler(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager) *AgentHandler {
+func NewAgentHandler(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager, sm *services.SkillService, cfg *config.Config) *AgentHandler {
 	return &AgentHandler{
 		engine:          engine,
 		providerManager: pm,
 		modelManager:    mm,
+		skillService:    sm,
+		config:          cfg,
 	}
 }
 

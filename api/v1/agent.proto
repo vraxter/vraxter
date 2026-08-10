@@ -45,6 +45,19 @@ service AgentService {
 
   // GetActiveJobs returns all currently tracked background daemons
   rpc GetActiveJobs(GetActiveJobsRequest) returns (GetActiveJobsResponse);
+
+  // --- Configuration Management ---
+  rpc GetConfig(GetConfigRequest) returns (ConfigResponse);
+  rpc UpdateConfig(UpdateConfigRequest) returns (ConfigResponse);
+
+  // --- Skills & Hub Management ---
+  rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
+  rpc GetSkillInfo(GetSkillInfoRequest) returns (GetSkillInfoResponse);
+  rpc InstallSkill(InstallSkillRequest) returns (InstallSkillResponse);
+  rpc DownloadSkill(DownloadSkillRequest) returns (DownloadSkillResponse);
+  rpc InjectSkill(InjectSkillRequest) returns (InjectSkillResponse);
+  rpc InspectSkill(InspectSkillRequest) returns (InspectSkillResponse);
+  rpc DeleteSkill(DeleteSkillRequest) returns (DeleteSkillResponse);
 }
 
 message GetInfoRequest {}
@@ -53,6 +66,100 @@ message GetInfoResponse {
   string model_id = 1;
   string version = 2;
   string status = 3;
+  string capabilities = 7;
+  int32 context_window = 8;
+  string use_cases = 9;
+}
+
+// --- Configuration ---
+
+message GetConfigRequest {}
+
+message UpdateConfigRequest {
+  optional string privacy_policy = 1;
+  optional string hub_url = 2;
+  optional bool require_skill_approval = 3;
+}
+
+message ConfigResponse {
+  string privacy_policy = 1;
+  string hub_url = 2;
+  bool require_skill_approval = 3;
+}
+
+// --- Skills ---
+
+message SkillInfo {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string version = 4;
+  string engine = 5;
+  int32 tier = 6;
+  float score = 7;
+  bool is_official = 8;
+  string checksum = 9;
+  repeated string permissions = 10;
+  int32 downloads = 11;
+  bool has_params = 12;
+}
+
+message ListSkillsRequest {}
+message ListSkillsResponse {
+  repeated SkillInfo skills = 1;
+}
+
+message GetSkillInfoRequest {
+  string id = 1;
+}
+message GetSkillInfoResponse {
+  SkillInfo skill = 1;
+  string schema = 2; // JSON schema for params
+}
+
+message InstallSkillRequest {
+  string id = 1;
+}
+message InstallSkillResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message DownloadSkillRequest {
+  string id = 1;
+  string dest_path = 2;
+  bool include_source = 3;
+}
+message DownloadSkillResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message InjectSkillRequest {
+  string file_path = 1;
+}
+message InjectSkillResponse {
+  bool success = 1;
+  string message = 2;
+  string skill_id = 3;
+}
+
+message InspectSkillRequest {
+  string id = 1;
+}
+message InspectSkillResponse {
+  bool is_valid = 1;
+  string expected_checksum = 2;
+  string actual_checksum = 3;
+  string message = 4;
+}
+
+message DeleteSkillRequest {
+  string id = 1;
+}
+message DeleteSkillResponse {
+  bool success = 1;
+  string message = 2;
 }
 
 message ExecuteRequest {
@@ -74,12 +181,15 @@ message ExecuteResponse {
     PLAN_PROPOSAL = 5; // A multi-phase plan awaiting confirmation
     STATUS = 6;       // System status notice (e.g. Fallback alerts)
     SPECIALIST_RESULT = 7; // Sub-agent stream events
+    SKILL_APPROVAL_REQUEST = 8; // Emitted when a skill requires manual HITL approval
   }
   
   Type type = 1;
   string content = 2;      // Text content or JSON for tools
   string skill_id = 3;     // ID if it's a tool-related event
   string active_model_id = 4; // The model ID currently driving the execution
+  string tool_payload = 5; // Raw JSON payload for tool calls or approvals
+  string code_payload = 6; // Raw code payload for tools
 }
 
 // --- Event Bus Messages ---

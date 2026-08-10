@@ -41,6 +41,7 @@ func NewEngine(
 	spatialSvc *services.SpatialService,
 	verbose bool,
 	appDir string, // needed to load routing.yaml
+	requireSkillApproval bool,
 ) (*Engine, error) {
 	// Load the use-case routing config from disk (won't fail if missing)
 	routingCfg, err := appcfg.LoadRoutingConfig(appDir)
@@ -51,7 +52,7 @@ func NewEngine(
 	// Ensure a documented sample is written on first run
 	_ = appcfg.WriteSampleRoutingConfig(appDir)
 
-	orch, err := NewOrchestrator(store, crypto, reg, run, coder, spatialSvc, verbose, routingCfg.Routes)
+	orch, err := NewOrchestrator(store, crypto, reg, run, coder, spatialSvc, verbose, routingCfg.Routes, requireSkillApproval)
 	if err != nil {
 		return nil, err
 	}

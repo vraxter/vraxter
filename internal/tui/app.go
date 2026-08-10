@@ -34,6 +34,8 @@ import (
 	"github.com/patagonicrune/vraxter/internal/services"
 	"github.com/patagonicrune/vraxter/internal/utils"
 	"github.com/patagonicrune/vraxter/pkg/interfaces"
+	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/patagonicrune/vraxter/internal/config"
 )
 
 const vraxterIconPlaceholder = "[[VRAXTER_IDENTITY]]"
@@ -282,6 +284,9 @@ type Model struct {
 	ShowAmendInput       bool
 	PendingRunSkill      string // Name of skill awaiting manual run prompt
 
+	IsWaitingForSkillApproval bool
+	PendingSkillPayload       string
+
 	// History browsing
 	lastHistoryResults []client.ConversationSummary
 
@@ -447,6 +452,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			done = true
 		}
 		if sw, ok := m.ActiveSetup.(*StartupWizard); ok && sw.Done {
+			if sw.SelectedImplementation != "" {
+				cfg := config.Load()
+				cfg.Implementation = sw.SelectedImplementation
+				_ = cfg.SaveSettings()
+			}
 			done = true
 		}
 
@@ -924,7 +934,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			block = fmt.Sprintf("\n⏳ **Background Job Started:** %s (ID: %s)\n", msg.Event.Title, msg.Event.JobId)
 		case v1.SystemEvent_JOB_COMPLETED:
 			block = fmt.Sprintf("\n✅ **Job Completed:** %s\n```\n%s\n```\n", msg.Event.Title, msg.Event.Payload)
-			// TODO: If this was a plan generation, we should intercept and show the UI!
+			// NOTE: Future visual integration: Intercept PLAN_PROPOSAL events here to show a dedicated planner UI
 		case v1.SystemEvent_JOB_FAILED:
 			block = fmt.Sprintf("\n❌ **Job Failed:** %s\n```\n%s\n```\n", msg.Event.Title, msg.Event.Payload)
 		case v1.SystemEvent_SWARM_PROGRESS:
@@ -1059,6 +1069,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ShowAmendInput = false
 			m.Input.Blur()
 			m.appendHistory(BlockComponent, m.renderPlan(msg.Event.Content, m.width, "")+"\n")
+		case llm.EventTypeSkillApprovalRequest:
+			m.IsWaitingForSkillApproval = true
+			m.PendingSkillPayload = msg.Event.Content
+			m.PlanActionIndex = 0 // Default to PROCEED
+			m.Input.Blur()
+			m.appendHistory(BlockComponent, m.renderSkillApproval(msg.Event.SkillID, msg.Event.Content, m.width, "")+"\n")
 		case llm.EventTypeSpecialistResult:
 			// Format: id|name|content
 			parts := strings.SplitN(msg.Event.Content, "|", 3)
@@ -1360,6 +1376,31 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 
 		return m.fireExecution("!EXECUTE_PLAN " + m.ProposedPlan)
 	case "/reject":
+		if m.IsWaitingForSkillApproval {
+			// Handle Skill Rejection
+			if len(m.History) > 0 {
+				var call types.ToolCall
+				skillID := ""
+				if err := json.Unmarshal([]byte(m.PendingSkillPayload), &call); err == nil {
+					skillID = call.SkillID
+				}
+				m.History[len(m.History)-1].Content = m.renderSkillApproval(skillID, m.PendingSkillPayload, m.width, "❌ SKILL REJECTED") + "\n"
+			}
+			
+			m.IsWaitingForSkillApproval = false
+			m.IsStreaming = true // Needs to stream the rejection back to LLM
+
+			// Restore Input State
+			m.Input.Prompt = "❯ "
+			tas := m.Input.Styles()
+			tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+			m.Input.SetStyles(tas)
+			m.Input.Focus()
+
+			return m.fireExecution("!REJECT_SKILL " + m.PendingSkillPayload)
+		}
+
+		// Otherwise handle Plan Rejection
 		// Update History in-place to show Rejection INSIDE the box
 		if len(m.History) > 0 {
 			m.History[len(m.History)-1].Content = m.renderPlan(m.ProposedPlan, m.width, "❌ PLAN REJECTED") + "\n"
@@ -1376,13 +1417,42 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		m.Input.Focus()
 
 		return nil
+	case "/approve":
+		if !m.IsWaitingForSkillApproval {
+			m.appendHistory(BlockComponent, errorStyle.Render("❌ No skill currently awaiting approval.\n\n"))
+			return nil
+		}
+
+		// Update History in-place to show Acceptance INSIDE the box
+		if len(m.History) > 0 {
+			var call types.ToolCall
+			skillID := ""
+			if err := json.Unmarshal([]byte(m.PendingSkillPayload), &call); err == nil {
+				skillID = call.SkillID
+			}
+			m.History[len(m.History)-1].Content = m.renderSkillApproval(skillID, m.PendingSkillPayload, m.width, "✅ SKILL APPROVED") + "\n"
+		}
+
+		m.IsWaitingForSkillApproval = false
+		m.IsStreaming = true
+
+		// Restore Input State
+		m.Input.Prompt = "❯ "
+		tas := m.Input.Styles()
+		tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+		m.Input.SetStyles(tas)
+		m.Input.Focus()
+
+		return m.fireExecution("!APPROVE_SKILL " + m.PendingSkillPayload)
+	case "/deny": // We use /deny as an alias for /reject specifically for skills, or we can overload /reject. Let's overload /reject below.
+		fallthrough
 	case "/quit", "/exit":
 		m.appendHistory(BlockComponent, toolStyle.Render("👋 Press Ctrl+C or ESC to exit.\n\n"))
 		return nil
 	case "/start":
 		pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
 		mRepo := db.NewModelRepository(m.appStore, m.appCrypto)
-		pMgr := services.NewProviderManager(pRepo)
+		pMgr := services.NewProviderManager(pRepo, "ask")
 		mMgr := services.NewModelManager(mRepo, pRepo)
 		m.ActiveSetup = NewStartupWizard(pMgr, mMgr)
 		return nil
@@ -1393,14 +1463,14 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		}
 		if cmd == "/providers setup" && len(parts) == 2 && parts[1] == "setup" {
 			repo := db.NewProviderRepository(m.appStore, m.appCrypto)
-			mgr := services.NewProviderManager(repo)
+			mgr := services.NewProviderManager(repo, "ask")
 			m.ActiveSetup = NewProviderWizard(mgr)
 			return nil
 		}
 		if cmd == "/models setup" && len(parts) == 2 && parts[1] == "setup" {
 			pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
 			mRepo := db.NewModelRepository(m.appStore, m.appCrypto)
-			pMgr := services.NewProviderManager(pRepo)
+			pMgr := services.NewProviderManager(pRepo, "ask")
 			mMgr := services.NewModelManager(mRepo, pRepo)
 			m.ActiveSetup = NewModelWizard(pMgr, mMgr)
 			return nil
@@ -1411,7 +1481,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 			pID := parts[1]
 			return func() tea.Msg {
 				repo := db.NewProviderRepository(m.appStore, m.appCrypto)
-				mgr := services.NewProviderManager(repo)
+				mgr := services.NewProviderManager(repo, "ask")
 				models, err := mgr.DiscoverModels(m.ctx, pID)
 				if err != nil {
 					return cmdOutputMsg{input: cmd, output: fmt.Sprintf("❌ Discovery failed: %v", err)}
@@ -1794,6 +1864,70 @@ func (m *Model) renderPlan(jsonStr string, width int, status string) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("#2a2a2a")).
+		Padding(1, 2).
+		Width(boxWidth).
+		Render(doc.String())
+}
+
+// renderSkillApproval visually formats the Skill Approval prompt
+func (m *Model) renderSkillApproval(skillID, payload string, width int, status string) string {
+	boxWidth := width - 10
+	if boxWidth > 110 {
+		boxWidth = 110
+	}
+	if boxWidth < 50 {
+		boxWidth = 50
+	}
+
+	var doc strings.Builder
+
+	// Header
+	accentColor := lipgloss.Color("#FF9800") // Orange/Warning
+	headerStyle := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(lipgloss.Color("#444")).Width(boxWidth - 4)
+	doc.WriteString(headerStyle.Render("🔒 ENTERPRISE POLICY: MANUAL SKILL APPROVAL REQUIRED") + "\n\n")
+
+	// Info
+	doc.WriteString(lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("Skill ID: %s", skillID)) + "\n\n")
+
+	// Payload JSON parsed for reading
+	var call types.ToolCall
+	if err := json.Unmarshal([]byte(payload), &call); err == nil {
+		pretty, _ := json.MarshalIndent(call.Params, "", "  ")
+		doc.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8")).Render(string(pretty)) + "\n")
+	} else {
+		doc.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8")).Render(payload) + "\n")
+	}
+
+	if status != "" {
+		doc.WriteString("\n")
+		statusStyle := lipgloss.NewStyle().Bold(true).Padding(0, 1)
+		if strings.Contains(status, "APPROVED") {
+			statusStyle = statusStyle.Foreground(colorEmerald)
+		} else {
+			statusStyle = statusStyle.Foreground(lipgloss.Color("#FF5252"))
+		}
+		doc.WriteString(statusStyle.Render(status))
+	} else if m.IsWaitingForSkillApproval {
+		doc.WriteString("\n")
+		labels := []string{"APPROVE", "REJECT"}
+		colors := []color.Color{colorEmerald, lipgloss.Color("#FF5252")}
+		var parts []string
+		for i, label := range labels {
+			s := lipgloss.NewStyle().Foreground(colors[i]).Bold(i == m.PlanActionIndex)
+			if i == m.PlanActionIndex {
+				s = s.Reverse(true)
+			} else {
+				s = s.Faint(true)
+			}
+			parts = append(parts, s.Render(" "+label+" "))
+		}
+		hintStyle := lipgloss.NewStyle().Foreground(colorMutedGray).Faint(true)
+		doc.WriteString(hintStyle.Render("◈ ") + strings.Join(parts, "  "))
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(accentColor).
 		Padding(1, 2).
 		Width(boxWidth).
 		Render(doc.String())

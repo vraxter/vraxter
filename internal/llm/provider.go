@@ -21,6 +21,7 @@ const (
 	EventTypePlanProposal = interfaces.EventTypePlanProposal
 	EventTypeStatus       = interfaces.EventTypeStatus
 	EventTypeSpecialistResult = interfaces.EventTypeSpecialistResult
+	EventTypeSkillApprovalRequest = interfaces.EventTypeSkillApprovalRequest
 )
 
 type StreamEvent = interfaces.StreamEvent

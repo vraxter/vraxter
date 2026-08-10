@@ -11,17 +11,16 @@ Specialists can be created via `/specialists join` or via the `vraxter-create-sp
 - **Expertise**: A single paragraph defining what the sub-agent "knows".
 - **Prompt**: The dedicated system instructions for this sub-agent.
 
-### 2. Delegation (Handoffs)
+### 2. Delegation (Semantic Handoffs)
 When the Supervisor (Main Vraxter) identifies that a query falls within a specialist's domain:
 1. It invokes the `vraxter-delegate` tool.
-2. The UI focus shifts to the specialist banner.
-3. The specialist takes over the conversation flow.
+2. **Semantic Handoffs**: The TUI masks raw JSON tool signals and replaces them with clean status messages, ensuring a professional visual experience.
+3. The UI focus shifts to the specialist banner.
+4. The specialist takes over the conversation flow.
 
-### 3. Handoff Recovery
-Specialists are instructed to return control to the Supervisor when:
-- The task is completed.
-- The query goes out of their domain.
-- The user explicitly asks for "Vraxter".
+### 3. Handoff Recovery & Dynamic Identity
+Specialists are instructed to return control to the Supervisor when the task is completed or goes out of scope.
+- **Dynamic Identity Recovery**: The Orchestrator dynamically rebuilds the system prompt upon specialist handoff and recovery. This ensures the Supervisor immediately resumes focus with its original persona directives without persona deadlock or hallucination.
 
 ## History Isolation
 

@@ -30,6 +30,7 @@ const (
 	EventTypePlanProposal StreamEventType = "plan_proposal"
 	EventTypeStatus       StreamEventType = "status"
 	EventTypeSpecialistResult StreamEventType = "specialist_result"
+	EventTypeSkillApprovalRequest StreamEventType = "skill_approval_request"
 )
 
 // StreamEvent is the unit of communication for Vraxter's reactive architecture
@@ -38,6 +39,7 @@ type StreamEvent struct {
 	Content       string
 	Err           error
 	ActiveModelID string // The model ID currently driving the session
+	SkillID       string // Used for tool calls or approvals
 }
 
 // CompletionResponse encapsulates what an LLM responds

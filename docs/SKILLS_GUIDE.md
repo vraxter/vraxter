@@ -45,7 +45,8 @@ When you ask Vraxter to do something it doesn't have a tool for:
 1. It analyzes the requirement.
 2. It generates the Go or Rust code for a new tool.
 3. It compiles the code to WASM.
-4. It registers the tool in its local DB for immediate use.
+4. **Dry-Run Validation Pipeline**: The engine immediately executes the compiled WASM binary in a sandboxed test environment. If the skill crashes or fails validation, it is automatically purged.
+5. Once verified, it registers the tool in its local DB and records its SHA-256 checksum for secure execution.
 
 ## Multimodal Official Skills
 

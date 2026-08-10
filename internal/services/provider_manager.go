@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/patagonicrune/vraxter/internal/db"
 	"github.com/patagonicrune/vraxter/internal/llm"
 	"github.com/patagonicrune/vraxter/internal/utils"
@@ -10,14 +12,29 @@ import (
 )
 
 type ProviderManager struct {
-	repo *db.ProviderRepository
+	repo          *db.ProviderRepository
+	privacyPolicy string
 }
 
-func NewProviderManager(repo *db.ProviderRepository) *ProviderManager {
-	return &ProviderManager{repo: repo}
+func NewProviderManager(repo *db.ProviderRepository, privacyPolicy string) *ProviderManager {
+	return &ProviderManager{repo: repo, privacyPolicy: privacyPolicy}
 }
 
 func (m *ProviderManager) AddProvider(ctx context.Context, name, pType, apiKey, baseURL string) (string, error) {
+	// 0. Enforce Privacy Policy
+	if m.privacyPolicy == "strict_local" {
+		isCloud := pType == "openai" || pType == "anthropic" || pType == "google"
+		if isCloud {
+			return "", fmt.Errorf("network privacy policy is set to strict_local: cloud provider '%s' is blocked", pType)
+		}
+		if pType == "custom" && baseURL != "" {
+			// Extremely naive check for demonstration, real check should parse URL and verify private IP ranges
+			if strings.Contains(baseURL, "api.openai.com") || strings.Contains(baseURL, "api.anthropic.com") {
+				return "", fmt.Errorf("network privacy policy is set to strict_local: custom provider URL points to a public cloud API")
+			}
+		}
+	}
+
 	// 1. Validate credentials via dynamic Registry + healthcheck
 	adapter, err := llm.Create(pType, apiKey, baseURL)
 	if err != nil {
@@ -117,5 +134,15 @@ func (m *ProviderManager) ConfigureProvider(ctx context.Context, name, pType, ap
 
 // GetSupportedProviders returns a list of all provider types available in the registry
 func (m *ProviderManager) GetSupportedProviders() []string {
-	return llm.GetSupportedProviders()
+	all := llm.GetSupportedProviders()
+	if m.privacyPolicy == "strict_local" {
+		var local []string
+		for _, p := range all {
+			if p == "ollama" || p == "custom" {
+				local = append(local, p)
+			}
+		}
+		return local
+	}
+	return all
 }
