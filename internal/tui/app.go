@@ -1,3 +1,11 @@
+// Copyright (c) 2026 PatagonicRune. All rights reserved.
+// 
+// This file is part of Vraxter.
+// Vraxter is free software licensed under the GNU Affero General Public License (AGPL) v3.0.
+// See the LICENSE file in the project root for full license information.
+//
+// For commercial licensing inquiries, contact PatagonicRune.
+
 package tui
 
 import (
@@ -2153,7 +2161,19 @@ func (m *Model) View() tea.View {
 	}
 
 	// 3. Bottom Rail
-	bottomRail := faintStyle.Render(strings.Repeat("─", footerWidth))
+	// 3. Bottom Rail
+	watermark := fmt.Sprintf(" © %d PatagonicRune ", time.Now().Year())
+	wmStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render(watermark)
+	wmWidth := lipgloss.Width(wmStyle)
+	
+	var bottomRail string
+	if footerWidth > wmWidth + 4 {
+		leftWidth := (footerWidth - wmWidth) / 2
+		rightWidth := footerWidth - leftWidth - wmWidth
+		bottomRail = faintStyle.Render(strings.Repeat("─", leftWidth)) + wmStyle + faintStyle.Render(strings.Repeat("─", rightWidth))
+	} else {
+		bottomRail = faintStyle.Render(strings.Repeat("─", footerWidth))
+	}
 
 	// 4. Sticky Status Bar (System Feedback)
 	var statusBar string

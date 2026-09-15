@@ -1,8 +1,17 @@
+// Copyright (c) 2026 PatagonicRune. All rights reserved.
+// 
+// This file is part of Vraxter.
+// Vraxter is free software licensed under the GNU Affero General Public License (AGPL) v3.0.
+// See the LICENSE file in the project root for full license information.
+//
+// For commercial licensing inquiries, contact PatagonicRune.
+
 package services
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -126,7 +135,7 @@ func (s *SkillService) DeleteSkill(id string) error {
 	return s.repo.DeleteSkill(id)
 }
 
-func (s *SkillService) RegisterFromWASM(path string) error {
+func (s *SkillService) RegisterFromWASM(path string, manifestPath string) error {
 	id := filepath.Base(path)
 	id = id[:len(id)-len(filepath.Ext(id))]
 
@@ -138,5 +147,22 @@ func (s *SkillService) RegisterFromWASM(path string) error {
 		Engine:      "wasm",
 		Command:     path,
 	}
+
+	if manifestPath != "" {
+		data, err := os.ReadFile(manifestPath)
+		if err != nil {
+			return fmt.Errorf("failed to read custom manifest file: %w", err)
+		}
+		if err := json.Unmarshal(data, &m); err != nil {
+			return fmt.Errorf("failed to parse custom manifest json: %w", err)
+		}
+		
+		// Security Overrides: Don't trust the custom manifest blindly
+		m.Command = path       // Force the binary to be the one injected
+		m.IsOfficial = false   // Cannot fake official status
+		m.Engine = "wasm"      // Force WASM sandboxing
+		// Note: Checksum is already safely recalculated inside InstallSkill()
+	}
+
 	return s.InstallSkill(m)
 }

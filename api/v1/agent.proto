@@ -145,6 +145,7 @@ message DownloadSkillResponse {
 
 message InjectSkillRequest {
   string file_path = 1;
+  optional string manifest_path = 2;
 }
 message InjectSkillResponse {
   bool success = 1;
