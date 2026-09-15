@@ -1,3 +1,11 @@
+// Copyright (c) 2026 PatagonicRune. All rights reserved.
+// 
+// This file is part of Vraxter.
+// Vraxter is free software licensed under the GNU Affero General Public License (AGPL) v3.0.
+// See the LICENSE file in the project root for full license information.
+//
+// For commercial licensing inquiries, contact PatagonicRune.
+
 package main
 
 import (
@@ -20,6 +28,7 @@ var (
 	
 	downloadDest string
 	downloadSrc  bool
+	injectManifest string
 )
 
 var skillsCmd = &cobra.Command{
@@ -188,7 +197,14 @@ var injectSkillCmd = &cobra.Command{
 		}
 		defer gClient.Close()
 
-		res, err := gClient.InjectSkill(context.Background(), &v1.InjectSkillRequest{FilePath: args[0]})
+		var manifestPtr *string
+		if injectManifest != "" {
+			manifestPtr = &injectManifest
+		}
+		res, err := gClient.InjectSkill(context.Background(), &v1.InjectSkillRequest{
+			FilePath: args[0],
+			ManifestPath: manifestPtr,
+		})
 		if err != nil {
 			fmt.Printf("❌ Injection failed: %v\n", err)
 			return
@@ -284,6 +300,7 @@ var trustSkillCmd = &cobra.Command{
 func init() {
 	downloadSkillCmd.Flags().StringVar(&downloadDest, "dest", "./", "Destination directory to download the skill")
 	downloadSkillCmd.Flags().BoolVar(&downloadSrc, "include-source", false, "Download the source code zip as well")
+	injectSkillCmd.Flags().StringVarP(&injectManifest, "manifest", "m", "", "Optional path to a custom manifest.json file for the skill")
 	
 	skillsCmd.AddCommand(listSkillsCmd)
 	skillsCmd.AddCommand(infoSkillCmd)

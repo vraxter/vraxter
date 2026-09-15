@@ -1,20 +1,19 @@
 # VRAXTER
 
-### **The Autonomous Engineering Workstation**
+### **The Sovereign Autonomous AI Engine**
 *Engineering Autonomy. Standardizing Intelligence.*
 
-Vraxter is a **Local-First, Autonomous Agent Workstation** designed to bridge the gap between high-level LLM reasoning and native system execution. It is a persistent engine that interprets intent, orchestrates specialized sub-agents, and automates technical workflows within a hardened, privacy-centric environment.
-
+Vraxter is a **Sovereign Autonomous AI Engine** designed to bridge the gap between high-level LLM reasoning and native, deterministic system execution. It operates as a headless, highly-concurrent daemon that interprets intent, orchestrates specialized sub-agents, and automates workflows across both critical and non-critical environments—from corporate engineering workstations and tactical defense edge-nodes, to industrial facilities and smart home automation.
 
 ## Core Architecture
 
-Vraxter is built on the **Sovereign-Agent Model**, ensuring that your data, logic, and execution stay within your infrastructure. It has evolved into a headless, highly-concurrent smart home engine.
+Vraxter is built on the **Sovereign-Agent Model**, ensuring that your proprietary data, logic, and execution stay strictly within your infrastructure. It is built to run anywhere, serving as the localized brain for complex physical and digital ecosystems.
 
 ### 1. Client-Agnostic Connect RPC Interface
-Vraxter operates as a completely headless backend daemon exposing a robust Connect RPC (HTTP/2) API. It is entirely uncoupled from any specific UI framework, allowing you to connect Thin CLI interfaces, Web Dashboards, or hardware smart-speakers natively.
+Vraxter operates as a completely headless backend daemon exposing a robust Connect RPC (HTTP/2) API. It is entirely uncoupled from any specific UI framework, allowing you to connect Thin CLI interfaces, Web Dashboards, IoT hardware, or SCADA systems natively.
 
-### 2. Environmental Context Engine & Spatial Concurrency
-Vraxter manages dynamic `ModeConfig` templates (e.g., "Deep Work", "D&D Party") to orchestrate real-world side effects like music and smart lights. It natively supports **Room-Based Spatial Isolation**: using Google Home or local mappings, Vraxter isolates concurrent conversation histories per physical room and dynamically swaps active User Profiles via Voice Recognition.
+### 2. Spatial Context Engine & Zone-Based Concurrency
+Vraxter natively understands physical and digital spaces. It supports **Spatial Isolation**: whether deployed in a multi-room smart home, partitioned corporate office, or distinct industrial facility zones, Vraxter isolates concurrent conversation histories and side-effects based on physical location, allowing dynamic, concurrent orchestration across a wide network of users and sensors.
 
 ### 3. The Autonomous Execution Loop
 Vraxter doesn't just generate text; it solves problems by iterating through an autonomous cycle:
@@ -85,10 +84,11 @@ Vraxter features a sophisticated "Slash Command" system for workstation manageme
 | `/models` | Registers and prioritizes specific reasoning models. |
 | `/clear` | Resets the current session context while maintaining memory. |
 
-- `vraxter providers discover/setup`: Manage API keys.
-- `vraxter skills list/inject/inspect`: Manage WASM binaries.
-- `vraxter skills trust <id>`: Elevate unverified scripts to community-trusted tier.
-- `vraxter tokens create/ls/revoke`: Manage granular scoped-access for external clients.
+- `vraxter providers <id> discover`: Discover available models for a specific provider.
+- `vraxter providers setup`: Interactive wizard to set up a new provider.
+- `vraxter providers add <name> --type <type>`: Add a provider non-interactively.
+- `vraxter skills <list/info/install/download/inject/inspect/delete/trust>`: Manage WASM binaries and skills.
+- `vraxter tokens <create/ls/revoke>`: Manage granular scoped-access for external clients.
 - `vraxter config set privacy_policy strict_local`: Enforce Air-Gapped execution policies.
 - `vraxter config set require_skill_approval true`: Enforce Human-In-The-Loop (HITL) manual skill approvals for strict execution governance.
 

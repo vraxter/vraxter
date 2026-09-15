@@ -34,7 +34,7 @@ func main() {
 Permissions are declared in the Skill Manifest:
 - `fs_read:/root/path`: Grants read-only access to a directory.
 - `fs_write:/root/path`: Grants read-write access.
-- `network`: (Future) Grants outbound HTTP access.
+- `network`: Grants outbound HTTP access. Checked at runtime by the Sandbox host functions.
 
 
 ## The Autonomy Loop: `vraxter-coder`
@@ -55,12 +55,18 @@ Vraxter ships with native sensory capabilities built directly into the Orchestra
 - **`vraxter-hear`**: Transcribes audio inputs (e.g., from a microphone in a specific room) into text for processing.
 - **`vraxter-talk`**: Synthesizes speech from text and intelligently routes the audio playback to the specific `source_zone` (or custom speaker) where the request originated.
 
+## Native IO Skills
+Vraxter also intercepts common file-system intents and routes them to high-speed native IO skills without needing to boot a WASM sandbox:
+- **`vraxter-read-file`**: Safely reads local files into context.
+- **`vraxter-list-dir`**: Explores local directory structures.
+- **`vraxter-patch-code`**: Edits specific blocks of source code.
+
 
 ## Registering a Skill Manually
 
-Skills can be added via the CLI from an existing compiled WASM binary:
+Skills can be added via the CLI from an existing compiled WASM binary. You can optionally supply a custom manifest to define its security sandbox permissions:
 ```bash
-vraxter skills inject ./bin/tool.wasm
+vraxter skills inject ./bin/tool.wasm --manifest ./manifest.json
 ```
 
 ### Manifest Fields:
