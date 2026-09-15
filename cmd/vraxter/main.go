@@ -145,12 +145,7 @@ func main() {
 			appStore.Close()
 		}
 	}()
-
-	rootCmd.AddCommand(serverCmd)
-	rootCmd.AddCommand(daemonCmd)
-	rootCmd.AddCommand(modelsCmd)
-	rootCmd.AddCommand(skillsCmd)
-	rootCmd.AddCommand(userCmd)
+	// Commands are added via init() in their respective files
 
 	rootCmd.Flags().StringVarP(&agentFlag, "agent", "a", "", "Delegate execution directly to a Specialist sub-agent ID")
 	rootCmd.Flags().StringVarP(&sessionFlag, "session", "s", "", "Specify a topic or conversation ID to isolate context")

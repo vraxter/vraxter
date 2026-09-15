@@ -193,3 +193,21 @@ func (r *ChatRepository) GetFullConversation(conversationID string) ([]types.Mes
 	}
 	return msgs, nil
 }
+
+// DeleteConversation deletes a conversation and all its messages
+func (r *ChatRepository) DeleteConversation(conversationID string) error {
+	tx, err := r.store.Conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM messages WHERE conversation_id = ?", conversationID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM conversations WHERE id = ?", conversationID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
