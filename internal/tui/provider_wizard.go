@@ -1,5 +1,5 @@
 // Copyright (c) 2026 PatagonicRune. All rights reserved.
-// 
+//
 // This file is part of Vraxter.
 // Vraxter is free software licensed under the GNU Affero General Public License (AGPL) v3.0.
 // See the LICENSE file in the project root for full license information.
@@ -20,13 +20,13 @@ import (
 )
 
 type ProviderWizard struct {
-	manager   *services.ProviderManager
-	step      int
-	inputs    []textinput.Model
-	err       error
-	width     int
-	done      bool
-	quitting  bool
+	manager    *services.ProviderManager
+	step       int
+	inputs     []textinput.Model
+	err        error
+	width      int
+	done       bool
+	quitting   bool
 	ProviderID string
 }
 
@@ -40,7 +40,7 @@ func NewProviderWizard(mgr *services.ProviderManager) *ProviderWizard {
 	inputs[0].SetWidth(64)
 
 	inputs[1] = textinput.New()
-	inputs[1].Placeholder = "Type (google, openai, anthropic, ollama)"
+	inputs[1].Placeholder = "Type (google, openai, anthropic, ollama, custom)"
 	inputs[1].CharLimit = 32
 	inputs[1].SetWidth(32)
 
@@ -134,7 +134,9 @@ func (m *ProviderWizard) View() tea.View {
 	}
 	s.WriteString(headerLeft + strings.Repeat(" ", pad) + headerRight + "\n")
 	ruleWidth := width - 6
-	if ruleWidth < 0 { ruleWidth = 0 }
+	if ruleWidth < 0 {
+		ruleWidth = 0
+	}
 	s.WriteString(setupFaintStyle.Render(strings.Repeat("─", ruleWidth)) + "\n\n")
 
 	steps := []string{"Identity", "Selection", "Credentials", "Endpoint"}
@@ -166,7 +168,7 @@ func (m *ProviderWizard) View() tea.View {
 	helpText := ""
 	switch m.step {
 	case 1:
-		helpText = "Vraxter supports Google (Gemini), OpenAI, Anthropic (Claude), and Ollama."
+		helpText = "Vraxter supports Google, OpenAI, Anthropic, Ollama, and custom endpoints."
 	case 2:
 		pType := strings.ToLower(m.inputs[1].Value())
 		switch pType {
@@ -178,6 +180,8 @@ func (m *ProviderWizard) View() tea.View {
 			helpText = "Get your API Key at: https://console.anthropic.com/settings/keys"
 		case "ollama":
 			helpText = "Ollama traditionally runs locally; no API Key is required."
+		case "custom":
+			helpText = "Used for custom OpenAI-compatible endpoints. No API Key usually required."
 		}
 	case 3:
 		helpText = "Leave empty to use official APIs, or specify a custom proxy/endpoint."
