@@ -15,9 +15,9 @@ import (
 
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/services"
-	"github.com/patagonicrune/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/internal/skills"
 )
 
 func TestCoders(t *testing.T) {

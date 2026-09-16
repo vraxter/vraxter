@@ -12,9 +12,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/skills/coders"
-	"github.com/patagonicrune/vraxter/pkg/interfaces"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/skills/coders"
+	"github.com/vraxter/vraxter/pkg/interfaces"
 )
 
 // CoderService is the heart of autonomous skill generation.

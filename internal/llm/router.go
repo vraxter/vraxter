@@ -15,13 +15,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/pkg/types"
 
 	// Trigger side-effect registration of LLM adapters
-	_ "github.com/patagonicrune/vraxter/internal/llm/anthropic"
-	_ "github.com/patagonicrune/vraxter/internal/llm/google"
-	_ "github.com/patagonicrune/vraxter/internal/llm/custom"
-	_ "github.com/patagonicrune/vraxter/internal/llm/openai"
+	_ "github.com/vraxter/vraxter/internal/llm/anthropic"
+	_ "github.com/vraxter/vraxter/internal/llm/google"
+	_ "github.com/vraxter/vraxter/internal/llm/custom"
+	_ "github.com/vraxter/vraxter/internal/llm/openai"
 )
 
 type Router struct {

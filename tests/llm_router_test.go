@@ -12,8 +12,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 func newTestRouter(t *testing.T, providers ...struct {

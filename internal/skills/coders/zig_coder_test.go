@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 type MockZigToolchain struct{}

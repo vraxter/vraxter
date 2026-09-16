@@ -13,7 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/patagonicrune/vraxter/internal/services"
+	"github.com/vraxter/vraxter/internal/services"
 )
 
 type StartupWizardState int

@@ -15,8 +15,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/patagonicrune/vraxter/internal/llm/registry"
-	"github.com/patagonicrune/vraxter/pkg/interfaces"
+	"github.com/vraxter/vraxter/internal/llm/registry"
+	"github.com/vraxter/vraxter/pkg/interfaces"
 )
 
 func init() {

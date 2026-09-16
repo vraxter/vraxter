@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/patagonicrune/vraxter/pkg/interfaces"
+	"github.com/vraxter/vraxter/pkg/interfaces"
 )
 
 // FactoryFunc is a constructor function for a Provider adapter.

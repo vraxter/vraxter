@@ -12,7 +12,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/db"
 )
 
 func TestCosineSimilarity(t *testing.T) {

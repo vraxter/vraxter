@@ -12,7 +12,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/pkg/vraxerror"
+	"github.com/vraxter/vraxter/pkg/vraxerror"
 )
 
 func TestVraxError_New(t *testing.T) {

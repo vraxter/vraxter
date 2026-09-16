@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"time"
 
-	v1 "github.com/patagonicrune/vraxter/api/v1"
-	"github.com/patagonicrune/vraxter/internal/llm"
+	v1 "github.com/vraxter/vraxter/api/v1"
+	"github.com/vraxter/vraxter/internal/llm"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"

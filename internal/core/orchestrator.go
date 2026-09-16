@@ -20,14 +20,14 @@ import (
 	"github.com/google/shlex"
 
 	"github.com/google/uuid"
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/prompts"
-	"github.com/patagonicrune/vraxter/internal/security"
-	"github.com/patagonicrune/vraxter/internal/services"
-	"github.com/patagonicrune/vraxter/internal/skills"
-	"github.com/patagonicrune/vraxter/internal/utils"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/prompts"
+	"github.com/vraxter/vraxter/internal/security"
+	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/utils"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 const (

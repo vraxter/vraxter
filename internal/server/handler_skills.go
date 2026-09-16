@@ -12,8 +12,8 @@ import (
 	"context"
 	"fmt"
 	
-	v1 "github.com/patagonicrune/vraxter/api/v1"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	v1 "github.com/vraxter/vraxter/api/v1"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 func (h *AgentHandler) ListSkills(ctx context.Context, req *v1.ListSkillsRequest) (*v1.ListSkillsResponse, error) {

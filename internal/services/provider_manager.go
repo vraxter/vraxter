@@ -12,10 +12,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/utils"
-	"github.com/patagonicrune/vraxter/pkg/interfaces"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/utils"
+	"github.com/vraxter/vraxter/pkg/interfaces"
 )
 
 type ProviderManager struct {

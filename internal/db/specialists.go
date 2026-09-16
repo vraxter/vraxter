@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 type SpecialistRepository struct {

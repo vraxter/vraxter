@@ -3450,7 +3450,7 @@ const file_api_v1_agent_proto_rawDesc = "" +
 	"\rGenerateToken\x12\x18.v1.GenerateTokenRequest\x1a\x19.v1.GenerateTokenResponse\x12>\n" +
 	"\vRevokeToken\x12\x16.v1.RevokeTokenRequest\x1a\x17.v1.RevokeTokenResponse\x12;\n" +
 	"\n" +
-	"ListTokens\x12\x15.v1.ListTokensRequest\x1a\x16.v1.ListTokensResponseB)Z'github.com/patagonicrune/vraxter/api/v1b\x06proto3"
+	"ListTokens\x12\x15.v1.ListTokensRequest\x1a\x16.v1.ListTokensResponseB)Z'github.com/vraxter/vraxter/api/v1b\x06proto3"
 
 var (
 	file_api_v1_agent_proto_rawDescOnce sync.Once

@@ -9,10 +9,10 @@
 package server
 
 import (
-	v1 "github.com/patagonicrune/vraxter/api/v1"
-	"github.com/patagonicrune/vraxter/internal/config"
-	"github.com/patagonicrune/vraxter/internal/core"
-	"github.com/patagonicrune/vraxter/internal/services"
+	v1 "github.com/vraxter/vraxter/api/v1"
+	"github.com/vraxter/vraxter/internal/config"
+	"github.com/vraxter/vraxter/internal/core"
+	"github.com/vraxter/vraxter/internal/services"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"time"

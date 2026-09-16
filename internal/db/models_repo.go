@@ -14,8 +14,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/patagonicrune/vraxter/internal/security"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/security"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 // ModelRepository handles all data access related to LLM Model configurations

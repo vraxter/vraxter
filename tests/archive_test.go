@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/utils"
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 func createTestTarGz(path string, contentMap map[string]string) error {

@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 // LocalLLMService manages the lifecycle of local LLM providers (currently focused on Ollama)

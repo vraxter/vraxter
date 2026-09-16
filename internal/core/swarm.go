@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/patagonicrune/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/llm"
 )
 
 // SwarmTask represents a specific assignment for a specialist.

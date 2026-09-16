@@ -14,10 +14,10 @@ import (
 	"os"
 	"strings"
 	"github.com/spf13/cobra"
-	"github.com/patagonicrune/vraxter/internal/client"
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/services"
-	"github.com/patagonicrune/vraxter/pkg/interfaces"
+	"github.com/vraxter/vraxter/internal/client"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/pkg/interfaces"
 	"log"
 )
 

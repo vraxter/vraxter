@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/utils"
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 // initGitRepo creates a throwaway git repository in a temp directory.

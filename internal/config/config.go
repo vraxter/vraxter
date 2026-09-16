@@ -38,6 +38,9 @@ type Settings struct {
 	WhitelistedIPs       []string `json:"whitelisted_ips"`
 }
 
+// DefaultHubURL can be overridden at build time using -ldflags "-X github.com/vraxter/vraxter/internal/config.DefaultHubURL=..."
+var DefaultHubURL = "https://hub.vraxter.com"
+
 // Load loads the minimal configuration from environment or system defaults
 func Load() Config {
 	// 1. Priority: Explicit environment variable (useful for mobile apps)
@@ -66,7 +69,7 @@ func Load() Config {
 	settingsPath := filepath.Join(appDir, "settings.json")
 	var impl = "custom"
 	var privacy = "ask"
-	var hub = "https://hub.vraxter.com"
+	var hub = DefaultHubURL
 	var requireSkillApproval = false
 	var whitelistedIPs []string
 

@@ -13,7 +13,7 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/patagonicrune/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/db"
 	"github.com/spf13/cobra"
 )
 

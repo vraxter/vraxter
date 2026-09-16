@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/core"
+	"github.com/vraxter/vraxter/internal/core"
 )
 
 // ─── CosineSimilarity (resolver package) ─────────────────────────────────────

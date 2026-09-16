@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/services"
-	"github.com/patagonicrune/vraxter/internal/utils"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 func TestIsAllowedNetwork(t *testing.T) {

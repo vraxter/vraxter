@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/prompts"
-	"github.com/patagonicrune/vraxter/internal/utils"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/prompts"
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 // Plan represents an autonomous execution strategy broken down into observable phases.

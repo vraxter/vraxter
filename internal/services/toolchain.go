@@ -17,7 +17,7 @@ import (
 
 	"sync"
 
-	"github.com/patagonicrune/vraxter/internal/utils"
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 type ToolchainManager struct {

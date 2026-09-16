@@ -12,8 +12,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/pkg/interfaces"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/pkg/interfaces"
 )
 
 // MockProvider is a deterministic LLM stub for offline testing.

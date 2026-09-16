@@ -16,11 +16,11 @@ import (
 	"path/filepath"
 	"text/tabwriter"
 
-	v1 "github.com/patagonicrune/vraxter/api/v1"
-	"github.com/patagonicrune/vraxter/internal/client"
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/services"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	v1 "github.com/vraxter/vraxter/api/v1"
+	"github.com/vraxter/vraxter/internal/client"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/pkg/types"
 	"github.com/spf13/cobra"
 )
 

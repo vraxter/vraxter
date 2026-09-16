@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/patagonicrune/vraxter/internal/security"
+	"github.com/vraxter/vraxter/internal/security"
 )
 
 type Provider struct {

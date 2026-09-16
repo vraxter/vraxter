@@ -16,8 +16,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	v1 "github.com/patagonicrune/vraxter/api/v1"
-	"github.com/patagonicrune/vraxter/internal/db"
+	v1 "github.com/vraxter/vraxter/api/v1"
+	"github.com/vraxter/vraxter/internal/db"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

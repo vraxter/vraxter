@@ -12,7 +12,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 // ChatRepository handles retrieving and saving conversation messages
