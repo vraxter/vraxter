@@ -12,7 +12,7 @@ package enterprise
 
 import (
 	"fmt"
-	"github.com/patagonicrune/vraxter/internal/features"
+	"github.com/vraxter/vraxter/internal/features"
 )
 
 type EnterpriseFeature struct{}

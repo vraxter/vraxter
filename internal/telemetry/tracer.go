@@ -18,7 +18,7 @@ var Tracer trace.Tracer
 
 func init() {
 	// Initialize a standard global tracer for Vraxter
-	Tracer = otel.Tracer("patagonicrune/vraxter")
+	Tracer = otel.Tracer("vraxter/vraxter")
 }
 
 // StartSpan is a convenience wrapper for creating telemetry spans dynamically

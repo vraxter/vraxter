@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/patagonicrune/vraxter/internal/client"
+	"github.com/vraxter/vraxter/internal/client"
 	"github.com/spf13/cobra"
 )
 

@@ -10,7 +10,7 @@ package db
 
 import (
 	"testing"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 func TestSkillsRepo_UpsertAndFind(t *testing.T) {

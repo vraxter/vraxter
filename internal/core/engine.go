@@ -13,12 +13,12 @@ package core
 import (
 	"context"
 
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/security"
-	"github.com/patagonicrune/vraxter/internal/services"
-	"github.com/patagonicrune/vraxter/internal/skills"
-	appcfg "github.com/patagonicrune/vraxter/internal/config"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/security"
+	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/internal/skills"
+	appcfg "github.com/vraxter/vraxter/internal/config"
 )
 
 // LLMResponse is kept here for backward compatibility.

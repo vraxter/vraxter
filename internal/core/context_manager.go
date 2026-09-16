@@ -10,8 +10,8 @@ package core
 
 import (
 	"log/slog"
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 type ContextManager struct {

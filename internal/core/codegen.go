@@ -14,9 +14,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/prompts"
-	"github.com/patagonicrune/vraxter/internal/services"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/prompts"
+	"github.com/vraxter/vraxter/internal/services"
 )
 
 // CodeGenService encapsulates the two-phase skill creation pipeline.

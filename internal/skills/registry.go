@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 type Registry struct {

@@ -11,7 +11,7 @@ package tests
 import (
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/core"
+	"github.com/vraxter/vraxter/internal/core"
 )
 
 func TestStreamParser_StandardChat(t *testing.T) {

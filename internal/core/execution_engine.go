@@ -18,13 +18,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/services"
-	"github.com/patagonicrune/vraxter/internal/skills"
-	"github.com/patagonicrune/vraxter/internal/telemetry"
-	"github.com/patagonicrune/vraxter/pkg/types"
-	"github.com/patagonicrune/vraxter/pkg/vraxerror"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/telemetry"
+	"github.com/vraxter/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/pkg/vraxerror"
 )
 
 // ExecutionEngine is responsible for running skills (both LLM-directed and fast-path),

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/patagonicrune/vraxter/internal/env"
+	"github.com/vraxter/vraxter/internal/env"
 )
 
 func TestStateManagerConcurrency(t *testing.T) {

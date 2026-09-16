@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/llm"
 )
 
 // SemanticMemory represents a chunk of retrieved context with its score

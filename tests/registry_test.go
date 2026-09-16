@@ -11,8 +11,8 @@ package tests
 import (
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/skills"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 func TestRegistry_RegisterAndFind(t *testing.T) {

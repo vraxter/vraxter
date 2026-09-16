@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/patagonicrune/vraxter/internal/env"
+	"github.com/vraxter/vraxter/internal/env"
 )
 
 // EnvServiceSkeleton represents what the generated Connect RPC server interface would look like.

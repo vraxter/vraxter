@@ -10,7 +10,7 @@ package interfaces
 
 import (
 	"context"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 type SkillCoder interface {

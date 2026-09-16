@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/skills"
 )
 
 // ─── ReadFile ─────────────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ package tests
 import (
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/security"
+	"github.com/vraxter/vraxter/internal/security"
 )
 
 func TestKeyManager_GenerateKeys_CreatesFiles(t *testing.T) {

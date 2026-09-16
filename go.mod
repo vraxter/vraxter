@@ -1,4 +1,4 @@
-module github.com/patagonicrune/vraxter
+module github.com/vraxter/vraxter
 
 go 1.26.1
 

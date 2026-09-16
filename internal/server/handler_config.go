@@ -12,8 +12,8 @@ import (
 	"context"
 	"fmt"
 
-	v1 "github.com/patagonicrune/vraxter/api/v1"
-	"github.com/patagonicrune/vraxter/internal/utils"
+	v1 "github.com/vraxter/vraxter/api/v1"
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 func (h *AgentHandler) GetConfig(ctx context.Context, req *v1.GetConfigRequest) (*v1.ConfigResponse, error) {

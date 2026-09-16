@@ -12,9 +12,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/utils"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/utils"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 type ModelManager struct {

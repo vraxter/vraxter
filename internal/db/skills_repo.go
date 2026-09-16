@@ -13,7 +13,7 @@ import (
 	"log"
 	"math"
 
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 // SkillRepository manages persistence for AI Tools and Skills

@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 package v1;
-option go_package = "github.com/patagonicrune/vraxter/api/v1";
+option go_package = "github.com/vraxter/vraxter/api/v1";
 
 // AgentService manages the interaction between User Clients and The Brain
 service AgentService {

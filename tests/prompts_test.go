@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/prompts"
+	"github.com/vraxter/vraxter/internal/prompts"
 )
 
 func TestRenderBaseSystem_ContainsExpectedBlocks(t *testing.T) {

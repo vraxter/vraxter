@@ -14,7 +14,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/db"
 	"google.golang.org/grpc/metadata"
 )
 

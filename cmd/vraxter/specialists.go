@@ -14,7 +14,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/google/uuid"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/pkg/types"
 	"github.com/spf13/cobra"
 )
 

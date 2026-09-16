@@ -16,10 +16,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/skills"
-	"github.com/patagonicrune/vraxter/pkg/interfaces"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/pkg/interfaces"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 // InternalToolHandler defines the signature for built-in executable tools

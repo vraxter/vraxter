@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"os"
 
-	v1 "github.com/patagonicrune/vraxter/api/v1"
-	"github.com/patagonicrune/vraxter/internal/client"
+	v1 "github.com/vraxter/vraxter/api/v1"
+	"github.com/vraxter/vraxter/internal/client"
 	"github.com/spf13/cobra"
 )
 

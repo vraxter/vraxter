@@ -12,9 +12,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/core"
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/core"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 // mockRouter builds a minimal llm.Router from a slice of providers for testing.

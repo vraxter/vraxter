@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/patagonicrune/vraxter/internal/config"
-	"github.com/patagonicrune/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/config"
+	"github.com/vraxter/vraxter/internal/db"
 )
 
 func main() {

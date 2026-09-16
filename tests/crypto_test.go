@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/security"
+	"github.com/vraxter/vraxter/internal/security"
 )
 
 func TestCryptoService_EncryptDecrypt(t *testing.T) {

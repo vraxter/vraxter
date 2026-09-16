@@ -25,18 +25,18 @@ import (
 
 	"github.com/google/uuid"
 	tea "charm.land/bubbletea/v2"
-	"github.com/patagonicrune/vraxter/internal/client"
-	"github.com/patagonicrune/vraxter/internal/config"
-	"github.com/patagonicrune/vraxter/internal/core"
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/env"
-	"github.com/patagonicrune/vraxter/internal/features"
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/security"
-	"github.com/patagonicrune/vraxter/internal/server"
-	"github.com/patagonicrune/vraxter/internal/services"
-	"github.com/patagonicrune/vraxter/internal/skills"
-	"github.com/patagonicrune/vraxter/internal/tui"
+	"github.com/vraxter/vraxter/internal/client"
+	"github.com/vraxter/vraxter/internal/config"
+	"github.com/vraxter/vraxter/internal/core"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/env"
+	"github.com/vraxter/vraxter/internal/features"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/security"
+	"github.com/vraxter/vraxter/internal/server"
+	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -145,12 +145,7 @@ func main() {
 			appStore.Close()
 		}
 	}()
-
-	rootCmd.AddCommand(serverCmd)
-	rootCmd.AddCommand(daemonCmd)
-	rootCmd.AddCommand(modelsCmd)
-	rootCmd.AddCommand(skillsCmd)
-	rootCmd.AddCommand(userCmd)
+	// Commands are added via init() in their respective files
 
 	rootCmd.Flags().StringVarP(&agentFlag, "agent", "a", "", "Delegate execution directly to a Specialist sub-agent ID")
 	rootCmd.Flags().StringVarP(&sessionFlag, "session", "s", "", "Specify a topic or conversation ID to isolate context")

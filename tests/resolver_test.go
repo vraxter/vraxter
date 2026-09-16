@@ -13,11 +13,11 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/core"
-	"github.com/patagonicrune/vraxter/internal/db"
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/skills"
-	"github.com/patagonicrune/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/internal/core"
+	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 func TestExtractRegexParams(t *testing.T) {

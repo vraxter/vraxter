@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/patagonicrune/vraxter/internal/security"
+	"github.com/vraxter/vraxter/internal/security"
 )
 
 func TestKeyManager_GenerateAndLoad(t *testing.T) {

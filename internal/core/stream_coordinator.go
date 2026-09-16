@@ -14,10 +14,10 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/patagonicrune/vraxter/internal/llm"
-	"github.com/patagonicrune/vraxter/internal/telemetry"
-	"github.com/patagonicrune/vraxter/pkg/types"
-	"github.com/patagonicrune/vraxter/pkg/vraxerror"
+	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/telemetry"
+	"github.com/vraxter/vraxter/pkg/types"
+	"github.com/vraxter/vraxter/pkg/vraxerror"
 )
 
 type StreamCoordinator struct {

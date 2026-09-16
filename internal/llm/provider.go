@@ -9,8 +9,8 @@
 package llm
 
 import (
-	"github.com/patagonicrune/vraxter/internal/llm/registry"
-	"github.com/patagonicrune/vraxter/pkg/interfaces"
+	"github.com/vraxter/vraxter/internal/llm/registry"
+	"github.com/vraxter/vraxter/pkg/interfaces"
 )
 
 // Type aliases to preserve backward compatibility for existing consumers
