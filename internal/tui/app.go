@@ -1,10 +1,10 @@
-// Copyright (c) 2026 PatagonicRune. All rights reserved.
+// Copyright (c) 2026 Vraxter. All rights reserved.
 // 
 // This file is part of Vraxter.
 // Vraxter is free software licensed under the GNU Affero General Public License (AGPL) v3.0.
 // See the LICENSE file in the project root for full license information.
 //
-// For commercial licensing inquiries, contact PatagonicRune.
+// For commercial licensing inquiries, contact Vraxter.
 
 package tui
 
@@ -2162,7 +2162,7 @@ func (m *Model) View() tea.View {
 
 	// 3. Bottom Rail
 	// 3. Bottom Rail
-	watermark := fmt.Sprintf(" © %d PatagonicRune ", time.Now().Year())
+	watermark := fmt.Sprintf(" © %d Vraxter ", time.Now().Year())
 	wmStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render(watermark)
 	wmWidth := lipgloss.Width(wmStyle)
 	

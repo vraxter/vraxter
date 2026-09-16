@@ -38,7 +38,7 @@ Vraxter is distributed as a single high-performance binary.
 
 ```bash
 # Clone the repository
-git clone https://github.com/PatagonicRune/vraxter.git
+git clone https://github.com/Vraxter/vraxter.git
 cd vraxter
 
 # Build the workstation
@@ -126,7 +126,7 @@ Vraxter operates under a dual-licensing model:
 1. **Open Source (AGPL v3):** Vraxter Core is free and open-source under the [GNU Affero General Public License v3.0](LICENSE). This ensures that the engine remains public, auditable, and accessible. Any modifications or integrations must also be open-sourced under the same license.
 2. **Commercial License:** For enterprises, governments, or organizations that require closed-source modifications, proprietary integrations, or do not wish to adhere to the AGPL v3 requirements, a commercial license is available. 
 
-> For commercial licensing (Vraxter Enterprise, Facility, Sovereign, etc.), please contact PatagonicRune.
+> For commercial licensing (Vraxter Enterprise, Facility, Sovereign, etc.), please contact Vraxter.
 
 ### Contributing
 To maintain this dual-licensing capability, all external contributions require agreeing to our [Contributor License Agreement (CLA)](CONTRIBUTING.md).
@@ -138,9 +138,9 @@ To maintain this dual-licensing capability, all external contributions require a
 **Vraxter is a Sovereign Autonomous Engine with the capability to write, compile, and execute code dynamically on your local system or network.** 
 If you grant Vraxter excessive permissions (such as root filesystem access or unfiltered network access via WASM capabilities) or attach it to physical infrastructure (like Facility Management Systems) without robust Skill Approval pipelines, **it poses a critical security risk.**
 
-By using Vraxter, you acknowledge that PatagonicRune and its contributors are **not liable** for any damages, data loss, network compromise, or physical infrastructure failure caused by the autonomous actions of this software. You are strictly responsible for securing the execution sandboxes and monitoring the sub-agent swarms.
+By using Vraxter, you acknowledge that Vraxter and its contributors are **not liable** for any damages, data loss, network compromise, or physical infrastructure failure caused by the autonomous actions of this software. You are strictly responsible for securing the execution sandboxes and monitoring the sub-agent swarms.
 
 ---
 
-### Developed with Precision by [Patagonic Rune](https://github.com/PatagonicRune)
+### Developed with Precision by [Vraxter](https://github.com/vraxter)
 *Built for the transition to the Autonomous Era.*

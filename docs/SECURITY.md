@@ -33,7 +33,7 @@ Vraxter manages multiple clients securely through a dual-authentication mechanis
 ## Trust Tiers
 
 Vraxter classifies tools into trust tiers:
-- **Tier 1 (Official)**: Tools signed by PatagonicRune. Always trusted.
+- **Tier 1 (Official)**: Tools signed by Vraxter. Always trusted.
 - **Tier 2 (Trusted Community)**: Tools with high reputation and usage.
 - **Tier 3 (Unverified)**: Manually registered scripts. These require explicit user `trust` via the CLI (`vraxter skills trust <id>`) before they can run outside the narrowest sandbox.
 
@@ -41,5 +41,5 @@ Vraxter classifies tools into trust tiers:
 ## Data Sovereignty
 
 - **Local Persistence**: All chat history and embeddings are stored in a local SQLite file.
-- **No Telemetry**: Vraxter does not send telemetry or usage data back to PatagonicRune.
+- **No Telemetry**: Vraxter does not send telemetry or usage data back to Vraxter.
 - **Provider Choice**: Users can switch to local providers like **Ollama** to ensure that not even the query text leaves their machine.
