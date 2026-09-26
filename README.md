@@ -3,6 +3,12 @@
 ### **The Sovereign Autonomous AI Engine**
 *Engineering Autonomy. Standardizing Intelligence.*
 
+> [!WARNING]
+> Vraxter is still in development process, refinement and aligning
+> specifications. We will likely to introduce major breaking
+> changes prior to a stable release.
+> Please feel free to contribute and create issues if you find some.
+
 Vraxter is a **Sovereign Autonomous AI Engine** designed to bridge the gap between high-level LLM reasoning and native, deterministic system execution. It operates as a headless, highly-concurrent daemon that interprets intent, orchestrates specialized sub-agents, and automates workflows across both critical and non-critical environments—from corporate engineering workstations and tactical defense edge-nodes, to industrial facilities and smart home automation.
 
 ## Core Architecture
