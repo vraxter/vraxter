@@ -39,6 +39,7 @@ type SkillManifest struct {
 	Downloads   int       `json:"downloads"`
 	IsOfficial  bool      `json:"is_official"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"` // Configurable max execution time for WASM
+	ManifestV1     *SkillManifestV1 `json:"manifest_v1,omitempty"` // Capability-based V1 manifest contract
 
 	// Intent Resolver Metadata
 	Keywords   []string `json:"keywords"`    // Exact word matching

@@ -214,17 +214,24 @@ func executeSetup() {
 
 	fmt.Println("\n◈ VRAXTER PROVIDER SETUP")
 	fmt.Println("--------------------------------------------------------------------------------")
-	
-	fmt.Print("1. Enter Provider Name (e.g. MyGoogle): ")
+
+	fmt.Print("1. Enter Provider Name (e.g. MyLocalAI): ")
 	fmt.Scanln(&name)
-	
-	fmt.Print("2. Enter Type (google, openai, anthropic, ollama): ")
+
+	fmt.Print("2. Enter Type (google, openai, anthropic, ollama, custom): ")
 	fmt.Scanln(&pType)
-	
-	fmt.Print("3. Enter API Key: ")
-	fmt.Scanln(&key)
-	
-	fmt.Print("4. Enter Base URL (Optional, press Enter to skip): ")
+	pType = strings.ToLower(strings.TrimSpace(pType))
+
+	if pType != "ollama" && pType != "custom" {
+		fmt.Print("3. Enter API Key: ")
+		fmt.Scanln(&key)
+	}
+
+	if pType == "custom" {
+		fmt.Print("3. Enter Base URL (e.g. http://192.168.1.35:11434/): ")
+	} else {
+		fmt.Print("4. Enter Base URL (Optional, press Enter to skip): ")
+	}
 	fmt.Scanln(&url)
 
 	if name == "" || pType == "" {

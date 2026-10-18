@@ -105,11 +105,20 @@ func (h *AgentHandler) InjectSkill(ctx context.Context, req *v1.InjectSkillReque
 	if req.ManifestPath != nil {
 		manifestPath = *req.ManifestPath
 	}
-	err := h.skillService.RegisterFromWASM(req.FilePath, manifestPath)
+	manifest, err := h.skillService.RegisterFromWASM(req.FilePath, manifestPath)
 	if err != nil {
 		return &v1.InjectSkillResponse{Success: false, Message: err.Error()}, nil
 	}
-	return &v1.InjectSkillResponse{Success: true, Message: "Skill successfully injected."}, nil
+
+	if h.engine != nil {
+		h.engine.RegisterSkill(manifest)
+	}
+
+	return &v1.InjectSkillResponse{
+		Success: true,
+		Message: fmt.Sprintf("Skill '%s' (ID: %s, v%s) successfully injected and registered into live engine.", manifest.Name, manifest.ID, manifest.Version),
+		SkillId: manifest.ID,
+	}, nil
 }
 
 func (h *AgentHandler) InspectSkill(ctx context.Context, req *v1.InspectSkillRequest) (*v1.InspectSkillResponse, error) {
@@ -154,6 +163,9 @@ func (h *AgentHandler) DeleteSkill(ctx context.Context, req *v1.DeleteSkillReque
 	err := h.skillService.DeleteSkill(req.Id)
 	if err != nil {
 		return &v1.DeleteSkillResponse{Success: false, Message: err.Error()}, nil
+	}
+	if h.engine != nil {
+		h.engine.UnregisterSkill(req.Id)
 	}
 	return &v1.DeleteSkillResponse{Success: true, Message: "Skill deleted successfully."}, nil
 }

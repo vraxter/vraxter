@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	v1 "github.com/vraxter/vraxter/api/v1"
@@ -137,17 +138,40 @@ var addModelCmd = &cobra.Command{
 }
 
 var activateModelCmd = &cobra.Command{
-	Use:   "activate [ID]",
+	Use:   "activate [ID or ALIAS]",
 	Short: "Mark a model as primary for CLI interactions",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		id := args[0]
+		displayName := id
+
+		if appStore != nil && appCrypto != nil {
+			repo := db.NewModelRepository(appStore, appCrypto)
+			if models, err := repo.GetAllModels(); err == nil {
+				cleanTarget := strings.Trim(strings.ToLower(id), "'\" ")
+				for _, m := range models {
+					cleanID := strings.Trim(strings.ToLower(m.ID), "'\" ")
+					cleanAlias := strings.Trim(strings.ToLower(m.Alias), "'\" ")
+					cleanModel := strings.Trim(strings.ToLower(m.Model), "'\" ")
+					if cleanID == cleanTarget || cleanAlias == cleanTarget || cleanModel == cleanTarget {
+						if m.Alias != "" {
+							displayName = m.Alias
+						} else {
+							displayName = m.Model
+						}
+						id = cleanID
+						break
+					}
+				}
+			}
+		}
+
 		p := filepath.Join(appConfig.AppDir, "active_model")
 		if err := os.WriteFile(p, []byte(id), 0644); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Error locking model: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✅ Model '%s' is now the primary CLI model.\n", id)
+		fmt.Printf("✅ Model '%s' is now the primary CLI model.\n", displayName)
 	},
 }
 

@@ -47,6 +47,35 @@ func (sc *StreamCoordinator) Run(
 		return vraxerror.New(vraxerror.ErrTypeInternal, "no configured model providers available", false, nil)
 	}
 
+	// Ensure the resolved/activated model (req.Model) is tried FIRST before cascading to failover models.
+	if req.Model != "" {
+		target := strings.Trim(strings.ToLower(strings.TrimSpace(req.Model)), "'\" ")
+		matchIdx := -1
+		for idx, entry := range orderedProviders {
+			cleanModel := strings.Trim(strings.ToLower(entry.Config.Model), "'\" ")
+			cleanAlias := strings.Trim(strings.ToLower(entry.Config.Alias), "'\" ")
+			cleanID := strings.Trim(strings.ToLower(entry.Config.ID), "'\" ")
+			if cleanModel == target || cleanAlias == target || cleanID == target {
+				matchIdx = idx
+				break
+			}
+		}
+		if matchIdx > 0 {
+			preferred := orderedProviders[matchIdx]
+			reordered := make([]struct {
+				Config   types.ModelConfig
+				Provider llm.Provider
+			}, 0, len(orderedProviders))
+			reordered = append(reordered, preferred)
+			for idx, entry := range orderedProviders {
+				if idx != matchIdx {
+					reordered = append(reordered, entry)
+				}
+			}
+			orderedProviders = reordered
+		}
+	}
+
 	var lastErr error
 	var streamFinished bool
 
@@ -58,14 +87,19 @@ func (sc *StreamCoordinator) Run(
 		currentReq := req
 		currentReq.Model = entry.Config.Model
 
+		displayModel := entry.Config.Model
+		if entry.Config.Alias != "" {
+			displayModel = entry.Config.Alias
+		}
+
 		if i == 0 {
 			if sc.Verbose {
-				slog.Info("StreamCoordinator started", "model", entry.Config.Model)
+				slog.Info("StreamCoordinator started", "model", displayModel)
 			}
 		} else {
-			msg := fmt.Sprintf("⚠️  [Fallback] Switching to %s", entry.Config.Model)
+			msg := fmt.Sprintf("⚠️  [Fallback] Switching to %s", displayModel)
 			select {
-			case out <- llm.StreamEvent{Type: llm.EventTypeStatus, Content: msg}:
+			case out <- llm.StreamEvent{Type: llm.EventTypeStatus, Content: msg, ActiveModelID: displayModel}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -74,7 +108,7 @@ func (sc *StreamCoordinator) Run(
 		stream, err := entry.Provider.StreamGenerate(ctx, currentReq)
 		if err != nil {
 			if sc.Verbose {
-				slog.Warn("StreamCoordinator model stream init failed", "model", entry.Config.Model, "error", err)
+				slog.Warn("StreamCoordinator model stream init failed", "model", displayModel, "error", err)
 			}
 			lastErr = err
 			continue
@@ -89,7 +123,7 @@ func (sc *StreamCoordinator) Run(
 			case llm.EventTypeError:
 				if !isCommitted {
 					if sc.Verbose {
-						slog.Warn("StreamCoordinator model stream failed early", "model", entry.Config.Model, "error", event.Err)
+						slog.Warn("StreamCoordinator model stream failed early", "model", displayModel, "error", event.Err)
 					}
 					lastErr = event.Err
 					break streamLoop
@@ -120,7 +154,7 @@ func (sc *StreamCoordinator) Run(
 						case <-ctx.Done():
 						}
 						select {
-						case out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: cleanContent}:
+						case out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: cleanContent, ActiveModelID: displayModel}:
 						case <-ctx.Done():
 						}
 					}
@@ -134,7 +168,7 @@ func (sc *StreamCoordinator) Run(
 					case <-ctx.Done():
 					}
 					select {
-					case out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: tail}:
+					case out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: tail, ActiveModelID: displayModel}:
 					case <-ctx.Done():
 					}
 				}
@@ -142,6 +176,14 @@ func (sc *StreamCoordinator) Run(
 				toolP := parser.ToolPayload()
 				codeP := parser.CodePayload()
 				hasToolMarker := parser.HasToolMarker()
+
+				// Local-model fallback: if the model emitted a JSON object containing "skill_id"
+				// without the [VRAX_TOOL] marker, extract it automatically.
+				if len(toolP) == 0 && !hasToolMarker {
+					if inferred := parser.InferUnmarkedToolJSON(); inferred != "" {
+						toolP = inferred
+					}
+				}
 
 				if sc.Verbose {
 					slog.Info("Stream Done", "tool_bytes", len(toolP), "code_bytes", len(codeP))

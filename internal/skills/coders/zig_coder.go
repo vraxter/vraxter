@@ -21,7 +21,6 @@ import (
 
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/pkg/interfaces"
-	"github.com/vraxter/vraxter/pkg/types"
 )
 
 type ZigToolchain interface {
@@ -71,19 +70,7 @@ func (c *ZigCoder) Compile(name, description, paramsSchema, code string, permiss
 		checksum = hex.EncodeToString(h[:])
 	}
 
-	manifest := types.SkillManifest{
-		ID:           skillID,
-		Name:         name,
-		Description:  description,
-		ParamsSchema: paramsSchema,
-		Command:      wasmPath,
-		Engine:       "wasm",
-		Language:     "zig",
-		Version:      "1.0.0",
-		Tier:         types.Tier2CommunityVerified,
-		Checksum:     checksum,
-		Permissions:  permissions,
-	}
+	manifest := BuildAndSaveV1Manifest(c.SkillsDir, skillID, name, description, wasmPath, checksum, paramsSchema, "zig", permissions)
 
 	// 7. Execution Dry-Run Verification (Failsafe)
 	_, err = c.Runner.Execute(context.Background(), manifest, map[string]interface{}{"_vraxter_dry_run": true})

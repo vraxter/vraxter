@@ -16,25 +16,28 @@ import (
 
 // Config holds global daemon data.
 type Config struct {
-	AppDir    string
-	DBPath    string
-	KeyPath          string
-	SkillsDir         string
-	SDKDir            string
-	EnableGoogleHome  bool
-	SpatialConfigPath string
+	AppDir               string
+	DBPath               string
+	KeyPath              string
+	SkillsDir            string
+	SDKDir               string
+	EnableGoogleHome     bool
+	SpatialConfigPath    string
 	Implementation       string
 	PrivacyPolicy        string
+	IsolationMode        string   // "airgap", "local_lan", "hybrid"
+	IsAirgapLocked       bool     // True when airgap is enforced by immutable env/flag
 	HubURL               string
 	RequireSkillApproval bool
 	WhitelistedIPs       []string
 }
 
 type Settings struct {
-	Implementation       string `json:"implementation"`
-	PrivacyPolicy        string `json:"privacy_policy"`
-	HubURL               string `json:"hub_url"`
-	RequireSkillApproval bool   `json:"require_skill_approval"`
+	Implementation       string   `json:"implementation"`
+	PrivacyPolicy        string   `json:"privacy_policy"`
+	IsolationMode        string   `json:"isolation_mode,omitempty"`
+	HubURL               string   `json:"hub_url"`
+	RequireSkillApproval bool     `json:"require_skill_approval"`
 	WhitelistedIPs       []string `json:"whitelisted_ips"`
 }
 
@@ -68,7 +71,9 @@ func Load() Config {
 	// 3. Load from settings.json if exists
 	settingsPath := filepath.Join(appDir, "settings.json")
 	var impl = "custom"
-	var privacy = "ask"
+	var privacy = "strict_local"
+	var isolationMode = "airgap" // Default secure
+	var isAirgapLocked = false
 	var hub = DefaultHubURL
 	var requireSkillApproval = false
 	var whitelistedIPs []string
@@ -81,6 +86,13 @@ func Load() Config {
 			}
 			if s.PrivacyPolicy != "" {
 				privacy = s.PrivacyPolicy
+			}
+			if s.IsolationMode != "" {
+				isolationMode = s.IsolationMode
+			} else if s.PrivacyPolicy == "strict_local" {
+				isolationMode = "airgap"
+			} else if s.PrivacyPolicy == "custom" || s.PrivacyPolicy == "ask" {
+				isolationMode = "hybrid"
 			}
 			if s.HubURL != "" {
 				hub = s.HubURL
@@ -98,6 +110,22 @@ func Load() Config {
 	}
 	if envPrivacy := os.Getenv("VRAXTER_PRIVACY_POLICY"); envPrivacy != "" {
 		privacy = envPrivacy
+		if envPrivacy == "strict_local" {
+			isolationMode = "airgap"
+		}
+	}
+	if envIso := os.Getenv("VRAXTER_ISOLATION_MODE"); envIso != "" {
+		isolationMode = envIso
+		if envIso == "airgap" {
+			isAirgapLocked = true
+		}
+	}
+	if envAirgap := os.Getenv("VRAXTER_AIRGAP"); envAirgap == "true" || envAirgap == "1" {
+		isolationMode = "airgap"
+		isAirgapLocked = true
+	}
+	if isolationMode == "airgap" {
+		privacy = "strict_local"
 	}
 	if envHub := os.Getenv("VRAXTER_HUB_URL"); envHub != "" {
 		hub = envHub
@@ -107,15 +135,17 @@ func Load() Config {
 	}
 
 	return Config{
-		AppDir:    appDir,
-		DBPath:    filepath.Join(appDir, "vraxter.db"),
-		KeyPath:          filepath.Join(appDir, ".masterkey"),
-		SkillsDir:         skillsDir,
-		SDKDir:            sdkDir,
-		EnableGoogleHome:  os.Getenv("VRAXTER_GOOGLE_HOME") == "true",
-		SpatialConfigPath: filepath.Join(appDir, "spatial.json"),
+		AppDir:               appDir,
+		DBPath:               filepath.Join(appDir, "vraxter.db"),
+		KeyPath:              filepath.Join(appDir, ".masterkey"),
+		SkillsDir:            skillsDir,
+		SDKDir:               sdkDir,
+		EnableGoogleHome:     os.Getenv("VRAXTER_GOOGLE_HOME") == "true",
+		SpatialConfigPath:    filepath.Join(appDir, "spatial.json"),
 		Implementation:       impl,
 		PrivacyPolicy:        privacy,
+		IsolationMode:        isolationMode,
+		IsAirgapLocked:       isAirgapLocked,
 		HubURL:               hub,
 		RequireSkillApproval: requireSkillApproval,
 		WhitelistedIPs:       whitelistedIPs,
@@ -127,10 +157,26 @@ func (c *Config) SaveSettings() error {
 	s := Settings{
 		Implementation:       c.Implementation,
 		PrivacyPolicy:        c.PrivacyPolicy,
+		IsolationMode:        c.IsolationMode,
 		HubURL:               c.HubURL,
 		RequireSkillApproval: c.RequireSkillApproval,
 		WhitelistedIPs:       c.WhitelistedIPs,
 	}
 	data, _ := json.MarshalIndent(s, "", "  ")
 	return os.WriteFile(filepath.Join(c.AppDir, "settings.json"), data, 0600)
+}
+
+// IsAirgap returns true if Vraxter is strictly running in zero-egress airgap mode
+func (c *Config) IsAirgap() bool {
+	return c.IsolationMode == "airgap" || c.PrivacyPolicy == "strict_local"
+}
+
+// IsLocalLAN returns true if local private subnets are permitted
+func (c *Config) IsLocalLAN() bool {
+	return c.IsolationMode == "local_lan"
+}
+
+// IsHybrid returns true if internet communication is allowed
+func (c *Config) IsHybrid() bool {
+	return !c.IsAirgap() && !c.IsLocalLAN()
 }

@@ -147,6 +147,7 @@ type PlannerParams struct {
 	Query               string
 	GitContext          string
 	ExistingSpecialists string
+	TargetSpecialist    string
 }
 
 type CodeGenParams struct {

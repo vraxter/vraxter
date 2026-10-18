@@ -254,11 +254,12 @@ func (h *AgentHandler) ListProviders(ctx context.Context, req *v1.ListProvidersR
 
 	resp := &v1.ListProvidersResponse{}
 	for _, p := range providers {
+		isConfigured := p.APIKey != "" || p.Type == "ollama" || (p.Type == "custom" && p.BaseURL != "")
 		resp.Providers = append(resp.Providers, &v1.ProviderInfo{
 			Id:           p.ID,
 			Name:         p.Name,
 			Type:         p.Type,
-			IsConfigured: p.APIKey != "",
+			IsConfigured: isConfigured,
 		})
 	}
 	return resp, nil

@@ -1,0 +1,326 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vraxter.io/schemas/skill-manifest.v1.json",
+  "title": "Vraxter Skill Manifest V1 Specification",
+  "description": "Formal schema specification for capability-based Vraxter skills (skill-manifest/1).",
+  "type": "object",
+  "required": [
+    "manifest_version",
+    "id",
+    "name",
+    "version",
+    "description",
+    "module"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "URI reference to the manifest schema."
+    },
+    "manifest_version": {
+      "type": "string",
+      "enum": ["skill-manifest/1"],
+      "description": "Specification version identifier, strictly 'skill-manifest/1'."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_.-]+$",
+      "description": "Unique canonical skill identifier (alphanumeric, dot, underscore, or hyphen)."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable name of the skill."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+      "description": "Semantic versioning string (e.g. 1.0.0, 0.3.1)."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Detailed description of what the skill does and when the agent should invoke it."
+    },
+    "agent": {
+      "type": "object",
+      "description": "Security governance and execution policy for agent invocation.",
+      "properties": {
+        "risk": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"],
+          "default": "medium",
+          "description": "Declared risk profile of the skill."
+        },
+        "approval": {
+          "type": "string",
+          "enum": ["never", "always", "on_risk", "conditional"],
+          "default": "on_risk",
+          "description": "User approval policy before execution."
+        }
+      },
+      "additionalProperties": false
+    },
+    "module": {
+      "type": "object",
+      "required": ["file"],
+      "description": "WASM compilation target and integrity verification.",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Relative path to the WebAssembly (.wasm) binary."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$",
+          "description": "SHA-256 integrity hash of the WebAssembly binary."
+        },
+        "abi": {
+          "type": "string",
+          "enum": ["wasip1", "wasip2", "generic"],
+          "default": "wasip1",
+          "description": "Target ABI contract for isolation."
+        }
+      },
+      "additionalProperties": false
+    },
+    "routing": {
+      "type": "object",
+      "description": "Metadata for intent resolution and fast-path matching.",
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Keywords that directly match this skill."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Categorical tags for grouping and indexing."
+        },
+        "examples": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Sample user prompts or intent phrases."
+        },
+        "param_regex": {
+          "type": "string",
+          "description": "Regular expression pattern with named capture groups for parsing arguments."
+        }
+      },
+      "additionalProperties": false
+    },
+    "io": {
+      "type": "object",
+      "description": "Input and output transport protocols.",
+      "properties": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "via": {
+              "type": "string",
+              "enum": ["stdin", "args", "env"],
+              "default": "stdin",
+              "description": "Transport channel through which arguments are passed to the module."
+            },
+            "format": {
+              "type": "string",
+              "enum": ["json", "text", "binary"],
+              "default": "json",
+              "description": "Serialization format of input data."
+            },
+            "schema": {
+              "type": ["object", "string"],
+              "description": "JSON Schema or descriptor defining expected parameters."
+            }
+          },
+          "additionalProperties": false
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "via": {
+              "type": "string",
+              "enum": ["stdout", "file"],
+              "default": "stdout",
+              "description": "Transport channel through which execution results are retrieved."
+            },
+            "format": {
+              "type": "string",
+              "enum": ["json", "text", "binary"],
+              "default": "json",
+              "description": "Serialization format of output data."
+            },
+            "path": {
+              "type": "string",
+              "description": "Guest path to read output from when 'via' is 'file' (e.g. '/output/report.json')."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Extensible capabilities granted to the module. Omitted capabilities are denied by default.",
+      "properties": {
+        "fs": {
+          "type": "object",
+          "description": "Filesystem sandboxing and mount definitions.",
+          "properties": {
+            "mounts": {
+              "type": "array",
+              "description": "Mount points exposed to the WASM guest.",
+              "items": {
+                "type": "object",
+                "required": ["guest", "source", "mode"],
+                "properties": {
+                  "guest": {
+                    "type": "string",
+                    "description": "Guest mount path visible to the WASM module (e.g. '/input', '/output', '/tmp')."
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": ["workspace", "input", "output", "skill_data", "ephemeral", "host"],
+                    "description": "Logical storage pool or host directory backing this mount."
+                  },
+                  "host_path": {
+                    "type": "string",
+                    "description": "Explicit host directory path when source is 'host'."
+                  },
+                  "subpath": {
+                    "type": "string",
+                    "description": "Optional subpath within the storage pool."
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": ["ro", "rw"],
+                    "description": "Access mode: 'ro' (read-only) or 'rw' (read-write)."
+                  },
+                  "allow_extensions": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Allowed file extensions within this mount (e.g. ['.txt', '.md'])."
+                  },
+                  "max_file_mb": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Maximum size per file in megabytes."
+                  },
+                  "max_total_mb": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Maximum aggregate storage quota for this mount in megabytes."
+                  },
+                  "max_files": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Maximum number of files allowed in this mount."
+                  },
+                  "allow_delete": {
+                    "type": "boolean",
+                    "description": "Whether file deletion is permitted."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "network": {
+          "type": "object",
+          "description": "Network access boundaries.",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["none", "fetch", "egress"],
+              "default": "none",
+              "description": "Network access mode: 'none' (isolated), 'fetch' (HTTP/HTTPS only), 'egress' (general TCP outbound)."
+            },
+            "allowed_hosts": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Whitelisted hostnames or CIDR ranges."
+            },
+            "allowed_ports": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "description": "Whitelisted destination ports."
+            },
+            "allowed_schemes": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Whitelisted URL schemes (e.g. ['https'])."
+            },
+            "allow_raw_sockets": {
+              "type": "boolean",
+              "description": "Whether raw socket operations are permitted."
+            }
+          },
+          "additionalProperties": false
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables passed into the WASM instance.",
+          "properties": {
+            "vars": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Key-value map of explicit environment variables."
+            }
+          },
+          "additionalProperties": false
+        },
+        "clock": {
+          "type": "object",
+          "description": "Clock access policies.",
+          "properties": {
+            "wall": {
+              "type": "boolean",
+              "description": "Whether real-world wall clock access is enabled."
+            },
+            "monotonic": {
+              "type": "boolean",
+              "description": "Whether high-resolution monotonic timer access is enabled."
+            }
+          },
+          "additionalProperties": false
+        },
+        "random": {
+          "type": "boolean",
+          "description": "Whether cryptographically secure host randomness (e.g. crypto/rand) is enabled."
+        }
+      },
+      "additionalProperties": true
+    },
+    "limits": {
+      "type": "object",
+      "description": "Resource constraints imposed on the WASM execution sandbox.",
+      "properties": {
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2048,
+          "default": 64,
+          "description": "Maximum memory limit in megabytes."
+        },
+        "max_runtime_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 300000,
+          "default": 30000,
+          "description": "Maximum execution runtime in milliseconds before hard timeout."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
+

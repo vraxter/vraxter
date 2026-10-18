@@ -86,17 +86,17 @@ func NewAdapter(apiKey, host string) *Adapter {
 	}
 }
 
-func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest) (interfaces.CompletionResponse, error) {
-	if a.apiKey == "" {
-		return interfaces.CompletionResponse{}, fmt.Errorf("Google API Key is missing")
-	}
-
+func buildGeminiPayload(messages []interfaces.Message) geminiReq {
 	var systemMsg *geminiContent
 	var contents []geminiContent
 
-	for _, m := range req.Messages {
-		role := m.Role
-		if role == "system" {
+	for _, m := range messages {
+		if strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+
+		switch m.Role {
+		case "system":
 			if systemMsg == nil {
 				systemMsg = &geminiContent{
 					Parts: []geminiPart{{Text: m.Content}},
@@ -104,41 +104,51 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 			} else {
 				systemMsg.Parts[0].Text += "\n\n" + m.Content
 			}
-			continue
-		}
+		case "user", "assistant", "model":
+			role := "user"
+			if m.Role == "assistant" || m.Role == "model" {
+				role = "model"
+			}
 
-		if role == "assistant" {
-			role = "model"
-		}
-
-		if mimeType, b64Data, textPrompt, ok := interfaces.ParseDataURI(m.Content); ok {
-			parts := []geminiPart{
-				{
-					InlineData: &inlineData{
-						MimeType: mimeType,
-						Data:     b64Data,
+			if mimeType, b64Data, textPrompt, ok := interfaces.ParseDataURI(m.Content); ok && b64Data != "" {
+				parts := []geminiPart{
+					{
+						InlineData: &inlineData{
+							MimeType: mimeType,
+							Data:     b64Data,
+						},
 					},
-				},
+				}
+				if strings.TrimSpace(textPrompt) != "" {
+					parts = append(parts, geminiPart{Text: textPrompt})
+				}
+				contents = append(contents, geminiContent{
+					Role:  role,
+					Parts: parts,
+				})
+			} else {
+				contents = append(contents, geminiContent{
+					Role:  role,
+					Parts: []geminiPart{{Text: m.Content}},
+				})
 			}
-			if textPrompt != "" {
-				parts = append(parts, geminiPart{Text: textPrompt})
-			}
-			contents = append(contents, geminiContent{
-				Role:  role,
-				Parts: parts,
-			})
-		} else {
-			contents = append(contents, geminiContent{
-				Role:  role,
-				Parts: []geminiPart{{Text: m.Content}},
-			})
+		default:
+			continue
 		}
 	}
 
-	payload := geminiReq{
+	return geminiReq{
 		Contents:          contents,
 		SystemInstruction: systemMsg,
 	}
+}
+
+func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest) (interfaces.CompletionResponse, error) {
+	if a.apiKey == "" {
+		return interfaces.CompletionResponse{}, fmt.Errorf("Google API Key is missing")
+	}
+
+	payload := buildGeminiPayload(req.Messages)
 
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -184,59 +194,12 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionRequest) (<-chan interfaces.StreamEvent, error) {
 	ch := make(chan interfaces.StreamEvent)
 
-	var systemMsg *geminiContent
-	var contents []geminiContent
-
 	modelName := req.Model
 	if !strings.HasPrefix(modelName, "models/") {
 		modelName = "models/" + modelName
 	}
 
-	for _, m := range req.Messages {
-		switch m.Role {
-		case "system":
-			if systemMsg == nil {
-				systemMsg = &geminiContent{Parts: []geminiPart{{Text: m.Content}}}
-			} else {
-				systemMsg.Parts[0].Text += "\n\n" + m.Content
-			}
-		case "user", "assistant", "model":
-			role := "user"
-			if m.Role == "assistant" || m.Role == "model" {
-				role = "model"
-			}
-			
-			if mimeType, b64Data, textPrompt, ok := interfaces.ParseDataURI(m.Content); ok {
-				parts := []geminiPart{
-					{
-						InlineData: &inlineData{
-							MimeType: mimeType,
-							Data:     b64Data,
-						},
-					},
-				}
-				if textPrompt != "" {
-					parts = append(parts, geminiPart{Text: textPrompt})
-				}
-				contents = append(contents, geminiContent{
-					Role:  role,
-					Parts: parts,
-				})
-			} else {
-				contents = append(contents, geminiContent{
-					Role:  role,
-					Parts: []geminiPart{{Text: m.Content}},
-				})
-			}
-		default:
-			continue
-		}
-	}
-
-	payload := geminiReq{
-		Contents:          contents,
-		SystemInstruction: systemMsg,
-	}
+	payload := buildGeminiPayload(req.Messages)
 
 	b, err := json.Marshal(payload)
 	if err != nil {

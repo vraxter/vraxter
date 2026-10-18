@@ -54,3 +54,9 @@ func (r *Registry) GetAll() []types.SkillManifest {
 	}
 	return list
 }
+
+func (r *Registry) Unregister(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.skills, id)
+}

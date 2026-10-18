@@ -9,6 +9,7 @@
 package openai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -38,6 +39,7 @@ type openaiMessage struct {
 type openaiReq struct {
 	Model    string          `json:"model"`
 	Messages []openaiMessage `json:"messages"`
+	Stream   bool            `json:"stream,omitempty"`
 }
 
 type openaiRes struct {
@@ -45,42 +47,66 @@ type openaiRes struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
 	} `json:"choices"`
 }
 
 type Adapter struct {
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
+	apiKey       string
+	baseURL      string
+	isCustomHost bool
+	httpClient   *http.Client
 }
 
 func NewAdapter(apiKey, host string) *Adapter {
+	host = strings.TrimSpace(host)
+	isCustomHost := host != "" && !strings.Contains(host, "api.openai.com")
 	if host == "" {
 		host = "https://api.openai.com/v1/chat/completions"
-	}
-	if !strings.Contains(host, "/chat/completions") && !strings.Contains(host, "/v1") {
-		host = strings.TrimSuffix(host, "/") + "/v1/chat/completions"
+	} else {
+		host = strings.TrimRight(host, "/")
+		if strings.HasSuffix(host, "/v1") {
+			host = host + "/chat/completions"
+		} else if !strings.Contains(host, "/chat/completions") {
+			host = host + "/v1/chat/completions"
+		}
 	}
 
 	return &Adapter{
-		apiKey:     apiKey,
-		baseURL:    host,
-		httpClient: &http.Client{},
+		apiKey:       apiKey,
+		baseURL:      host,
+		isCustomHost: isCustomHost,
+		httpClient:   &http.Client{},
 	}
 }
 
-func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest) (interfaces.CompletionResponse, error) {
-	if a.apiKey == "" {
-		return interfaces.CompletionResponse{}, fmt.Errorf("OpenAI API Key is missing")
+func (a *Adapter) endpointURL(path string) string {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
 	}
-
-	payload := openaiReq{
-		Model:    req.Model,
-		Messages: make([]openaiMessage, len(req.Messages)),
+	if strings.HasSuffix(a.baseURL, "/chat/completions") {
+		return strings.TrimSuffix(a.baseURL, "/chat/completions") + path
 	}
+	return strings.TrimRight(a.baseURL, "/") + path
+}
 
-	for i, m := range req.Messages {
-		if mimeType, b64Data, textPrompt, ok := interfaces.ParseDataURI(m.Content); ok {
+func buildOpenAIMessages(msgs []interfaces.Message) []openaiMessage {
+	var out []openaiMessage
+	for _, m := range msgs {
+		if strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		role := m.Role
+		if role == "model" {
+			role = "assistant"
+		}
+		if role != "system" && role != "user" && role != "assistant" {
+			continue
+		}
+
+		if mimeType, b64Data, textPrompt, ok := interfaces.ParseDataURI(m.Content); ok && b64Data != "" {
 			if strings.HasPrefix(mimeType, "audio/") {
 				format := "wav"
 				if strings.Contains(mimeType, "mp3") {
@@ -97,16 +123,16 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 						},
 					},
 				}
-				if textPrompt != "" {
+				if strings.TrimSpace(textPrompt) != "" {
 					parts = append(parts, map[string]interface{}{
 						"type": "text",
 						"text": textPrompt,
 					})
 				}
-				payload.Messages[i] = openaiMessage{
-					Role:    m.Role,
+				out = append(out, openaiMessage{
+					Role:    role,
 					Content: parts,
-				}
+				})
 			} else {
 				parts := []interface{}{
 					map[string]interface{}{
@@ -116,23 +142,36 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 						},
 					},
 				}
-				if textPrompt != "" {
+				if strings.TrimSpace(textPrompt) != "" {
 					parts = append(parts, map[string]interface{}{
 						"type": "text",
 						"text": textPrompt,
 					})
 				}
-				payload.Messages[i] = openaiMessage{
-					Role:    m.Role,
+				out = append(out, openaiMessage{
+					Role:    role,
 					Content: parts,
-				}
+				})
 			}
 		} else {
-			payload.Messages[i] = openaiMessage{
-				Role:    m.Role,
+			out = append(out, openaiMessage{
+				Role:    role,
 				Content: m.Content,
-			}
+			})
 		}
+	}
+	return out
+}
+
+func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest) (interfaces.CompletionResponse, error) {
+	if !a.isCustomHost && a.apiKey == "" {
+		return interfaces.CompletionResponse{}, fmt.Errorf("OpenAI API Key is missing")
+	}
+
+	payload := openaiReq{
+		Model:    req.Model,
+		Messages: buildOpenAIMessages(req.Messages),
+		Stream:   false,
 	}
 
 	b, err := json.Marshal(payload)
@@ -146,7 +185,9 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	if a.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
@@ -155,7 +196,8 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return interfaces.CompletionResponse{}, fmt.Errorf("OpenAI returned status: %s", resp.Status)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return interfaces.CompletionResponse{}, fmt.Errorf("OpenAI returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
 	}
 
 	var parsed openaiRes
@@ -171,26 +213,108 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 }
 
 func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionRequest) (<-chan interfaces.StreamEvent, error) {
+	if !a.isCustomHost && a.apiKey == "" {
+		return nil, fmt.Errorf("OpenAI API Key is missing")
+	}
+
+	payload := openaiReq{
+		Model:    req.Model,
+		Messages: buildOpenAIMessages(req.Messages),
+		Stream:   true,
+	}
+
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.baseURL, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	if a.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
+
 	ch := make(chan interfaces.StreamEvent)
 	go func() {
 		defer close(ch)
-		res, err := a.Generate(ctx, req)
+		resp, err := a.httpClient.Do(httpReq)
 		if err != nil {
 			ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err}
 			return
 		}
-		ch <- interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: res.Content}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			ch <- interfaces.StreamEvent{
+				Type: interfaces.EventTypeError,
+				Err:  fmt.Errorf("openai stream error %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))),
+			}
+			return
+		}
+
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, ":") {
+				continue
+			}
+			if strings.HasPrefix(line, "data:") {
+				data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				if data == "[DONE]" {
+					break
+				}
+				var chunk openaiRes
+				if err := json.Unmarshal([]byte(data), &chunk); err == nil && len(chunk.Choices) > 0 {
+					token := chunk.Choices[0].Delta.Content
+					if token == "" {
+						token = chunk.Choices[0].Message.Content
+					}
+					if token != "" {
+						ch <- interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: token}
+					}
+				}
+			} else if strings.HasPrefix(line, "{") {
+				// Fallback if endpoint returned a non-SSE single JSON response
+				var single openaiRes
+				if err := json.Unmarshal([]byte(line), &single); err == nil && len(single.Choices) > 0 {
+					token := single.Choices[0].Message.Content
+					if token == "" {
+						token = single.Choices[0].Delta.Content
+					}
+					if token != "" {
+						ch <- interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: token}
+					}
+				}
+			}
+		}
+
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
+			ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err}
+			return
+		}
+
 		ch <- interfaces.StreamEvent{Type: interfaces.EventTypeDone}
 	}()
 	return ch, nil
 }
 
 func (a *Adapter) CheckHealth(ctx context.Context) error {
-	if a.apiKey == "" {
+	if !a.isCustomHost && a.apiKey == "" {
 		return fmt.Errorf("not configured")
 	}
-	healthReq, _ := http.NewRequestWithContext(ctx, "GET", "https://api.openai.com/v1/models", nil)
-	healthReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	healthReq, err := http.NewRequestWithContext(ctx, "GET", a.endpointURL("/models"), nil)
+	if err != nil {
+		return err
+	}
+	if a.apiKey != "" {
+		healthReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 	resp, err := a.httpClient.Do(healthReq)
 	if err != nil {
 		return err
@@ -203,7 +327,7 @@ func (a *Adapter) CheckHealth(ctx context.Context) error {
 }
 
 func (a *Adapter) SynthesizeSpeech(ctx context.Context, text, voice string) ([]byte, error) {
-	if a.apiKey == "" {
+	if !a.isCustomHost && a.apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API Key is missing")
 	}
 
@@ -222,14 +346,16 @@ func (a *Adapter) SynthesizeSpeech(ctx context.Context, text, voice string) ([]b
 		return nil, err
 	}
 
-	url := strings.Replace(a.baseURL, "chat/completions", "audio/speech", 1)
+	url := a.endpointURL("/audio/speech")
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	if a.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
@@ -246,7 +372,7 @@ func (a *Adapter) SynthesizeSpeech(ctx context.Context, text, voice string) ([]b
 }
 
 func (a *Adapter) TranscribeAudio(ctx context.Context, audioBytes []byte, mimeType, prompt string) (string, error) {
-	if a.apiKey == "" {
+	if !a.isCustomHost && a.apiKey == "" {
 		return "", fmt.Errorf("OpenAI API Key is missing")
 	}
 
@@ -275,14 +401,16 @@ func (a *Adapter) TranscribeAudio(ctx context.Context, audioBytes []byte, mimeTy
 	}
 	writer.Close()
 
-	url := strings.Replace(a.baseURL, "chat/completions", "audio/transcriptions", 1)
+	url := a.endpointURL("/audio/transcriptions")
 	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
 	if err != nil {
 		return "", err
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	if a.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
@@ -306,7 +434,7 @@ func (a *Adapter) TranscribeAudio(ctx context.Context, audioBytes []byte, mimeTy
 }
 
 func (a *Adapter) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
-	if a.apiKey == "" {
+	if !a.isCustomHost && a.apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API Key is missing")
 	}
 
@@ -320,7 +448,7 @@ func (a *Adapter) Embed(ctx context.Context, model string, texts []string) ([][]
 		return nil, err
 	}
 
-	embedURL := strings.Replace(a.baseURL, "chat/completions", "embeddings", 1)
+	embedURL := a.endpointURL("/embeddings")
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", embedURL, bytes.NewReader(b))
 	if err != nil {
@@ -328,7 +456,9 @@ func (a *Adapter) Embed(ctx context.Context, model string, texts []string) ([][]
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	if a.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
@@ -358,16 +488,18 @@ func (a *Adapter) Embed(ctx context.Context, model string, texts []string) ([][]
 }
 
 func (a *Adapter) Discover(ctx context.Context) ([]interfaces.ModelMetadata, error) {
-	if a.apiKey == "" {
+	if !a.isCustomHost && a.apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API Key is missing")
 	}
 
-	reqURL := "https://api.openai.com/v1/models"
+	reqURL := a.endpointURL("/models")
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	if a.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
@@ -390,14 +522,15 @@ func (a *Adapter) Discover(ctx context.Context) ([]interfaces.ModelMetadata, err
 
 	var models []interfaces.ModelMetadata
 	for _, m := range parsed.Data {
+		lowerID := strings.ToLower(m.ID)
 		caps := []string{"text"}
-		if strings.Contains(m.ID, "embedding") {
+		if strings.Contains(lowerID, "embed") {
 			caps = []string{"embedding"}
-		} else if strings.Contains(m.ID, "dall-e") {
+		} else if strings.Contains(lowerID, "dall-e") {
 			caps = []string{"image"}
-		} else if strings.Contains(m.ID, "tts") || strings.Contains(m.ID, "whisper") {
+		} else if strings.Contains(lowerID, "tts") || strings.Contains(lowerID, "whisper") {
 			caps = []string{"audio"}
-		} else if !strings.HasPrefix(m.ID, "gpt-") && !strings.HasPrefix(m.ID, "o1-") {
+		} else if !a.isCustomHost && !strings.HasPrefix(m.ID, "gpt-") && !strings.HasPrefix(m.ID, "o1-") {
 			continue
 		}
 
@@ -411,16 +544,18 @@ func (a *Adapter) Discover(ctx context.Context) ([]interfaces.ModelMetadata, err
 }
 
 func (a *Adapter) GetModelDetails(ctx context.Context, modelID string) (map[string]interface{}, error) {
-	if a.apiKey == "" {
+	if !a.isCustomHost && a.apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API Key is missing")
 	}
 
-	reqURL := "https://api.openai.com/v1/models/" + modelID
+	reqURL := a.endpointURL("/models/" + modelID)
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	if a.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {

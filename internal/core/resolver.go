@@ -61,21 +61,34 @@ func (r *IntentResolver) Resolve(ctx context.Context, query string) types.Intent
 				nameInQuery := strings.Contains(lowerQuery, lowerName)
 
 				if !nameInQuery {
-					// Domain/Expertise keyword match WITHOUT specialist name → SignalDomainMatch (0.9)
+					// Domain/Expertise keyword match WITHOUT specialist name → SignalDomainMatch (0.4)
+					// Filter out common conversational stop words in English and Spanish
+					stopWords := map[string]bool{
+						"como": true, "para": true, "este": true, "esta": true, "todo": true,
+						"hace": true, "bien": true, "pero": true, "solo": true, "otra": true,
+						"with": true, "from": true, "that": true, "this": true, "have": true,
+						"more": true, "then": true, "when": true, "what": true, "some": true,
+						"your": true, "their": true, "them": true, "were": true, "been": true,
+						"always": true, "siempre": true, "actua": true, "actúa": true, "expert": true, "experto": true,
+					}
 					expertiseKeywords := strings.Fields(strings.ToLower(s.Expertise))
+					matchedKeywords := 0
 					for _, kw := range expertiseKeywords {
-						if len(kw) > 3 && strings.Contains(lowerQuery, kw) {
-							signal := types.SignalDomainMatch
-							if signal.Confidence() > bestSpecMatch.Confidence {
-								bestSpecMatch = types.IntentMatch{
-									Type:       types.IntentTypeSpecialist,
-									ID:         s.ID,
-									Confidence: signal.Confidence(),
-									Signal:     signal,
-									Params:     map[string]interface{}{"task": query},
-								}
+						cleanKw := strings.Trim(kw, ".,;:()[]{}\"'")
+						if len(cleanKw) > 4 && !stopWords[cleanKw] && strings.Contains(lowerQuery, cleanKw) {
+							matchedKeywords++
+						}
+					}
+					if matchedKeywords >= 2 {
+						signal := types.SignalDomainMatch
+						if signal.Confidence() > bestSpecMatch.Confidence {
+							bestSpecMatch = types.IntentMatch{
+								Type:       types.IntentTypeSpecialist,
+								ID:         s.ID,
+								Confidence: signal.Confidence(),
+								Signal:     signal,
+								Params:     map[string]interface{}{"task": query},
 							}
-							break // One keyword hit is enough for this specialist
 						}
 					}
 				} else {
@@ -93,7 +106,7 @@ func (r *IntentResolver) Resolve(ctx context.Context, query string) types.Intent
 				}
 			}
 
-			// If we have a strong domain match (>= 0.8), return it for fast-path
+			// Only return for fast-path if explicit structural threshold (>= 0.8) is met
 			if bestSpecMatch.Confidence >= 0.8 {
 				return bestSpecMatch
 			}

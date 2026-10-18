@@ -43,6 +43,7 @@ type ExecutionEngine struct {
 	RestoreModelDelegate  func(sessionID string)
 	ResolveSpecialistDelegate func(ctx context.Context, query string) (*types.Specialist, error)
 	GetActiveModelConfigDelegate func(sessionID string) (types.ModelConfig, error)
+	OnSpecialistChange           func()
 	RequireSkillApproval bool
 }
 
@@ -116,6 +117,19 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 			}
 		}
 
+		if manifest.RequiresApproval(e.RequireSkillApproval) {
+			payloadBytes, _ := json.Marshal(types.ToolCall{
+				SkillID: match.ID,
+				Params:  match.Params,
+			})
+			e.emitEvent(ctx, out, llm.StreamEvent{
+				Type:    llm.EventTypeSkillApprovalRequest,
+				Content: string(payloadBytes),
+				SkillID: match.ID,
+			})
+			return
+		}
+
 		result, err := e.Runner.Execute(ctx, *manifest, match.Params)
 		if err != nil {
 			out <- llm.StreamEvent{
@@ -148,7 +162,11 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 			displayName = spec.Name
 		}
 
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n🔄 Sub-Agent Swarm Spawned: Delegating task to '%s' (Fast Path)...\n", displayName)}
+		// Notify TUI of specialist focus & delegation via SpecialistResult event (not chat token)
+		out <- llm.StreamEvent{
+			Type:    llm.EventTypeSpecialistResult,
+			Content: fmt.Sprintf("%s|%s|", match.ID, displayName),
+		}
 
 		if e.SwarmDelegate != nil {
 			taskText, _ := match.Params["task"].(string)
@@ -167,13 +185,15 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 		}
 	}
 
-	e.ChatRepo.SaveMessage(&types.Message{
-		ID:             uuid.New().String(),
-		ConversationID: conversationID,
-		Role:           "assistant",
-		Content:        strings.TrimSpace(finalContent),
-		Timestamp:      time.Now(),
-	})
+	if strings.TrimSpace(finalContent) != "" {
+		e.ChatRepo.SaveMessage(&types.Message{
+			ID:             uuid.New().String(),
+			ConversationID: conversationID,
+			Role:           "assistant",
+			Content:        strings.TrimSpace(finalContent),
+			Timestamp:      time.Now(),
+		})
+	}
 }
 
 // ExecutePipeline independently consumes the event queue produced by the parser.
@@ -197,7 +217,7 @@ func (e *ExecutionEngine) ExecutePipeline(ctx context.Context, in <-chan types.E
 				codeP := payloadMap["code_payload"]
 				if feedback := e.DispatchToolPayload(ctx, out, toolP, codeP, conversationID); feedback != "" {
 					// Persist intermediate text before breaking off for retry or yield
-					if assistantText != "" {
+					if strings.TrimSpace(assistantText) != "" {
 						e.ChatRepo.SaveMessage(&types.Message{
 							ID:             uuid.New().String(),
 							ConversationID: conversationID,
@@ -229,7 +249,7 @@ func (e *ExecutionEngine) ExecutePipeline(ctx context.Context, in <-chan types.E
 	}
 
 	// Persist the combined conversation context after queue closes or finishes
-	if assistantText != "" {
+	if strings.TrimSpace(assistantText) != "" {
 		e.ChatRepo.SaveMessage(&types.Message{
 			ID:             uuid.New().String(),
 			ConversationID: conversationID,
@@ -254,13 +274,26 @@ func (e *ExecutionEngine) DispatchToolPayload(
 	rawTool := strings.TrimSpace(toolPayload)
 	
 	// Sanitization: Strip markdown backticks if the LLM hallucinated them
-	if strings.HasPrefix(rawTool, "```") {
-		lines := strings.Split(rawTool, "\n")
-		if len(lines) > 2 {
-			rawTool = strings.Join(lines[1:len(lines)-1], "\n")
+	if strings.Contains(rawTool, "```") {
+		start := strings.Index(rawTool, "{")
+		end := strings.LastIndex(rawTool, "}")
+		if start != -1 && end != -1 && end > start {
+			rawTool = rawTool[start : end+1]
+		}
+	} else {
+		start := strings.Index(rawTool, "{")
+		end := strings.LastIndex(rawTool, "}")
+		if start != -1 && end != -1 && end > start {
+			rawTool = rawTool[start : end+1]
 		}
 	}
-	rawTool = strings.TrimSpace(rawTool)
+	// Clean trailing commas before closing braces/brackets (common local-model syntax error)
+	rawTool = strings.ReplaceAll(rawTool, ",}", "}")
+	rawTool = strings.ReplaceAll(rawTool, ", }", "}")
+	rawTool = strings.ReplaceAll(rawTool, ",\n}", "\n}")
+	rawTool = strings.ReplaceAll(rawTool, ",]", "]")
+	rawTool = strings.ReplaceAll(rawTool, ", ]", "]")
+	rawTool = strings.ReplaceAll(rawTool, ",\n]", "\n]")
 
 	if e.Verbose {
 		slog.Info("Parsing Tool JSON", "payload", rawTool)
@@ -279,6 +312,27 @@ func (e *ExecutionEngine) DispatchToolPayload(
 			errMsg := fmt.Sprintf("\n❌ Invalid Tool Payload: Could not parse JSON. %v", err)
 			e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
 			return fmt.Sprintf("SYSTEM ERROR: Tool invocation failed because the JSON payload was invalid. Error: %v. Please re-generate the tool call using strictly valid JSON wrapped IMMEDIATELY AFTER the [VRAX_TOOL] marker. Example: [VRAX_TOOL] {\"skill_id\": \"...\", \"params\": {...}}", err)
+		}
+	}
+
+	// Local-model compatibility: check for alternative key names if skill_id wasn't populated
+	if call.SkillID == "" && len(rawTool) > 0 {
+		var generic map[string]interface{}
+		if err := json.Unmarshal([]byte(rawTool), &generic); err == nil {
+			for _, k := range []string{"skill_id", "skill", "tool", "name", "action"} {
+				if v, ok := generic[k].(string); ok && v != "" {
+					call.SkillID = v
+					break
+				}
+			}
+			if call.Params == nil {
+				for _, k := range []string{"params", "parameters", "arguments", "input"} {
+					if pMap, ok := generic[k].(map[string]interface{}); ok {
+						call.Params = pMap
+						break
+					}
+				}
+			}
 		}
 	}
 
@@ -327,24 +381,33 @@ func (e *ExecutionEngine) handleCreateSpecialist(ctx context.Context, out chan<-
 	name, _ := call.Params["name"].(string)
 	expertise, _ := call.Params["expertise"].(string)
 	modelID, _ := call.Params["model_id"].(string)
+	systemPrompt, _ := call.Params["system_prompt"].(string)
 
 	if name != "" && expertise != "" {
+		if systemPrompt == "" {
+			systemPrompt = fmt.Sprintf("Act as a specialist in %s. Apply rigorous technical criteria, best practices, and industry standards.", expertise)
+		}
 		s := types.Specialist{
-			ID:        uuid.New().String(),
-			Name:      name,
-			Expertise: expertise,
-			ModelID:   modelID,
+			ID:           uuid.New().String(),
+			Name:         name,
+			Expertise:    expertise,
+			ModelID:      modelID,
+			SystemPrompt: systemPrompt,
+			CreatedAt:    time.Now(),
 		}
 		if err := e.SpecRepo.CreateSpecialist(s); err != nil {
 			errMsg := fmt.Sprintf("\n❌ Database Error: Failed to create specialist '%s': %v", name, err)
 			e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
 			return fmt.Sprintf("SYSTEM ERROR: Failed to create specialist in the database. Details: %v", err)
 		}
+		if e.OnSpecialistChange != nil {
+			e.OnSpecialistChange()
+		}
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ Sub-Agent Specialist '%s' created! (ID: %s, Model: %s)", name, s.ID, modelID)})
-		return fmt.Sprintf("SYSTEM: Successfully created specialist '%s'. You may now converse with the user and let them know.", name)
+		return fmt.Sprintf("SYSTEM: Successfully created specialist '%s' with expertise '%s'. You may inform the user that the specialist is ready and can be invoked using @%s.", name, expertise, name)
 	} else {
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: specific 'name' and 'expertise' required to create specialist."})
-		return "SYSTEM ERROR: You must provide a valid 'name' and 'expertise' string parameters to create a specialist."
+		return "SYSTEM ERROR: You must provide valid 'name' and 'expertise' string parameters to create a specialist."
 	}
 }
 
@@ -409,7 +472,7 @@ func (e *ExecutionEngine) HandleStandardSkill(ctx context.Context, out chan<- ll
 		return fmt.Sprintf("DAEMON SPAWNED: Skill '%s' is now running in the background with Job ID: %s. You will be notified when it completes.", skillID, jobID)
 	}
 
-	if e.RequireSkillApproval {
+	if manifest.RequiresApproval(e.RequireSkillApproval) {
 		payloadBytes, _ := json.Marshal(call)
 		e.emitEvent(ctx, out, llm.StreamEvent{
 			Type:    llm.EventTypeSkillApprovalRequest,

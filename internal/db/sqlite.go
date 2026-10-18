@@ -106,6 +106,8 @@ func (s *Store) initSchema() error {
 		tags TEXT NOT NULL DEFAULT '[]',
 		param_regex TEXT NOT NULL DEFAULT '',
 		params_schema TEXT DEFAULT '',
+		timeout_seconds INTEGER NOT NULL DEFAULT 0,
+		manifest_v1 TEXT DEFAULT '',
 		vector BLOB DEFAULT NULL,
 		installed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -202,6 +204,8 @@ func (s *Store) initSchema() error {
 
 	// Migration: Add params_schema to skills if it doesn't exist
 	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN params_schema TEXT DEFAULT '';")
+	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 0;")
+	_, _ = s.Conn.Exec("ALTER TABLE skills ADD COLUMN manifest_v1 TEXT DEFAULT '';")
 	
 	// Migration: Add use_case_priorities to models
 	_, _ = s.Conn.Exec("ALTER TABLE models ADD COLUMN use_case_priorities TEXT DEFAULT '{}';")

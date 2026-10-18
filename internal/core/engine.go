@@ -19,6 +19,7 @@ import (
 	"github.com/vraxter/vraxter/internal/services"
 	"github.com/vraxter/vraxter/internal/skills"
 	appcfg "github.com/vraxter/vraxter/internal/config"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 // LLMResponse is kept here for backward compatibility.
@@ -50,6 +51,8 @@ func NewEngine(
 	verbose bool,
 	appDir string, // needed to load routing.yaml
 	requireSkillApproval bool,
+	isolationMode string,
+	whitelistedIPs []string,
 ) (*Engine, error) {
 	// Load the use-case routing config from disk (won't fail if missing)
 	routingCfg, err := appcfg.LoadRoutingConfig(appDir)
@@ -60,7 +63,7 @@ func NewEngine(
 	// Ensure a documented sample is written on first run
 	_ = appcfg.WriteSampleRoutingConfig(appDir)
 
-	orch, err := NewOrchestrator(store, crypto, reg, run, coder, spatialSvc, verbose, routingCfg.Routes, requireSkillApproval)
+	orch, err := NewOrchestrator(store, crypto, reg, run, coder, spatialSvc, verbose, routingCfg.Routes, requireSkillApproval, isolationMode, whitelistedIPs)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +95,24 @@ func (e *Engine) GetActiveModelID(sessionID string) string {
 	return e.orch.GetActiveModelID(sessionID)
 }
 
+func (e *Engine) GetFailoverModelID(sessionID string) string {
+	return e.orch.GetFailoverModelID(sessionID)
+}
+
 func (e *Engine) GetCodeGen() *CodeGenService {
 	return e.orch.ExecEngine.CodeGen
+}
+
+// RegisterSkill adds or updates a skill in the running engine's live in-memory registry
+func (e *Engine) RegisterSkill(manifest types.SkillManifest) {
+	if e.orch != nil && e.orch.ExecEngine != nil && e.orch.ExecEngine.Registry != nil {
+		_ = e.orch.ExecEngine.Registry.Register(manifest)
+	}
+}
+
+// UnregisterSkill removes a skill from the running engine's live in-memory registry
+func (e *Engine) UnregisterSkill(id string) {
+	if e.orch != nil && e.orch.ExecEngine != nil && e.orch.ExecEngine.Registry != nil {
+		e.orch.ExecEngine.Registry.Unregister(id)
+	}
 }

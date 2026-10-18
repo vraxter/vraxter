@@ -194,3 +194,22 @@ func (p *StreamParser) Flush() string {
 func (p *StreamParser) HasToolMarker() bool {
 	return strings.Contains(p.fullBuffer.String(), p.markerTool)
 }
+
+// InferUnmarkedToolJSON searches the buffer for a JSON object containing "skill_id"
+// when a model forgets to output the [VRAX_TOOL] marker.
+func (p *StreamParser) InferUnmarkedToolJSON() string {
+	full := p.fullBuffer.String()
+	if !strings.Contains(full, "skill_id") && !strings.Contains(full, `"tool"`) && !strings.Contains(full, `"skill"`) {
+		return ""
+	}
+
+	start := strings.Index(full, "{")
+	end := strings.LastIndex(full, "}")
+	if start != -1 && end != -1 && end > start {
+		candidate := strings.TrimSpace(full[start : end+1])
+		if strings.Contains(candidate, "skill_id") || strings.Contains(candidate, `"tool"`) || strings.Contains(candidate, `"skill"`) {
+			return candidate
+		}
+	}
+	return ""
+}

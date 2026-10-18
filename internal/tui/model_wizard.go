@@ -85,6 +85,22 @@ func (m *ModelWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			m.done = true
 			return m, nil
+		case "shift+tab", "ctrl+b", "alt+left":
+			m.err = nil
+			if m.step == StepConfigSelect {
+				m.usageInput.Blur()
+				m.step = StepModelSelect
+				return m, nil
+			} else if m.step == StepModelSelect {
+				m.step = StepProviderSelect
+				return m, nil
+			}
+		case "backspace":
+			if m.step == StepModelSelect {
+				m.err = nil
+				m.step = StepProviderSelect
+				return m, nil
+			}
 		case "up":
 			if m.step == StepProviderSelect && m.selProvider > 0 {
 				m.selProvider--
@@ -98,6 +114,7 @@ func (m *ModelWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selModel++
 			}
 		case "enter":
+			m.err = nil
 			switch m.step {
 			case StepProviderSelect:
 				if len(m.providers) == 0 {
@@ -172,38 +189,38 @@ func (m *ModelWizard) View() tea.View {
 	
 	switch m.step {
 	case StepProviderSelect:
-		s.WriteString(lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("Step 1: Select Provider") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("Step 1: Select Provider") + "\n")
 		s.WriteString(setupFaintStyle.Render("Choose the provider to discover models from:") + "\n\n")
 		
 		if len(m.providers) == 0 {
-			s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5252")).Render(" ! No providers configured. Add one first using /providers setup.") + "\n")
+			s.WriteString(lipgloss.NewStyle().Foreground(colorLedCrimson).Render(" ! No providers configured. Add one first using /providers setup.") + "\n")
 		}
 
 		for i, p := range m.providers {
 			marker := "  "
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8"))
+			style := lipgloss.NewStyle().Foreground(colorStone)
 			if i == m.selProvider {
 				marker = "❯ "
-				style = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+				style = lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
 			}
 			s.WriteString(style.Render(fmt.Sprintf("%s %s (%s)", marker, p.Name, p.Type)) + "\n")
 		}
 
 	case StepModelSelect:
-		s.WriteString(lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("Step 2: Select Model") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("Step 2: Select Model") + "\n")
 		p := m.providers[m.selProvider]
 		s.WriteString(setupFaintStyle.Render(fmt.Sprintf("Discovered from %s:", p.Name)) + "\n\n")
 		
 		if len(m.models) == 0 {
-			s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5252")).Render(" ! No models found. Check your API Key/Endpoint.") + "\n")
+			s.WriteString(lipgloss.NewStyle().Foreground(colorLedCrimson).Render(" ! No models found. Check your API Key/Endpoint.") + "\n")
 		}
 
 		for i, mod := range m.models {
 			marker := "  "
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8"))
+			style := lipgloss.NewStyle().Foreground(colorStone)
 			if i == m.selModel {
 				marker = "❯ "
-				style = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+				style = lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
 			}
 			
 			// Simple list for now, keeping it clean
@@ -215,11 +232,11 @@ func (m *ModelWizard) View() tea.View {
 		}
 
 	case StepConfigSelect:
-		s.WriteString(lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("Step 3: Define Usage") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("Step 3: Define Usage") + "\n")
 		mod := m.models[m.selModel]
 		s.WriteString(setupFaintStyle.Render(fmt.Sprintf("Registering %s...", mod.ID)) + "\n\n")
 		
-		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8")).Bold(true)
+		labelStyle := lipgloss.NewStyle().Foreground(colorIvory).Bold(true)
 		s.WriteString(labelStyle.Render("Assign an Alias/Friendly Name") + "\n")
 		s.WriteString(m.usageInput.View() + "\n")
 		
@@ -227,15 +244,10 @@ func (m *ModelWizard) View() tea.View {
 	}
 
 	if m.err != nil {
-		s.WriteString("\n\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5252")).Render("❌ Error: "+m.err.Error()) + "\n")
+		s.WriteString("\n\n" + lipgloss.NewStyle().Foreground(colorLedCrimson).Render("❌ Error: "+m.err.Error()) + "\n")
 	}
 
-	s.WriteString("\n\n" + setupFaintStyle.Render("(↑/↓: Navigate | Enter: Select | Esc: Cancel)"))
+	s.WriteString("\n\n" + setupFaintStyle.Render("(↑/↓: Navigate | Enter: Select | Shift+Tab: Back | Esc: Cancel)"))
 
-	return tea.NewView(lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#2a2a2a")).
-		Padding(1, 2).
-		Width(width).
-		Render(s.String()))
+	return tea.NewView(renderSolidBox(s.String(), width, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper))
 }

@@ -21,22 +21,37 @@ import (
 )
 
 type ToolchainManager struct {
-	sdkDir string
+	sdkDir      string
+	isAirgap    bool
 
 	mu          sync.Mutex
 	isSettingUp map[string]bool
 }
 
-func NewToolchainManager(sdkDir string) *ToolchainManager {
+func NewToolchainManager(sdkDir string, isAirgap ...bool) *ToolchainManager {
+	airgap := false
+	if len(isAirgap) > 0 {
+		airgap = isAirgap[0]
+	}
 	m := &ToolchainManager{
 		sdkDir:      sdkDir,
+		isAirgap:    airgap,
 		isSettingUp: make(map[string]bool),
 	}
 
 	return m
 }
 
+func (m *ToolchainManager) SetAirgap(airgap bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.isAirgap = airgap
+}
+
 func (m *ToolchainManager) ProactiveSetup() {
+	if m.isAirgap {
+		return // Do not attempt background downloads in airgap mode
+	}
 	langs := []string{"tinygo", "go", "rust", "zig"}
 	for _, lang := range langs {
 		if !m.IsReady(lang) {
@@ -137,6 +152,10 @@ func (m *ToolchainManager) SetupSDK(lang string) error {
 		m.isSettingUp[lang] = false
 		m.mu.Unlock()
 	}()
+
+	if m.isAirgap {
+		return fmt.Errorf("SDK download blocked: Vraxter is running in airgap mode. Please pre-populate SDK in %s", m.sdkDir)
+	}
 
 	os.MkdirAll(m.sdkDir, 0755)
 	dest := filepath.Join(m.sdkDir, lang)

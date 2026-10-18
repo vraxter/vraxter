@@ -18,10 +18,11 @@ import (
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/services"
 	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 func TestCoders(t *testing.T) {
-	t.Log("🧪 Iniciando Test de Arquitectura Polimórfica...")
+	t.Log("🧪 Starting Polymorphic Architecture Test...")
 
 	// 1. Setup Temp Environment
 	tmpDir, _ := os.MkdirTemp("", "vraxter-test-*")
@@ -30,7 +31,7 @@ func TestCoders(t *testing.T) {
 	skillsDir := filepath.Join(tmpDir, "skills")
 	os.MkdirAll(skillsDir, 0755)
 
-	fmt.Printf("📂 Entorno temporal: %s\n", tmpDir)
+	fmt.Printf("📂 Temp environment: %s\n", tmpDir)
 
 	store, err := db.NewStore(dbPath)
 	if err != nil {
@@ -56,6 +57,20 @@ func main() {
 		fmt.Printf("❌ Error en GoCoder: %v\n", err)
 	} else {
 		fmt.Println("✅ GoCoder: Habilidad compilada y registrada.")
+
+		// Verify manifest.json exists on disk
+		manifestPath := filepath.Join(skillsDir, "testgo.manifest.json")
+		if _, statErr := os.Stat(manifestPath); statErr != nil {
+			t.Errorf("expected testgo.manifest.json on disk, got: %v", statErr)
+		}
+
+		// Verify manifest in DB has ManifestV1
+		s, findErr := repo.FindSkill("testgo")
+		if findErr != nil || s.ManifestV1 == nil {
+			t.Errorf("expected skill in DB to have ManifestV1, err: %v, s: %+v", findErr, s)
+		} else if s.ManifestV1.ManifestVersion != types.ManifestVersionV1 {
+			t.Errorf("expected manifest_version '%s', got '%s'", types.ManifestVersionV1, s.ManifestV1.ManifestVersion)
+		}
 	}
 
 	// 3. Test RUST Compilation
@@ -79,7 +94,7 @@ func main() {
 
 	// 4. Verify DB — Vraxter Shield Summary
 	skills, _ := repo.GetAllSkills()
-	fmt.Printf("\n📊 Habilidades en DB: %d\n", len(skills))
+	fmt.Printf("\n📊 Skills in DB: %d\n", len(skills))
 	for _, s := range skills {
 		official := "Community"
 		if s.IsOfficial {
@@ -89,7 +104,7 @@ func main() {
 			s.Language, s.Name, s.Command, official, s.Score, safePrefix(s.Checksum, 12))
 	}
 
-	fmt.Println("\n✨ Test Finalizado.")
+	fmt.Println("\n✨ Test Finished.")
 }
 
 func safePrefix(s string, n int) string {

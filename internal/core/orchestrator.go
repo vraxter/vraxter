@@ -68,6 +68,10 @@ type Orchestrator struct {
 	// Session State
 	sessionOverrides map[string]string // sessionID -> modelID lock
 
+	// Isolation Perimeter
+	IsolationMode  string
+	WhitelistedIPs []string
+
 	Verbose bool
 }
 
@@ -82,6 +86,8 @@ func NewOrchestrator(
 	verbose bool,
 	routingOverrides map[string]string, // from routing.yaml: useCase → modelID
 	requireSkillApproval bool,
+	isolationMode string,
+	whitelistedIPs []string,
 ) (*Orchestrator, error) {
 	modelsRepo := db.NewModelRepository(store, crypto)
 	chatRepo := db.NewChatRepository(store)
@@ -93,9 +99,29 @@ func NewOrchestrator(
 		return nil, fmt.Errorf("failed fetching models from local DB: %w", err)
 	}
 
-	router := llm.NewRouter(models)
-	bootedProviders := make(map[string]bool)
+	isAirgap := isolationMode == "airgap" || isolationMode == "strict_local"
+	var allowedModels []types.ModelConfig
 	for _, m := range models {
+		if isAirgap {
+			isCloud := m.Provider == "openai" || m.Provider == "anthropic" || m.Provider == "google"
+			if isCloud {
+				slog.Info("Airgap Shield active: skipping cloud model", "model_id", m.ID, "provider", m.Provider)
+				continue
+			}
+			if (m.Provider == "custom" || m.Provider == "ollama") && m.BaseURL != "" {
+				allowed, err := utils.IsAllowedNetwork(m.BaseURL, whitelistedIPs)
+				if err != nil || !allowed {
+					slog.Warn("Airgap Shield active: skipping model with unapproved endpoint", "model_id", m.ID, "url", m.BaseURL)
+					continue
+				}
+			}
+		}
+		allowedModels = append(allowedModels, m)
+	}
+
+	router := llm.NewRouter(allowedModels)
+	bootedProviders := make(map[string]bool)
+	for _, m := range allowedModels {
 		if bootedProviders[m.ProviderID] {
 			continue
 		}
@@ -135,6 +161,8 @@ func NewOrchestrator(
 		StreamCoord:      NewStreamCoordinator(router, verbose),
 		Planner:          NewPlanner(chatRepo, router),
 		MemorySvc:        services.NewMemoryService(memoryRepo, router),
+		IsolationMode:    isolationMode,
+		WhitelistedIPs:   whitelistedIPs,
 		Verbose:          verbose,
 		sessionOverrides: make(map[string]string),
 	}
@@ -185,20 +213,20 @@ func NewOrchestrator(
 		ID:          "vraxter-read-file",
 		Name:        "Read File",
 		Description: "Read the contents of a local file from the workspace or filesystem. Returns the file text content.",
-		Keywords:    []string{"read", "file", "cat", "show", "content", "contents", "open", "view", "leer", "archivo", "contenido", "mostrar"},
+		Keywords:    []string{"read", "file", "cat", "show", "content", "contents", "open", "view"},
 		Tags:        []string{"filesystem", "io", "workspace"},
-		Examples:    []string{"read this file /path/to/file", "show me the contents of config.yaml", "lee este archivo", "what does this file contain"},
-		ParamRegex:  `(?:read|cat|show|open|view|lee|muestra|leer)\s+(?:the\s+)?(?:file\s+|contents?\s+(?:of\s+)?)?(?P<path>[^\s]+\.[a-zA-Z0-9]+)`,
+		Examples:    []string{"read this file /path/to/file", "show me the contents of config.yaml", "read this file", "what does this file contain"},
+		ParamRegex:  `(?:read|cat|show|open|view)\s+(?:the\s+)?(?:file\s+|contents?\s+(?:of\s+)?)?(?P<path>[^\s]+\.[a-zA-Z0-9]+)`,
 		IsOfficial:  true,
 	})
 	reg.Register(types.SkillManifest{
 		ID:          "vraxter-list-dir",
 		Name:        "List Directory",
 		Description: "List the contents of a local directory to explore files and folders in the workspace.",
-		Keywords:    []string{"list", "ls", "dir", "directory", "folder", "files", "tree", "explore", "listar", "directorio", "carpeta", "archivos"},
+		Keywords:    []string{"list", "ls", "dir", "directory", "folder", "files", "tree", "explore"},
 		Tags:        []string{"filesystem", "io", "workspace"},
-		Examples:    []string{"list the files in /home", "what's in the src directory", "ls /tmp", "lista los archivos en /home", "explore the workspace"},
-		ParamRegex:  `(?:list|ls|dir|explore|listar|lista)\s+(?:the\s+)?(?:files?\s+(?:in|from)\s+|contents?\s+(?:of\s+)?|directory\s+)?(?P<path>(?:\/|~|\.)[^\s]*)`,
+		Examples:    []string{"list the files in /home", "what's in the src directory", "ls /tmp", "list files in workspace", "explore the workspace"},
+		ParamRegex:  `(?:list|ls|dir|explore)\s+(?:the\s+)?(?:files?\s+(?:in|from)\s+|contents?\s+(?:of\s+)?|directory\s+)?(?P<path>(?:\/|~|\.)[^\s]*)`,
 		IsOfficial:  true,
 	})
 	reg.Register(types.SkillManifest{
@@ -215,7 +243,15 @@ func NewOrchestrator(
 	o.ExecEngine.ActivateModelDelegate = o.SetSessionOverride
 	o.ExecEngine.RestoreModelDelegate = o.ClearSessionOverride
 	o.ExecEngine.ResolveSpecialistDelegate = o.Resolver.FindSpecialistSemantically
+	o.ExecEngine.OnSpecialistChange = o.InvalidateCache
 	return o, nil
+}
+
+// InvalidateCache clears the cache expiry to force an immediate refresh on the next query.
+func (o *Orchestrator) InvalidateCache() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.cacheExpiry = time.Time{}
 }
 
 // refreshCache keeps in-memory metadata fresh (max 30s staleness).
@@ -238,6 +274,10 @@ func (o *Orchestrator) refreshCache() error {
 
 	o.cachedModels = models
 	o.cachedSpecialists = specs
+
+	if activeModels, err := o.ModelsRepo.GetActiveModels(); err == nil && len(activeModels) > 0 && o.StreamCoord != nil && o.StreamCoord.Router != nil {
+		o.StreamCoord.Router.SyncActiveModels(activeModels)
+	}
 
 	// Rebuild model/spec context strings
 	var mCtx strings.Builder
@@ -358,28 +398,179 @@ func (o *Orchestrator) resolveMention(query string) (types.IntentMatch, string) 
 
 	return types.IntentMatch{}, ""
 }
+
+// resolveSpecialist searches for a specialist by ID or Name (case-insensitive, ignoring leading @).
+func (o *Orchestrator) resolveSpecialist(idOrName string) (*types.Specialist, error) {
+	clean := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(idOrName, "@")))
+	if clean == "" || clean == "supervisor" || clean == "vraxter" {
+		return nil, fmt.Errorf("no specialist")
+	}
+	if o.SpecialistRepo != nil {
+		if spec, err := o.SpecialistRepo.GetSpecialist(clean); err == nil && spec != nil {
+			return spec, nil
+		}
+		specs, err := o.SpecialistRepo.GetAllSpecialists()
+		if err == nil {
+			for _, s := range specs {
+				if strings.ToLower(s.Name) == clean || strings.ToLower(s.ID) == clean {
+					return &s, nil
+				}
+			}
+		}
+	}
+	return nil, fmt.Errorf("specialist '%s' not found", idOrName)
+}
+
+// detectPlanIntent determines if a query is a planning request (/plan or AMEND PLAN:)
+// and resolves any explicit or contextual lead specialist associated with it.
+// Returns (isPlan, cleanQuery, leadSpecialist).
+func (o *Orchestrator) detectPlanIntent(text string, currentSpecID string) (bool, string, *types.Specialist) {
+	trimmed := strings.TrimSpace(text)
+	lower := strings.ToLower(trimmed)
+
+	isAmend := strings.HasPrefix(lower, "amend plan:") || strings.Contains(lower, "amend plan:")
+	isPlanCmd := false
+
+	if isAmend {
+		isPlanCmd = true
+	} else {
+		for _, token := range strings.Fields(trimmed) {
+			lowToken := strings.ToLower(token)
+			if lowToken == "/plan" || strings.HasPrefix(lowToken, "/plan@") || strings.HasPrefix(lowToken, "/plan:") {
+				isPlanCmd = true
+				break
+			}
+		}
+	}
+
+	if !isPlanCmd {
+		return false, text, nil
+	}
+
+	var leadSpec *types.Specialist
+	workingText := trimmed
+
+	// 1. Check for explicit @mention in text
+	if o.SpecialistRepo != nil {
+		specs, err := o.SpecialistRepo.GetAllSpecialists()
+		if err == nil {
+			for _, s := range specs {
+				mentionName := "@" + strings.ToLower(s.Name)
+				mentionID := "@" + strings.ToLower(s.ID)
+
+				lowerWorking := strings.ToLower(workingText)
+				if idx := strings.Index(lowerWorking, mentionName); idx != -1 {
+					leadSpec = &s
+					workingText = strings.TrimSpace(workingText[:idx] + " " + workingText[idx+len(mentionName):])
+					break
+				}
+				if idx := strings.Index(lowerWorking, mentionID); idx != -1 {
+					leadSpec = &s
+					workingText = strings.TrimSpace(workingText[:idx] + " " + workingText[idx+len(mentionID):])
+					break
+				}
+			}
+		}
+	}
+
+	// 2. If no explicit @mention, check if we are currently inside a specialist conversation
+	if leadSpec == nil && currentSpecID != "" {
+		if spec, err := o.resolveSpecialist(currentSpecID); err == nil && spec != nil {
+			leadSpec = spec
+		}
+	}
+
+	// 3. Strip /plan or AMEND PLAN: command prefixes/tokens
+	if isAmend {
+		idx := strings.Index(strings.ToLower(workingText), "amend plan:")
+		if idx != -1 {
+			workingText = strings.TrimSpace(workingText[:idx] + " " + workingText[idx+len("amend plan:"):])
+		}
+	} else {
+		var cleanTokens []string
+		for _, token := range strings.Fields(workingText) {
+			lowToken := strings.ToLower(token)
+			if lowToken == "/plan" || strings.HasPrefix(lowToken, "/plan@") || strings.HasPrefix(lowToken, "/plan:") {
+				continue
+			}
+			cleanTokens = append(cleanTokens, token)
+		}
+		workingText = strings.Join(cleanTokens, " ")
+	}
+
+	cleanQuery := strings.TrimSpace(workingText)
+	return true, cleanQuery, leadSpec
+}
+
 func (o *Orchestrator) GetActiveModelID(sessionID string) string {
 	if sessionID != "" {
 		o.mu.RLock()
-		if lock, ok := o.sessionOverrides[sessionID]; ok {
-			o.mu.RUnlock()
+		lock, hasLock := o.sessionOverrides[sessionID]
+		o.mu.RUnlock()
+		if hasLock && lock != "" {
+			if cfg, _, err := o.StreamCoord.Router.GetProviderByID(lock); err == nil {
+				if cfg.Alias != "" {
+					return cfg.Alias
+				}
+				if cfg.Model != "" {
+					return cfg.Model
+				}
+			}
 			return lock
 		}
-		o.mu.RUnlock()
 	}
 
 	ordered := o.StreamCoord.Router.GetOrderedProviders()
+	if len(ordered) == 0 && o.ModelsRepo != nil {
+		if activeModels, err := o.ModelsRepo.GetActiveModels(); err == nil && len(activeModels) > 0 {
+			o.StreamCoord.Router.SyncActiveModels(activeModels)
+			ordered = o.StreamCoord.Router.GetOrderedProviders()
+		}
+	}
 	if len(ordered) > 0 {
+		if ordered[0].Config.Alias != "" {
+			return ordered[0].Config.Alias
+		}
 		return ordered[0].Config.Model
 	}
 	return "unknown"
 }
 
+func (o *Orchestrator) GetFailoverModelID(sessionID string) string {
+	active := o.GetActiveModelID(sessionID)
+	ordered := o.StreamCoord.Router.GetOrderedProviders()
+	if len(ordered) == 0 && o.ModelsRepo != nil {
+		if activeModels, err := o.ModelsRepo.GetActiveModels(); err == nil && len(activeModels) > 0 {
+			o.StreamCoord.Router.SyncActiveModels(activeModels)
+			ordered = o.StreamCoord.Router.GetOrderedProviders()
+		}
+	}
+
+	cleanActive := strings.Trim(strings.ToLower(active), "'\" ")
+	for _, p := range ordered {
+		cleanModel := strings.Trim(strings.ToLower(p.Config.Model), "'\" ")
+		cleanAlias := strings.Trim(strings.ToLower(p.Config.Alias), "'\" ")
+		cleanID := strings.Trim(strings.ToLower(p.Config.ID), "'\" ")
+
+		if cleanModel != cleanActive && cleanAlias != cleanActive && cleanID != cleanActive {
+			if p.Config.Alias != "" {
+				return p.Config.Alias
+			}
+			return p.Config.Model
+		}
+	}
+	return "none"
+}
+
 func (o *Orchestrator) GetActiveModelConfig(sessionID string) (types.ModelConfig, error) {
 	modelID := o.GetActiveModelID(sessionID)
+	cleanTarget := strings.Trim(strings.ToLower(modelID), "'\" ")
 	// Try to match the exact alias or model string from the ordered providers
 	for _, p := range o.StreamCoord.Router.GetOrderedProviders() {
-		if p.Config.Alias == modelID || p.Config.Model == modelID || p.Config.ID == modelID {
+		cleanAlias := strings.Trim(strings.ToLower(p.Config.Alias), "'\" ")
+		cleanModel := strings.Trim(strings.ToLower(p.Config.Model), "'\" ")
+		cleanID := strings.Trim(strings.ToLower(p.Config.ID), "'\" ")
+		if cleanAlias == cleanTarget || cleanModel == cleanTarget || cleanID == cleanTarget {
 			return p.Config, nil
 		}
 	}
@@ -507,10 +698,95 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 			return
 		}
 
+		// Normalize specialist context
+		if specialistID != "" && specialistID != "supervisor" && specialistID != "vraxter" {
+			if spec, err := o.resolveSpecialist(specialistID); err == nil && spec != nil {
+				specialistID = spec.ID
+			}
+		} else if specialistID == "supervisor" || specialistID == "vraxter" {
+			specialistID = ""
+		}
+
 		// Resolve conversation early
 		conversationID := o.resolveConversationContext(conversationID, specialistID)
+		if overrideModelID != "" {
+			_ = o.SetSessionOverride(conversationID, overrideModelID)
+		}
 
 		trimmedText := strings.TrimSpace(text)
+
+		// FAST PATH -1: Architecture Planning & Amendments (/plan, AMEND PLAN:)
+		// Evaluated before mention delegation so that `/plan @spec` and `@spec /plan` build plans rather than bare chat.
+		if isPlan, planQuery, leadSpec := o.detectPlanIntent(trimmedText, specialistID); isPlan {
+			o.ChatRepo.SaveMessage(&types.Message{
+				ID: intentID, ConversationID: conversationID,
+				Role: "user", Content: text, Timestamp: time.Now(),
+			})
+
+			if planQuery == "" {
+				out <- llm.StreamEvent{
+					Type:    llm.EventTypeToken,
+					Content: "\n⚠️ Please provide the task details to generate a plan. Usage: `/plan [@specialist] <task>`\n",
+				}
+				return
+			}
+
+			// Focus specialist in UI if designated
+			if leadSpec != nil {
+				if overrideModelID == "" && leadSpec.ModelID != "" {
+					overrideModelID = leadSpec.ModelID
+				}
+				out <- llm.StreamEvent{
+					Type:    llm.EventTypeSpecialistResult,
+					Content: fmt.Sprintf("%s|%s|", leadSpec.ID, leadSpec.Name),
+				}
+			}
+
+			if err := o.refreshCache(); err != nil {
+				slog.Warn("Metadata cache refresh encountered issues", "error", err)
+			}
+
+			o.mu.RLock()
+			specsCtxStr := o.cachedSpecsCtx
+			o.mu.RUnlock()
+
+			daemonTitle := "Architecture Planner"
+			spawnMsg := "\n⚡ Spawned Architecture Planner Daemon (Job ID: %s). You will be notified when the plan is ready.\n"
+			targetSpecName := ""
+			if leadSpec != nil {
+				targetSpecName = leadSpec.Name
+				daemonTitle = fmt.Sprintf("Architecture Planner (@%s)", leadSpec.Name)
+				spawnMsg = fmt.Sprintf("\n⚡ Spawned Architecture Planner Daemon led by @%s (Job ID: %%s). You will be notified when the plan is ready.\n", leadSpec.Name)
+			}
+
+			jobID := o.JobManager.SpawnDaemon(daemonTitle, func() (string, error) {
+				planCtx := context.Background()
+				plan, err := o.Planner.BuildPlan(planCtx, planQuery, specsCtxStr, overrideModelID, targetSpecName)
+				if err != nil {
+					return "", err
+				}
+				planJSON, _ := json.Marshal(plan)
+
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					o.JobManager.Broadcast(SystemEvent{
+						Type:      EventPlanProposed,
+						JobID:     "plan-" + uuid.New().String(),
+						Title:     "Plan Proposed",
+						Payload:   string(planJSON),
+						Timestamp: time.Now(),
+					})
+				}()
+
+				return "", nil
+			})
+
+			out <- llm.StreamEvent{
+				Type:    llm.EventTypeToken,
+				Content: fmt.Sprintf(spawnMsg, jobID),
+			}
+			return
+		}
 
 		// FAST PATH 0: Structural @mention pre-processor (language-agnostic, always runs)
 		// This is evaluated BEFORE IdentifyIntent and the resolver, regardless of specialistID.
@@ -521,14 +797,12 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 			})
 
 			if mentionMatch.Type == types.IntentTypeReturnControl {
-				// Clear specialist context and optionally re-route remaining task
-				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n🔄 Control returned to Vraxter.\n"}
 				o.ChatRepo.SaveMessage(&types.Message{
 					ID: uuid.New().String(), ConversationID: conversationID,
 					Role: "system", Content: "CONTROL RETURNED. The specialist sub-agent has exited the conversation. SYSTEM DIRECTIVE: YOU ARE NOW 'VRAXTER' (The primary Orchestrator). STOP ACTING LIKE THE SPECIALIST. Abandon all sub-agent personas. You MUST now answer the user's latest query using your full capabilities as Vraxter.",
 					Timestamp: time.Now(),
 				})
-				// Signal TUI to clear specialist banner
+				// Signal TUI to clear specialist banner and notify user
 				out <- llm.StreamEvent{Type: llm.EventTypeSpecialistResult, Content: "||"}
 
 				if remainingTask != "" {
@@ -591,40 +865,6 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 		o.mu.RLock()
 		modelsCtxStr := o.cachedModelsCtx
 		specsCtxStr := o.cachedSpecsCtx
-
-		// PLANNING & AMENDMENTS
-		if strings.HasPrefix(trimmedText, "/plan") {
-			o.mu.RUnlock()
-			query := strings.TrimPrefix(trimmedText, "/plan")
-			
-			// Fire the planner asynchronously using the background daemon manager
-			jobID := o.JobManager.SpawnDaemon("Architecture Planner", func() (string, error) {
-				// Use background context to prevent stream cancellation from killing the job
-				planCtx := context.Background()
-				plan, err := o.Planner.BuildPlan(planCtx, strings.TrimSpace(query), specsCtxStr)
-				if err != nil {
-					return "", err
-				}
-				planJSON, _ := json.Marshal(plan)
-				
-				// Once completed, broadcast the proposed plan so any UI can pick it up
-				o.JobManager.Broadcast(SystemEvent{
-					Type:      EventPlanProposed,
-					JobID:     "plan-" + uuid.New().String(),
-					Title:     "Plan Proposed",
-					Payload:   string(planJSON),
-					Timestamp: time.Now(),
-				})
-				
-				return "Plan successfully generated and pushed to UI.", nil
-			})
-
-			out <- llm.StreamEvent{
-				Type:    llm.EventTypeToken, 
-				Content: fmt.Sprintf("\n⚡ Spawned Architecture Planner Daemon (Job ID: %s). You will be notified when the plan is ready.\n", jobID),
-			}
-			return
-		}
 
 		if strings.HasPrefix(trimmedText, "!RUN_SKILL") {
 			o.mu.RUnlock()
@@ -720,7 +960,11 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 						}()
 						
 						phaseQuery := fmt.Sprintf("TASK: %s\nDESCRIPTION: %s", phase.Title, phase.Description)
-						_ = o.executeSubTask(bgCtx, phaseQuery, phase.Specialist, dummyOut)
+						specID := phase.Specialist
+						if specID == "supervisor" || specID == "vraxter" {
+							specID = ""
+						}
+						_ = o.executeSubTask(bgCtx, phaseQuery, specID, dummyOut)
 						close(dummyOut)
 						
 						finalOutput += fmt.Sprintf("=== Phase %d: %s ===\n%s\n\n", i+1, phase.Title, phaseOutput)
@@ -828,10 +1072,10 @@ func (o *Orchestrator) buildToolsContext(specialistID string) string {
 		addedOfficial[id] = true
 	}
 
-	addOfficial("vraxter-coder", "CREATE NEW SKILLS. Use this when the user needs to create a new skill. Params: name (string, required), description (string, required), spec (string, required: natural language description of what the skill should do, its inputs and outputs), language (string, optional: 'go' or 'rust'), run_params (object, optional: parameters to immediately execute the skill after creation). If you are creating a skill to fulfill a specific user request (e.g. 'tell me the weather'), you MUST provide the inferred execution parameters in 'run_params' to trigger immediate execution. Vraxter will auto-generate and compile the code to WASM.")
+	addOfficial("vraxter-coder", "CREATE NEW SKILLS. Use this when the user needs to create a new skill or executable plugin. Params: name (string, required), description (string, required), spec (string, required: natural language description of what the skill should do, its inputs and outputs), language (string, optional: 'go' or 'rust'), run_params (object, optional: parameters to immediately execute the skill after creation). Vraxter will auto-generate and compile the code to WASM.")
 
 	if specialistID == "" {
-		addOfficial("vraxter-create-specialist", "Create a Sub-Agent specialist. Params: name, expertise, model_id (optional).")
+		addOfficial("vraxter-create-specialist", "CREATE NEW SPECIALISTS. Use this when the user asks to create or register a new domain specialist sub-agent. Params: name (string, required: unique identifier e.g. 'Security_Auditor'), expertise (string, required: detailed domain skills and responsibilities), model_id (string, optional: specific LLM model ID), system_prompt (string, optional: customized behavioral rules). Example: {\"skill_id\": \"vraxter-create-specialist\", \"params\": {\"name\": \"Security_Auditor\", \"expertise\": \"Vulnerability assessments, security audits, and system hardening\", \"system_prompt\": \"Act as a senior cybersecurity analyst...\"}}")
 		addOfficial("vraxter-delete-specialist", "Delete a specialist sub-agent. First parameter must be 'identifier' spanning either ID or Name.")
 		addOfficial("vraxter-delegate", "Hand over user query to a specialist sub-agent. Params: specialist_id, task.")
 	} else {
@@ -854,9 +1098,9 @@ func (o *Orchestrator) buildToolsContext(specialistID string) string {
 		} else {
 			paramsInfo := ""
 			if sl.ParamsSchema != "" {
-				paramsInfo = " | [Schema Available upon Exception]"
+				paramsInfo = fmt.Sprintf(" | Schema: %s", sl.ParamsSchema)
 			} else if sl.ParamRegex != "" {
-				paramsInfo = " | [Regex Discovery]"
+				paramsInfo = " | [Regex Fast-Path]"
 			}
 			communitySkills = append(communitySkills, fmt.Sprintf("- ID: %s | Description: %s%s", sl.ID, sl.Description, paramsInfo))
 		}
@@ -876,7 +1120,7 @@ func (o *Orchestrator) buildSystemPrompt(
 	specialistID, specsCtxStr, modelsCtxStr, toolsContext, userProfile, memoryContext string,
 	modelCfg *types.ModelConfig, sourceZone string,
 ) (string, string) {
-	enforcementSuffix := fmt.Sprintf("\n\n[PROMPT LOCK: You MUST strictly mirror the user language in EVERY response.]\n[PROTOCOL LOCK: IF a functional tool is needed, use: %s, %s, %s. If the task is EDUCATIONAL (snippets/explanations), DO NOT use tools. Use PLAIN Markdown chat.]\n[CRITICAL: DO NOT attempt to write code or create skills to perform 'model activation' or 'switching'. Use the built-in 'vraxter-activate-model' tool instead.]\n[TOOL USAGE: To invoke a tool, YOU MUST OUTPUT STRICTLY VALID JSON. The JSON must contain the 'skill_id' of the tool you are invoking, and a 'params' object. Example: %s {\"skill_id\": \"vraxter-coder\", \"params\": {\"name\": \"weather_service\", \"description\": \"...\", \"spec\": \"...\"}}]\n[CAPABILITY LOCK: You ARE running inside the Vraxter autonomous engine. Vraxter will natively compile and execute your code. YOU MUST NOT refuse to write code. NEVER say 'I cannot execute code'.]\n[RETRY LOCK: If a tool execution fails and returns an error, you MUST correct the payload and invoke the tool again. NEVER give up and dump raw code as markdown.]",
+	enforcementSuffix := fmt.Sprintf("\n\n[PROMPT LOCK: You MUST strictly mirror the user language in EVERY response.]\n[PROTOCOL LOCK: IF a functional tool is needed, use: %s, %s, %s. If the task is EDUCATIONAL (snippets/explanations), DO NOT use tools. Use PLAIN Markdown chat.]\n[CRITICAL: DO NOT attempt to write code or create skills to perform 'model activation' or 'switching'. Use the built-in 'vraxter-activate-model' tool instead.]\n[TOOL USAGE: To invoke a tool, YOU MUST OUTPUT STRICTLY VALID JSON. The JSON must contain the 'skill_id' of the tool you are invoking, and a 'params' object. Example: %s {\"skill_id\": \"vraxter-coder\", \"params\": {\"name\": \"data_formatter\", \"description\": \"Format dataset\", \"spec\": \"Transform inputs into standardized schema\"}}]\n[CAPABILITY LOCK: You ARE running inside the Vraxter autonomous engine. Vraxter will natively compile and execute your code. YOU MUST NOT refuse to write code. NEVER say 'I cannot execute code'.]\n[RETRY LOCK: If a tool execution fails and returns an error, you MUST correct the payload and invoke the tool again. NEVER give up and dump raw code as markdown.]",
 		markerChat, markerTool, markerCode, markerTool)
 
 	gitCtx := utils.CaptureGitContext("")

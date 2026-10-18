@@ -191,6 +191,9 @@ func handleCmdDeleteSpecialist(ctx context.Context, call types.ToolCall, codePay
 		if err != nil {
 			return fmt.Sprintf("FAILED TO DELETE specialist '%s' due to internal database error: %v", spec.Name, err)
 		}
+		if e.OnSpecialistChange != nil {
+			e.OnSpecialistChange()
+		}
 		
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n🗑️ Specialist Deleted: **%s** (ID: %s)\n", spec.Name, spec.ID)})
 		return fmt.Sprintf("SUCCESS: Specialist '%s' has been permanently retired and deleted from the database.", spec.Name)

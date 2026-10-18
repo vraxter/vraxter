@@ -66,6 +66,23 @@ func (m *ProviderWizard) Init() tea.Cmd {
 	return textinput.Blink
 }
 
+func isLocalProviderType(pType string) bool {
+	p := strings.ToLower(strings.TrimSpace(pType))
+	return p == "ollama" || p == "custom"
+}
+
+func (m *ProviderWizard) updateEndpointPlaceholder() {
+	pType := strings.ToLower(strings.TrimSpace(m.inputs[1].Value()))
+	switch pType {
+	case "custom":
+		m.inputs[3].Placeholder = "Base URL (e.g. http://192.168.1.35:11434/)"
+	case "ollama":
+		m.inputs[3].Placeholder = "Base URL (Optional, defaults to http://localhost:11434)"
+	default:
+		m.inputs[3].Placeholder = "Base URL (Optional, defaults to official for cloud)"
+	}
+}
+
 func (m *ProviderWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -74,20 +91,35 @@ func (m *ProviderWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			m.done = true
 			return m, nil
+		case "shift+tab", "ctrl+b", "alt+left":
+			m.err = nil
+			if m.step > 0 {
+				m.inputs[m.step].Blur()
+				if m.step == 3 && isLocalProviderType(m.inputs[1].Value()) {
+					m.step = 1
+				} else {
+					m.step--
+				}
+				m.inputs[m.step].Focus()
+			}
+			return m, nil
 		case "enter":
-			// Special handling for Ollama - skip API Key
-			if m.step == 1 && strings.ToLower(m.inputs[1].Value()) == "ollama" {
+			m.err = nil
+			// Local providers (ollama, custom) do not require an API key - skip step 2
+			if m.step == 1 && isLocalProviderType(m.inputs[1].Value()) {
+				m.inputs[m.step].Blur()
 				m.step = 3
+				m.updateEndpointPlaceholder()
 				m.inputs[3].Focus()
 				return m, nil
 			}
 
 			if m.step == len(m.inputs)-1 {
 				// Finalize
-				name := m.inputs[0].Value()
-				pType := strings.ToLower(m.inputs[1].Value())
-				apiKey := m.inputs[2].Value()
-				baseURL := m.inputs[3].Value()
+				name := strings.TrimSpace(m.inputs[0].Value())
+				pType := strings.ToLower(strings.TrimSpace(m.inputs[1].Value()))
+				apiKey := strings.TrimSpace(m.inputs[2].Value())
+				baseURL := strings.TrimSpace(m.inputs[3].Value())
 
 				id, err := m.manager.AddProvider(context.Background(), name, pType, apiKey, baseURL)
 				if err != nil {
@@ -99,7 +131,11 @@ func (m *ProviderWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			m.inputs[m.step].Blur()
 			m.step++
+			if m.step == 3 {
+				m.updateEndpointPlaceholder()
+			}
 			m.inputs[m.step].Focus()
 			return m, nil
 		}
@@ -151,7 +187,7 @@ func (m *ProviderWizard) View() tea.View {
 
 		style := setupFaintStyle
 		if i == m.step {
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#d4af37")).Bold(true)
+			style = lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
 		} else if i < m.step {
 			style = setupDoneStyle
 		}
@@ -164,13 +200,13 @@ func (m *ProviderWizard) View() tea.View {
 	s.WriteString("\n\n")
 
 	// Help Text area
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Italic(true)
+	helpStyle := lipgloss.NewStyle().Foreground(colorAsh).Italic(true)
 	helpText := ""
+	pType := strings.ToLower(strings.TrimSpace(m.inputs[1].Value()))
 	switch m.step {
 	case 1:
 		helpText = "Vraxter supports Google, OpenAI, Anthropic, Ollama, and custom endpoints."
 	case 2:
-		pType := strings.ToLower(m.inputs[1].Value())
 		switch pType {
 		case "google":
 			helpText = "Get your API Key at: https://aistudio.google.com/app/apikey"
@@ -179,12 +215,19 @@ func (m *ProviderWizard) View() tea.View {
 		case "anthropic":
 			helpText = "Get your API Key at: https://console.anthropic.com/settings/keys"
 		case "ollama":
-			helpText = "Ollama traditionally runs locally; no API Key is required."
+			helpText = "Ollama runs locally; no API Key is required."
 		case "custom":
-			helpText = "Used for custom OpenAI-compatible endpoints. No API Key usually required."
+			helpText = "Used for custom OpenAI-compatible endpoints. No API Key is required."
 		}
 	case 3:
-		helpText = "Leave empty to use official APIs, or specify a custom proxy/endpoint."
+		switch pType {
+		case "custom":
+			helpText = "Enter your custom OpenAI-compatible or Ollama endpoint (e.g. http://192.168.1.35:11434/)."
+		case "ollama":
+			helpText = "Leave empty for http://localhost:11434, or specify a remote Ollama URL."
+		default:
+			helpText = "Leave empty to use official APIs, or specify a custom proxy/endpoint."
+		}
 	}
 
 	if helpText != "" {
@@ -192,20 +235,15 @@ func (m *ProviderWizard) View() tea.View {
 	}
 
 	// Input
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8")).Bold(true)
+	labelStyle := lipgloss.NewStyle().Foreground(colorIvory).Bold(true)
 	s.WriteString(fmt.Sprintf("%s\n", labelStyle.Render(steps[m.step])))
 	s.WriteString(m.inputs[m.step].View() + "\n")
 
 	if m.err != nil {
-		s.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5252")).Render("❌ Error: "+m.err.Error()) + "\n")
+		s.WriteString("\n" + lipgloss.NewStyle().Foreground(colorLedCrimson).Render("❌ Error: "+m.err.Error()) + "\n")
 	}
 
-	s.WriteString("\n" + setupFaintStyle.Render("(Enter: Next | Esc: Cancel)"))
+	s.WriteString("\n" + setupFaintStyle.Render("(Enter: Next | Shift+Tab: Back | Esc: Cancel)"))
 
-	return tea.NewView(lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#2a2a2a")).
-		Padding(1, 2).
-		Width(width).
-		Render(s.String()))
+	return tea.NewView(renderSolidBox(s.String(), width, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper))
 }

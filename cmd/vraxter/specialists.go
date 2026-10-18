@@ -70,10 +70,10 @@ var specialistsCreateCmd = &cobra.Command{
 			}
 			
 			// Hard-checks
-			if m.Provider == "ollama" && m.BaseURL == "" {
-				fmt.Printf("❌ Model '%s' (Ollama) requires a 'base_url' configuration. Please update it.\n", m.ID)
+			if m.Provider == "custom" && m.BaseURL == "" {
+				fmt.Printf("❌ Model '%s' (Custom) requires a 'base_url' configuration. Please update it.\n", m.ID)
 				return
-			} else if (m.Provider == "openai" || m.Provider == "gemini" || m.Provider == "anthropic") && m.APIKey == "" {
+			} else if (m.Provider == "openai" || m.Provider == "gemini" || m.Provider == "google" || m.Provider == "anthropic") && m.APIKey == "" {
 				fmt.Printf("❌ Model '%s' (%s) requires an API Key. Please add it via 'vraxter models add'.\n", m.ID, m.Provider)
 				return
 			}
@@ -114,9 +114,9 @@ func printAvailableModels() {
 	fmt.Fprintln(w, "ID\tPROVIDER\tMODEL\tSTATUS")
 	for _, m := range all {
 		status := "✅ READY"
-		if m.Provider == "ollama" && m.BaseURL == "" {
+		if m.Provider == "custom" && m.BaseURL == "" {
 			status = "❌ MISSING BaseURL"
-		} else if (m.Provider == "openai" || m.Provider == "gemini" || m.Provider == "anthropic") && m.APIKey == "" {
+		} else if (m.Provider == "openai" || m.Provider == "gemini" || m.Provider == "google" || m.Provider == "anthropic") && m.APIKey == "" {
 			status = "❌ MISSING API Key"
 		} else if !m.IsActive {
 			status = "⏸️ INACTIVE"

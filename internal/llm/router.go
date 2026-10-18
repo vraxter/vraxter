@@ -68,6 +68,21 @@ func (r *Router) Register(providerID string, p Provider) {
 	r.providers[providerID] = p
 }
 
+// SyncActiveModels refreshes the router's active model list and boots any newly configured providers.
+func (r *Router) SyncActiveModels(models []types.ModelConfig) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.models = models
+	for _, m := range models {
+		if _, exists := r.providers[m.ProviderID]; exists {
+			continue
+		}
+		if adapter, err := Create(m.Provider, m.APIKey, m.BaseURL); err == nil {
+			r.providers[m.ProviderID] = adapter
+		}
+	}
+}
+
 // SetUseCaseOverride tells the Router that queries classified as useCase should
 // prefer the model with the given ID. Called once at startup from config.
 func (r *Router) SetUseCaseOverride(useCase, modelID string) {
@@ -81,11 +96,12 @@ func (r *Router) GetProviderByID(id string) (types.ModelConfig, Provider, error)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	
-	// Normalize Search: lowercase comparisons
-	searchID := strings.ToLower(id)
+	// Normalize Search: lowercase comparisons and trim quotes
+	searchID := strings.Trim(strings.ToLower(id), "'\" ")
 
 	for _, config := range r.models {
-		if config.ID == id || strings.ToLower(config.Alias) == searchID || strings.ToLower(config.Model) == searchID {
+		cleanConfigID := strings.Trim(strings.ToLower(config.ID), "'\" ")
+		if cleanConfigID == searchID || strings.Trim(strings.ToLower(config.Alias), "'\" ") == searchID || strings.Trim(strings.ToLower(config.Model), "'\" ") == searchID {
 			if p, ok := r.providers[config.ProviderID]; ok {
 				return config, p, nil
 			}

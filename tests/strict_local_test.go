@@ -21,26 +21,30 @@ import (
 func TestIsAllowedNetwork(t *testing.T) {
 	tests := []struct {
 		name      string
+		mode      string
 		url       string
 		whitelist []string
 		allowed   bool
 	}{
-		{"Localhost Allowed", "http://localhost:11434", nil, true},
-		{"Local IP Allowed", "http://127.0.0.1:8080", nil, true},
-		{"Private IP Allowed", "http://192.168.1.100", nil, true},
-		{"Private Class A Allowed", "http://10.0.0.5", nil, true},
-		{"Public Cloud Blocked", "https://api.openai.com", nil, false},
-		{"Public Search Blocked", "https://google.com", nil, false},
-		{"Public IP Blocked", "http://8.8.8.8", nil, false},
-		{"Whitelisted Public IP Allowed", "http://8.8.8.8", []string{"8.8.8.8"}, true},
-		{"Whitelisted Hostname Allowed", "https://api.mycompany.com", []string{"api.mycompany.com"}, true},
+		{"Airgap Localhost Allowed", "airgap", "http://localhost:11434", nil, true},
+		{"Airgap Local IP Allowed", "airgap", "http://127.0.0.1:8080", nil, true},
+		{"Airgap Private LAN Allowed", "airgap", "http://192.168.1.100", nil, true},
+		{"Airgap Private Class A Allowed", "airgap", "http://10.0.0.5", nil, true},
+		{"Airgap Public Cloud Blocked (Zero DNS)", "airgap", "https://api.openai.com", nil, false},
+		{"Airgap Public Search Blocked (Zero DNS)", "airgap", "https://google.com", nil, false},
+		{"Airgap Public IP Blocked", "airgap", "http://8.8.8.8", nil, false},
+		{"Airgap Whitelisted Public IP Allowed", "airgap", "http://8.8.8.8", []string{"8.8.8.8"}, true},
+		{"Airgap Whitelisted Hostname Allowed", "airgap", "https://api.mycompany.com", []string{"api.mycompany.com"}, true},
+		{"Local LAN Private IP Allowed", "local_lan", "http://192.168.1.100", nil, true},
+		{"Local LAN Private Class A Allowed", "local_lan", "http://10.0.0.5", nil, true},
+		{"Local LAN Public IP Blocked", "local_lan", "http://8.8.8.8", nil, false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			allowed, _ := utils.IsAllowedNetwork(tc.url, tc.whitelist)
+			allowed, _ := utils.IsAllowedNetworkWithMode(tc.url, tc.mode, tc.whitelist)
 			if allowed != tc.allowed {
-				t.Errorf("expected allowed=%v for url=%s, got %v", tc.allowed, tc.url, allowed)
+				t.Errorf("expected allowed=%v for url=%s in mode=%s, got %v", tc.allowed, tc.url, tc.mode, allowed)
 			}
 		})
 	}
