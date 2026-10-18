@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"log"
 	"math"
+	"strings"
 
 	"github.com/vraxter/vraxter/pkg/types"
 )
@@ -28,7 +29,7 @@ func NewSkillRepository(store *Store) *SkillRepository {
 // GetAllSkills fetches all installed skills from the local DB
 func (r *SkillRepository) GetAllSkills() ([]types.SkillManifest, error) {
 	query := `SELECT id, name, description, version, command, language, engine, tier, score, is_official, checksum, permissions, downloads, 
-	                 keywords, examples, tags, param_regex, params_schema, vector
+	                 keywords, examples, tags, param_regex, params_schema, timeout_seconds, manifest_v1, vector
 	          FROM skills ORDER BY name ASC`
 	rows, err := r.store.Conn.Query(query)
 	if err != nil {
@@ -39,12 +40,12 @@ func (r *SkillRepository) GetAllSkills() ([]types.SkillManifest, error) {
 	var skills []types.SkillManifest
 	for rows.Next() {
 		var s types.SkillManifest
-		var permissionsJSON, keywordsJSON, examplesJSON, tagsJSON string
+		var permissionsJSON, keywordsJSON, examplesJSON, tagsJSON, manifestV1JSON string
 		var vectorBlob []byte
 
 		err := rows.Scan(
 			&s.ID, &s.Name, &s.Description, &s.Version, &s.Command, &s.Language, &s.Engine, &s.Tier, &s.Score, &s.IsOfficial, &s.Checksum, &permissionsJSON, &s.Downloads,
-			&keywordsJSON, &examplesJSON, &tagsJSON, &s.ParamRegex, &s.ParamsSchema, &vectorBlob,
+			&keywordsJSON, &examplesJSON, &tagsJSON, &s.ParamRegex, &s.ParamsSchema, &s.TimeoutSeconds, &manifestV1JSON, &vectorBlob,
 		)
 		if err != nil {
 			log.Printf("DB: Failed to scan skill: %v", err)
@@ -55,6 +56,13 @@ func (r *SkillRepository) GetAllSkills() ([]types.SkillManifest, error) {
 		_ = json.Unmarshal([]byte(keywordsJSON), &s.Keywords)
 		_ = json.Unmarshal([]byte(examplesJSON), &s.Examples)
 		_ = json.Unmarshal([]byte(tagsJSON), &s.Tags)
+
+		if strings.TrimSpace(manifestV1JSON) != "" {
+			var v1 types.SkillManifestV1
+			if err := json.Unmarshal([]byte(manifestV1JSON), &v1); err == nil {
+				s.ManifestV1 = &v1
+			}
+		}
 
 		if len(vectorBlob) > 0 {
 			s.Vector = bytesToFloats(vectorBlob)
@@ -73,20 +81,27 @@ func (r *SkillRepository) UpsertSkill(s types.SkillManifest) error {
 	tagsJSON, _ := json.Marshal(s.Tags)
 	vectorBlob := floatsToBytes(s.Vector)
 
+	var manifestV1JSON string
+	if s.ManifestV1 != nil {
+		b, _ := json.Marshal(s.ManifestV1)
+		manifestV1JSON = string(b)
+	}
+
 	query := `INSERT INTO skills (id, name, description, version, command, language, engine, tier, score, is_official, checksum, permissions, downloads, 
-	                             keywords, examples, tags, param_regex, params_schema, vector)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	                             keywords, examples, tags, param_regex, params_schema, timeout_seconds, manifest_v1, vector)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	          ON CONFLICT(id) DO UPDATE SET
 	          name=excluded.name, description=excluded.description, version=excluded.version, 
 	          command=excluded.command, language=excluded.language, engine=excluded.engine, 
 	          tier=excluded.tier, score=excluded.score, is_official=excluded.is_official, 
 	          checksum=excluded.checksum, permissions=excluded.permissions, downloads=excluded.downloads,
 	          keywords=excluded.keywords, examples=excluded.examples, tags=excluded.tags, 
-	          param_regex=excluded.param_regex, params_schema=excluded.params_schema, vector=excluded.vector`
+	          param_regex=excluded.param_regex, params_schema=excluded.params_schema, 
+	          timeout_seconds=excluded.timeout_seconds, manifest_v1=excluded.manifest_v1, vector=excluded.vector`
 
 	_, err := r.store.Conn.Exec(query, 
 		s.ID, s.Name, s.Description, s.Version, s.Command, s.Language, s.Engine, s.Tier, s.Score, s.IsOfficial, s.Checksum, string(permissionsJSON), s.Downloads,
-		string(keywordsJSON), string(examplesJSON), string(tagsJSON), s.ParamRegex, s.ParamsSchema, vectorBlob,
+		string(keywordsJSON), string(examplesJSON), string(tagsJSON), s.ParamRegex, s.ParamsSchema, s.TimeoutSeconds, manifestV1JSON, vectorBlob,
 	)
 	return err
 }
@@ -124,17 +139,17 @@ func bytesToFloats(b []byte) []float32 {
 
 func (r *SkillRepository) FindSkill(id string) (*types.SkillManifest, error) {
 	query := `SELECT id, name, description, version, command, language, engine, tier, score, is_official, checksum, permissions, downloads, 
-	                 keywords, examples, tags, param_regex, params_schema, vector
+	                 keywords, examples, tags, param_regex, params_schema, timeout_seconds, manifest_v1, vector
 	          FROM skills WHERE id = ?`
 	row := r.store.Conn.QueryRow(query, id)
 
 	var s types.SkillManifest
-	var permissionsJSON, keywordsJSON, examplesJSON, tagsJSON string
+	var permissionsJSON, keywordsJSON, examplesJSON, tagsJSON, manifestV1JSON string
 	var vectorBlob []byte
 
 	err := row.Scan(
 		&s.ID, &s.Name, &s.Description, &s.Version, &s.Command, &s.Language, &s.Engine, &s.Tier, &s.Score, &s.IsOfficial, &s.Checksum, &permissionsJSON, &s.Downloads,
-		&keywordsJSON, &examplesJSON, &tagsJSON, &s.ParamRegex, &s.ParamsSchema, &vectorBlob,
+		&keywordsJSON, &examplesJSON, &tagsJSON, &s.ParamRegex, &s.ParamsSchema, &s.TimeoutSeconds, &manifestV1JSON, &vectorBlob,
 	)
 	if err != nil {
 		return nil, err
@@ -144,6 +159,13 @@ func (r *SkillRepository) FindSkill(id string) (*types.SkillManifest, error) {
 	_ = json.Unmarshal([]byte(keywordsJSON), &s.Keywords)
 	_ = json.Unmarshal([]byte(examplesJSON), &s.Examples)
 	_ = json.Unmarshal([]byte(tagsJSON), &s.Tags)
+
+	if strings.TrimSpace(manifestV1JSON) != "" {
+		var v1 types.SkillManifestV1
+		if err := json.Unmarshal([]byte(manifestV1JSON), &v1); err == nil {
+			s.ManifestV1 = &v1
+		}
+	}
 
 	if len(vectorBlob) > 0 {
 		s.Vector = bytesToFloats(vectorBlob)

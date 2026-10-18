@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Vraxter. All rights reserved.
-// 
+//
 // This file is part of Vraxter.
 // Vraxter is free software licensed under the GNU Affero General Public License (AGPL) v3.0.
 // See the LICENSE file in the project root for full license information.
@@ -21,11 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"image/color"
-
 	"github.com/google/uuid"
 
-	"github.com/alecthomas/chroma/v2/quick"
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
@@ -34,8 +31,10 @@ import (
 	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
+	"github.com/alecthomas/chroma/v2/quick"
 	v1 "github.com/vraxter/vraxter/api/v1"
 	"github.com/vraxter/vraxter/internal/client"
+	"github.com/vraxter/vraxter/internal/config"
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/security"
@@ -43,125 +42,251 @@ import (
 	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 	"github.com/vraxter/vraxter/pkg/types"
-	"github.com/vraxter/vraxter/internal/config"
 )
 
 const vraxterIconPlaceholder = "[[VRAXTER_IDENTITY]]"
 
 var (
-	// Pallet
-	colorOnyx      = lipgloss.Color("#0A0A0A")
-	colorDeepGray  = lipgloss.Color("#161616")
-	colorGold      = lipgloss.Color("#FFD700")
-	colorOrange    = lipgloss.Color("#FFAA00")
-	colorEmerald   = lipgloss.Color("#00FF41")
-	colorMutedGray = lipgloss.Color("#666666")
-	colorUser      = lipgloss.Color("#B0BEC5")
+	// Anodized Titanium & Obsidian Chassis
+	colorVoid          = lipgloss.Color("#07080A")
+	colorObsidian      = lipgloss.Color("#0B0D10")
+	colorTitaniumDark  = lipgloss.Color("#13161B")
+	colorTitaniumMid   = lipgloss.Color("#1C2028")
+	colorTitaniumLight = lipgloss.Color("#2A303C")
+
+	// Brushed & Burnished Copper Palette
+	colorCopperSpecular   = lipgloss.Color("#F7D4B2")
+	colorCopperLight      = lipgloss.Color("#E2A576")
+	colorCopper           = lipgloss.Color("#C87D4B")
+	colorCopperMid        = lipgloss.Color("#A65E30")
+	colorCopperDeep       = lipgloss.Color("#6E3918")
+	colorCopperLine       = lipgloss.Color("#35241A") // rgba(200, 125, 75, 0.24) over #07080A
+	colorCopperLineStrong = lipgloss.Color("#70533E") // rgba(226, 165, 118, 0.48) over #07080A
+
+	// Compound Optical Turret Sapphire & Micro-LED Jewels
+	colorSapphireBright = lipgloss.Color("#5B8FD9")
+	colorSapphireMid    = lipgloss.Color("#2C548E")
+	colorSapphireDeep   = lipgloss.Color("#102342")
+	colorLedEmerald     = lipgloss.Color("#3CE68A")
+	colorLedEmeraldGlow = lipgloss.Color("#00CC55")
+	colorLedAmber       = lipgloss.Color("#F5A623")
+	colorLedCrimson     = lipgloss.Color("#FF5252")
+
+	// Editorial Typography Colors
+	colorIvory = lipgloss.Color("#F4F1EA")
+	colorStone = lipgloss.Color("#B8B5AE")
+	colorAsh   = lipgloss.Color("#75777E")
+	colorSlate = lipgloss.Color("#454952")
+
+	// TUI Surface Background Hex Tokens (from TUI CSS)
+	hexTuiBg             = "#08090C" // .tui-monolith
+	hexHeaderBg          = "#111318" // .tui-welcome-header
+	hexUserBlockBg       = "#101216" // .tui-msg-user
+	hexVraxterBlockBg    = "#111012" // .tui-msg-vraxter
+	hexSpecialistBlockBg = "#130F0F" // .tui-msg-specialist
+	hexCodeBg            = "#050608" // .tui-code-sandbox
+	hexCodeHeaderBg      = "#0B0D10" // --obsidian
+	hexApprovalCardBg    = "#14110E" // .tui-approval-request-card
+	hexAutocompleteBg    = "#0C0E12" // .tui-autocomplete-overlay
+	hexAutocompleteSelBg = "#271E18" // .aco-row.selected
+	hexCommandDeckBg     = "#0A0C10" // .tui-command-deck
+	hexFocusPillBg       = "#161920" // .rail-focus-pill
+	hexInputBg           = "#0D1015" // .tui-input-shelf
+	hexInactiveBadgeBg   = "#12151C" // .tui-inactive-badge
+	hexApprovalShelfBg   = "#171310" // .tui-input-shelf.is-approval
+
+	hexVoid             = "#07080A"
+	hexObsidian         = "#0B0D10"
+	hexTitaniumDark     = "#13161B"
+	hexTitaniumMid      = "#1C2028"
+	hexTitaniumLight    = "#2A303C"
+	hexCopperSpecular   = "#F7D4B2"
+	hexCopperLight      = "#E2A576"
+	hexCopper           = "#C87D4B"
+	hexCopperMid        = "#A65E30"
+	hexCopperLine       = "#35241A"
+	hexCopperLineStrong = "#70533E"
+	hexSapphireBright   = "#5B8FD9"
+	hexSapphireMid      = "#2C548E"
+	hexSapphireDeep     = "#102342"
+	hexLedEmerald       = "#3CE68A"
+	hexLedAmber         = "#F5A623"
+	hexLedCrimson       = "#FF5252"
+	hexIvory            = "#F4F1EA"
+	hexStone            = "#B8B5AE"
+	hexAsh              = "#75777E"
+	hexSlate            = "#454952"
+
+	colorTuiBg             = lipgloss.Color(hexTuiBg)
+	colorHeaderBg          = lipgloss.Color(hexHeaderBg)
+	colorUserBlockBg       = lipgloss.Color(hexUserBlockBg)
+	colorVraxterBlockBg    = lipgloss.Color(hexVraxterBlockBg)
+	colorSpecialistBlockBg = lipgloss.Color(hexSpecialistBlockBg)
+	colorCodeBg            = lipgloss.Color(hexCodeBg)
+	colorApprovalCardBg    = lipgloss.Color(hexApprovalCardBg)
+	colorAutocompleteBg    = lipgloss.Color(hexAutocompleteBg)
+	colorAutocompleteSelBg = lipgloss.Color(hexAutocompleteSelBg)
+	colorCommandDeckBg     = lipgloss.Color(hexCommandDeckBg)
+	colorFocusPillBg       = lipgloss.Color(hexFocusPillBg)
+	colorInputBg           = lipgloss.Color(hexInputBg)
+	colorInactiveBadgeBg   = lipgloss.Color(hexInactiveBadgeBg)
+	colorApprovalShelfBg   = lipgloss.Color(hexApprovalShelfBg)
+
+	// Semantic Aliases
+	colorOnyx      = colorVoid
+	colorDeepGray  = colorTitaniumDark
+	colorGold      = colorCopperLight
+	colorOrange    = colorCopper
+	colorEmerald   = colorLedEmerald
+	colorMutedGray = colorAsh
+	colorUser      = colorStone
 
 	appStyle = lipgloss.NewStyle().
-			Background(colorOnyx)
+			Background(colorTuiBg)
 
 	headerBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorGold).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(colorCopper).
+			Background(colorHeaderBg).
 			Padding(1, 2)
 
 	tipsBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorOrange).
+			BorderForeground(colorCopperMid).
 			Padding(1, 2)
 
 	titleStyle = lipgloss.NewStyle().
-			Foreground(colorGold).
+			Foreground(colorIvory).
 			Bold(true)
 
 	userStyle = lipgloss.NewStyle().
-			Foreground(colorOrange).
+			Foreground(colorCopper).
 			Bold(true)
 
 	agentStyle = lipgloss.NewStyle().
-			Foreground(colorEmerald).
+			Foreground(colorLedEmerald).
+			Bold(true)
+
+	agentIconStyle = lipgloss.NewStyle().
+			Foreground(colorLedEmerald).
 			Bold(true)
 
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF1744")). // Vibrant Red
+			Foreground(colorLedCrimson).
 			Bold(true)
 
 	toolStyle = lipgloss.NewStyle().
-			Foreground(colorGold).
+			Foreground(colorCopperLight).
 			Italic(true)
 
 	faintStyle = lipgloss.NewStyle().
-			Foreground(colorMutedGray)
+			Foreground(colorAsh)
 
 	statusBarStyle = lipgloss.NewStyle().
-			Background(colorDeepGray).
-			Foreground(colorGold).
+			Background(colorTitaniumDark).
+			Foreground(colorCopperLight).
 			Bold(true).
 			Padding(0, 1)
 
 	thoughtStyle = lipgloss.NewStyle().
-			Foreground(colorMutedGray).
+			Foreground(colorAsh).
 			Italic(true)
 
-	// --- Block Message Styles (Mockup Mode) ---
-	// Backgrounds are derived as ~20% opacity of the sidebar color on black
+	// --- Block Message Styles ---
 	userBlockStyle = lipgloss.NewStyle().
-			Border(lipgloss.Border{Left: "┃"}, false, false, false, true).
-			BorderForeground(colorUser).
-			Background(lipgloss.Color("#111315")).
-			PaddingLeft(1).
-			PaddingRight(1).
+			Border(lipgloss.Border{Left: "│"}, false, false, false, true).
+			BorderForeground(colorSlate).
+			Background(colorUserBlockBg).
+			PaddingLeft(2).
+			PaddingRight(2).
 			PaddingTop(1).
 			PaddingBottom(1).
 			MarginBottom(1)
 
 	vraxterBlockStyle = lipgloss.NewStyle().
-				Border(lipgloss.Border{Left: "┃"}, false, false, false, true).
-				BorderForeground(colorGold).
-				Background(lipgloss.Color("#191500")).
-				PaddingLeft(1).
-				PaddingRight(1).
+				Border(lipgloss.Border{Left: "│"}, false, false, false, true).
+				BorderForeground(colorCopperSpecular).
+				Background(colorVraxterBlockBg).
+				PaddingLeft(2).
+				PaddingRight(2).
 				PaddingTop(1).
 				PaddingBottom(1).
 				MarginBottom(1)
 
 	specialistBlockStyle = lipgloss.NewStyle().
-				Border(lipgloss.Border{Left: "┃"}, false, false, false, true).
-				BorderForeground(colorOrange).
-				Background(lipgloss.Color("#191100")).
-				PaddingLeft(1).
-				PaddingRight(1).
+				Border(lipgloss.Border{Left: "│"}, false, false, false, true).
+				BorderForeground(colorCopperMid).
+				Background(colorSpecialistBlockBg).
+				PaddingLeft(2).
+				PaddingRight(2).
 				PaddingTop(1).
 				PaddingBottom(1).
 				MarginBottom(1)
 
-	inputShelfStyle = lipgloss.NewStyle() // Transparent
+	inputShelfStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(colorCopperLineStrong).
+			Background(colorInputBg)
 
 	promptStyle = lipgloss.NewStyle().
-			Foreground(colorGold).
+			Foreground(colorCopperLight).
 			Bold(true).
 			Padding(0, 1)
 
 	sigilSpinner = spinner.Spinner{
-		Frames: []string{
-			` /`,
-			` /\ `,
-			` /\
-  / `,
-			` /\
- \/ `,
-			`\/\/
- \/ `,
-			`\/\/
-/\/\`,
-		},
-		FPS: time.Millisecond * 300,
+		Frames: buildSigilSpinnerFrames(),
+		FPS:    time.Millisecond * 120,
 	}
 
 	ansibg      = regexp.MustCompile("\x1b\\[(4[0-9]|10[0-9]|48;[0-9];[0-9;]+)m")
+	sgrSeqRe    = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
 	codeBlockRe = regexp.MustCompile("(?s)```(\\w+)?\n(.*?)\n```")
 )
+
+// buildSigilSpinnerFrames builds a 10-frame 2x4 Sigil animation where all 8 strokes
+// (\/\/ on row 0, /\/\ on row 1) are always present at fixed coordinates so the height (2 rows)
+// and width (4 cols) never jump, while a copper-specular beam progressively illuminates the bars.
+func buildSigilSpinnerFrames() []string {
+	glyphs := [8]string{`\`, `/`, `\`, `/`, `/`, `\`, `/`, `\`}
+	dimStyle := lipgloss.NewStyle().Foreground(colorSlate)
+	litStyle := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
+	headStyle := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true)
+
+	renderFrame := func(styles [8]lipgloss.Style) string {
+		var r0, r1 strings.Builder
+		for i := 0; i < 4; i++ {
+			r0.WriteString(styles[i].Render(glyphs[i]))
+		}
+		for i := 4; i < 8; i++ {
+			r1.WriteString(styles[i].Render(glyphs[i]))
+		}
+		return r0.String() + "\n" + r1.String()
+	}
+
+	frames := make([]string, 0, 10)
+	for step := 0; step < 8; step++ {
+		var st [8]lipgloss.Style
+		for i := 0; i < 8; i++ {
+			switch {
+			case i < step:
+				st[i] = litStyle
+			case i == step:
+				st[i] = headStyle
+			default:
+				st[i] = dimStyle
+			}
+		}
+		frames = append(frames, renderFrame(st))
+	}
+
+	var allSpec, allLit [8]lipgloss.Style
+	for i := 0; i < 8; i++ {
+		allSpec[i] = headStyle
+		allLit[i] = litStyle
+	}
+	frames = append(frames, renderFrame(allSpec), renderFrame(allLit))
+	return frames
+}
 
 var helpCommand = `
   /activate <id>		- Manually switch and lock the active model for this session
@@ -180,6 +305,7 @@ var helpCommand = `
   /user [args]		- Proxy: Manage profile
   /add [args]		- Proxy: Quickly add skills
   /start		- Unified startup wizard (Profile ➔ Providers ➔ Models)
+  /factory-reset	- Full factory reset (use /factory-reset --confirm)
   /quit, /exit		- Exits Vraxter
   /help, /?		- Shows this menu
 `
@@ -187,7 +313,8 @@ var helpCommand = `
 var slashCommandsList = []string{
 	"/activate", "/restore", "/auto", "/plan", "/history", "/load", "/clear",
 	"/new", "/reset", "/session", "/jobs", "/providers", "/models", "/skills",
-	"/specialists", "/user", "/add", "/start", "/quit", "/exit", "/help",
+	"/specialists", "/user", "/add", "/start", "/factory-reset", "/quit", "/exit", "/help",
+	"/airgap", "/isolation",
 }
 
 type EventMsgWrapper struct {
@@ -259,6 +386,7 @@ type Model struct {
 	HasSentVraxterBanner bool   // Track if we've sent the banner for the current response
 	Error                error
 	ActiveModel          string
+	FailoverModel        string
 	OverrideModelID      string // Explicit override requested by user
 	BaseModelID          string // Default from server
 	grpcClient           *client.GRPCClient
@@ -283,14 +411,16 @@ type Model struct {
 	InputHistory    []string
 	InputHistoryIdx int
 
-	viewportY          int // Dynamic top-offset for hit detection
+	viewportY int // Dynamic top-offset for hit detection
 
 	// Planning & Manual Execution
+	IsPlanning           bool
 	IsWaitingForApproval bool
 	ProposedPlan         string // JSON content of the proposed plan
 	PlanActionIndex      int    // 0:Proceed, 1:Reject, 2:Amend
 	ShowAmendInput       bool
 	PendingRunSkill      string // Name of skill awaiting manual run prompt
+	ActiveCardHistoryIdx int    // Exact History index of the active Plan/Skill Approval card
 
 	IsWaitingForSkillApproval bool
 	PendingSkillPayload       string
@@ -311,6 +441,10 @@ type Model struct {
 	appStore    *db.Store
 	appCrypto   *security.CryptoService
 	ActiveSetup tea.Model
+
+	// Isolation & Airgap Shield
+	IsolationMode  string
+	IsAirgapLocked bool
 }
 
 func NewModel(ctx context.Context, gClient *client.GRPCClient, store *db.Store, crypto *security.CryptoService, session, initialQuery string, userName string) *Model {
@@ -321,19 +455,22 @@ func NewModel(ctx context.Context, gClient *client.GRPCClient, store *db.Store, 
 	ta.SetWidth(60)
 	ta.SetHeight(1) // Start at one row
 
-	// Match background exactly to the TUI (Ensure no black blocks)
+	// Match background to the Input Shelf (#0D1015) so there is no background mixing
 	tas := ta.Styles()
-	tas.Focused.Base = lipgloss.NewStyle().Background(nil)
-	tas.Blurred.Base = lipgloss.NewStyle().Background(nil)
+	tas.Focused.Base = lipgloss.NewStyle().Background(colorInputBg)
+	tas.Blurred.Base = lipgloss.NewStyle().Background(colorInputBg)
 
-	// Styled prompt: Bold Gold
-	tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-	tas.Blurred.Prompt = lipgloss.NewStyle().Foreground(colorMutedGray)
+	// Styled prompt: Bold Copper Light
+	tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorCopperLight).Background(colorInputBg).Bold(true)
+	tas.Blurred.Prompt = lipgloss.NewStyle().Foreground(colorSlate).Background(colorInputBg)
 
-	// Ensure cursor and styling is clean
-	tas.Cursor.Color = colorGold
-	tas.Focused.CursorLine = lipgloss.NewStyle().Background(nil)
-	tas.Focused.Placeholder = lipgloss.NewStyle().Foreground(colorMutedGray)
+	// Ensure cursor and text styling share the exact input background
+	tas.Cursor.Color = colorCopperSpecular
+	tas.Focused.CursorLine = lipgloss.NewStyle().Background(colorInputBg)
+	tas.Focused.Text = lipgloss.NewStyle().Foreground(colorIvory).Background(colorInputBg)
+	tas.Blurred.Text = lipgloss.NewStyle().Foreground(colorAsh).Background(colorInputBg)
+	tas.Focused.Placeholder = lipgloss.NewStyle().Foreground(colorAsh).Background(colorInputBg)
+	tas.Blurred.Placeholder = lipgloss.NewStyle().Foreground(colorSlate).Background(colorInputBg)
 	ta.SetStyles(tas)
 	ta.ShowLineNumbers = false
 	ta.MaxHeight = 5
@@ -343,24 +480,29 @@ func NewModel(ctx context.Context, gClient *client.GRPCClient, store *db.Store, 
 
 	s := spinner.New()
 	s.Spinner = sigilSpinner
-	s.Style = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+	s.Style = lipgloss.NewStyle()
 
 	r, _ := buildRenderer(80)
 
+	cfg := config.Load()
+
 	m := &Model{
-		Input:        ta,
-		History:      []HistoryBlock{},
-		SessionID:    session,
-		Ready:        false,
-		ctx:          ctx,
-		grpcClient:   gClient,
-		appStore:     store,
-		appCrypto:    crypto,
-		Spinner:      s,
-		ActiveModel:  "Detecting LLM...",
-		CurrentFocus: "vraxter",
-		renderer:     r,
-		UserName:     strings.ToUpper(userName),
+		Input:                ta,
+		History:              []HistoryBlock{},
+		SessionID:            session,
+		Ready:                false,
+		ctx:                  ctx,
+		grpcClient:           gClient,
+		appStore:             store,
+		appCrypto:            crypto,
+		Spinner:              s,
+		ActiveModel:          "Detecting LLM...",
+		CurrentFocus:         "vraxter",
+		renderer:             r,
+		UserName:             strings.ToUpper(userName),
+		ActiveCardHistoryIdx: -1,
+		IsolationMode:        cfg.IsolationMode,
+		IsAirgapLocked:       cfg.IsAirgapLocked,
 	}
 
 	// Pre-load specialists for autocomplete
@@ -379,6 +521,8 @@ func NewModel(ctx context.Context, gClient *client.GRPCClient, store *db.Store, 
 	sysChan, _ := gClient.SubscribeEvents(ctx, "tui-"+session)
 	m.systemEvents = sysChan
 
+	m.refreshModelBanner()
+
 	if initialQuery != "" {
 		m.appendHistory(BlockMarkdown, initialQuery, SenderUser)
 		m.appendHistory(BlockMarkdown, vraxterIconPlaceholder+"  ", SenderVraxter)
@@ -386,6 +530,89 @@ func NewModel(ctx context.Context, gClient *client.GRPCClient, store *db.Store, 
 	}
 
 	return m
+}
+
+func (m *Model) resolveModelDisplayName(raw string) string {
+	clean := strings.Trim(strings.ToLower(raw), "'\" ")
+	if clean == "" || clean == "none" || clean == "offline" || clean == "detecting llm..." || clean == "not configured" {
+		return raw
+	}
+	if m.appStore == nil || m.appCrypto == nil {
+		return raw
+	}
+	repo := db.NewModelRepository(m.appStore, m.appCrypto)
+	models, err := repo.GetAllModels()
+	if err != nil {
+		return raw
+	}
+	for _, cfg := range models {
+		cleanID := strings.Trim(strings.ToLower(cfg.ID), "'\" ")
+		cleanAlias := strings.Trim(strings.ToLower(cfg.Alias), "'\" ")
+		cleanModel := strings.Trim(strings.ToLower(cfg.Model), "'\" ")
+
+		if cleanID == clean || cleanAlias == clean || cleanModel == clean {
+			if cfg.Alias != "" {
+				return cfg.Alias
+			}
+			return cfg.Model
+		}
+	}
+	return raw
+}
+
+func (m *Model) refreshModelBanner() {
+	if m.appStore == nil || m.appCrypto == nil {
+		return
+	}
+	repo := db.NewModelRepository(m.appStore, m.appCrypto)
+	models, err := repo.GetActiveModels()
+	if err != nil || len(models) == 0 {
+		return
+	}
+
+	cleanOverride := strings.Trim(strings.ToLower(m.OverrideModelID), "'\" ")
+
+	if m.OverrideModelID != "" {
+		activeName := m.resolveModelDisplayName(m.OverrideModelID)
+		m.ActiveModel = fmt.Sprintf("%s (LOCKED)", activeName)
+
+		m.FailoverModel = "none"
+		cleanActive := strings.Trim(strings.ToLower(activeName), "'\" ")
+		for _, cfg := range models {
+			cleanID := strings.Trim(strings.ToLower(cfg.ID), "'\" ")
+			cleanAlias := strings.Trim(strings.ToLower(cfg.Alias), "'\" ")
+			cleanModel := strings.Trim(strings.ToLower(cfg.Model), "'\" ")
+
+			targetName := cfg.Model
+			if cfg.Alias != "" {
+				targetName = cfg.Alias
+			}
+			if cleanID != cleanOverride && cleanAlias != cleanOverride && cleanModel != cleanOverride &&
+				cleanAlias != cleanActive && cleanModel != cleanActive && cleanID != cleanActive {
+				m.FailoverModel = targetName
+				break
+			}
+		}
+	} else {
+		first := models[0]
+		firstName := first.Model
+		if first.Alias != "" {
+			firstName = first.Alias
+		}
+		m.ActiveModel = firstName
+		m.BaseModelID = firstName
+
+		if len(models) > 1 {
+			second := models[1]
+			secondName := second.Model
+			if second.Alias != "" {
+				secondName = second.Alias
+			}
+			m.FailoverModel = secondName
+		} else {
+			m.FailoverModel = "none"
+		}
+	}
 }
 
 func (m *Model) fetchInfo() tea.Cmd {
@@ -440,6 +667,18 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// 0. Sigil Spinner Tick: Always process immediately at top level so that modal wizards
+	// or slow remote network model responses never swallow or kill the spinner tick loop.
+	if tickMsg, ok := msg.(spinner.TickMsg); ok {
+		var cmd tea.Cmd
+		m.Spinner, cmd = m.Spinner.Update(tickMsg)
+		if ((m.IsStreaming && !m.HasSentVraxterBanner) || m.IsPlanning) && m.Ready {
+			m.Viewport.SetContent(m.renderMarkdown(m.History))
+			m.Viewport.GotoBottom()
+		}
+		return m, cmd
+	}
+
 	var cmds []tea.Cmd
 	var inputCmd, vpCmd tea.Cmd
 
@@ -467,13 +706,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			done = true
 		}
+		if spw, ok := m.ActiveSetup.(*SpecialistWizard); ok && spw.Done {
+			if spw.Result != nil {
+				m.appendHistory(BlockComponent, m.renderExecutionBanner("confirmed", "SPECIALIST REGISTERED", fmt.Sprintf("Registered '%s'. Invoke directly with @%s", spw.Result.Name, spw.Result.Name), "SPECIALIST READY", m.width))
+				if m.appStore != nil {
+					specRepo := db.NewSpecialistRepository(m.appStore)
+					if specs, err := specRepo.GetAllSpecialists(); err == nil {
+						var specList []string
+						for _, sp := range specs {
+							specList = append(specList, sp.Name)
+						}
+						m.AvailableSpecialists = specList
+					}
+				}
+			}
+			done = true
+		}
 
 		if done {
 			m.ActiveSetup = nil
+			m.refreshModelBanner()
 			if m.Ready {
 				m.Viewport.SetContent(m.renderMarkdown(m.History))
 				m.Viewport.GotoBottom()
 			}
+			return m, tea.Batch(setupCmd, m.fetchInfo())
 		}
 		return m, setupCmd
 	}
@@ -499,7 +756,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = repo.UpdateUser(context.Background(), user)
 		}
 		m.ActiveSetup = nil
-		m.appendHistory(BlockComponent, setupDoneStyle.Render("✨ Profile saved! Vraxter is now personalized to your needs.\n\n"))
+		m.appendHistory(BlockComponent, m.renderExecutionBanner("confirmed", "OPERATOR PROFILE SAVED", "Workstation preferences & operator identity persisted to vault.", "SAVED", m.width))
 		if m.Ready {
 			m.Viewport.SetContent(m.renderMarkdown(m.History))
 		}
@@ -526,9 +783,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		if m.IsWaitingForApproval {
+		if m.IsWaitingForApproval || m.IsWaitingForSkillApproval {
+			maxChoices := 3
+			if m.IsWaitingForSkillApproval || m.PendingRunSkill != "" {
+				maxChoices = 2
+			}
 			if msg.String() == "left" {
-				m.PlanActionIndex = (m.PlanActionIndex - 1 + 3) % 3
+				m.PlanActionIndex = (m.PlanActionIndex - 1 + maxChoices) % maxChoices
 				if m.PlanActionIndex != 2 {
 					m.ShowAmendInput = false
 					m.Input.Blur()
@@ -536,7 +797,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if msg.String() == "right" {
-				m.PlanActionIndex = (m.PlanActionIndex + 1) % 3
+				m.PlanActionIndex = (m.PlanActionIndex + 1) % maxChoices
 				if m.PlanActionIndex != 2 {
 					m.ShowAmendInput = false
 					m.Input.Blur()
@@ -621,6 +882,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		isPlainEnter := msg.String() == "enter"
 
 		if isPlainEnter && !m.IsStreaming {
+			if m.IsWaitingForSkillApproval {
+				var cmd tea.Cmd
+				if m.PlanActionIndex == 0 {
+					cmd = m.handleSlashCommand("/approve")
+				} else {
+					cmd = m.handleSlashCommand("/reject")
+				}
+				if m.Ready {
+					m.Viewport.SetContent(m.renderMarkdown(m.History))
+					m.Viewport.GotoBottom()
+				}
+				return m, cmd
+			}
+
 			if m.IsWaitingForApproval && !m.ShowAmendInput {
 				if m.PendingRunSkill != "" {
 					switch m.PlanActionIndex {
@@ -662,7 +937,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			val := m.Input.Value()
-			if strings.TrimSpace(val) == "" && !m.IsWaitingForApproval {
+			if strings.TrimSpace(val) == "" {
 				return m, nil
 			}
 
@@ -677,13 +952,72 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.InputHistoryIdx = len(m.InputHistory)
 			}
 
-			if strings.HasPrefix(messageToSend, "/") {
+			if strings.HasPrefix(messageToSend, "/") && !m.ShowAmendInput {
+				parts := splitArgs(messageToSend)
+				if len(parts) > 0 && parts[0] != "/clear" && parts[0] != "/new" && parts[0] != "/reset" {
+					m.appendHistory(BlockMarkdown, messageToSend, SenderUser)
+				}
 				cmd := m.handleSlashCommand(messageToSend)
 				if m.Ready {
 					m.Viewport.SetContent(m.renderMarkdown(m.History))
 					m.Viewport.GotoBottom()
 				}
 				return m, cmd
+			}
+
+			// Intercept mention-prefixed planning command (e.g. @specialist /plan <task>)
+			if strings.HasPrefix(messageToSend, "@") && !m.ShowAmendInput {
+				fields := strings.Fields(messageToSend)
+				if len(fields) >= 2 && fields[1] == "/plan" {
+					if len(fields) < 3 {
+						m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "INVALID SYNTAX", "Usage: @specialist /plan <task details>", "ARGS REQUIRED", m.width))
+						if m.Ready {
+							m.Viewport.SetContent(m.renderMarkdown(m.History))
+							m.Viewport.GotoBottom()
+						}
+						return m, nil
+					}
+					m.appendHistory(BlockMarkdown, messageToSend, SenderUser)
+					m.HasSentVraxterBanner = false
+					m.IsPlanning = true
+					m.IsStreaming = true
+					m.ActiveCardHistoryIdx = -1
+					m.ProposedPlan = ""
+					m.IsWaitingForApproval = false
+					m.Error = nil
+					if m.Ready {
+						m.Viewport.SetContent(m.renderMarkdown(m.History))
+						m.Viewport.GotoBottom()
+					}
+					return m, tea.Batch(m.fireExecution(messageToSend), m.Spinner.Tick)
+				}
+			}
+
+			if m.IsWaitingForApproval && m.ShowAmendInput {
+				var prevPlan struct {
+					Goal string `json:"goal"`
+				}
+				_ = json.Unmarshal([]byte(m.ProposedPlan), &prevPlan)
+
+				m.updateActiveCard(m.renderPlan(m.ProposedPlan, m.width, "PLAN AMENDED") + "\n")
+				m.IsWaitingForApproval = false
+				m.ShowAmendInput = false
+				m.IsPlanning = true
+				m.IsStreaming = true
+				m.HasSentVraxterBanner = false
+				m.Error = nil
+				m.restoreInputStyles()
+
+				m.appendHistory(BlockMarkdown, "↻ Amend Plan: "+messageToSend, SenderUser)
+				if m.Ready {
+					m.Viewport.SetContent(m.renderMarkdown(m.History))
+					m.Viewport.GotoBottom()
+				}
+				amendQuery := messageToSend
+				if prevPlan.Goal != "" {
+					amendQuery = fmt.Sprintf("%s (Amendment instructions: %s)", prevPlan.Goal, messageToSend)
+				}
+				return m, tea.Batch(m.fireExecution(fmt.Sprintf("AMEND PLAN: %s", amendQuery)), m.Spinner.Tick)
 			}
 
 			// Timeline Refactor: User Identity Block
@@ -698,11 +1032,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.IsStreaming = true
 			m.Error = nil
 
-			if m.IsWaitingForApproval {
-				return m, m.fireExecution(fmt.Sprintf("AMEND PLAN: %s", messageToSend))
-			}
-
-			return m, m.fireExecution(messageToSend)
+			return m, tea.Batch(m.fireExecution(messageToSend), m.Spinner.Tick)
 		}
 
 		// 4. Autocomplete Interception & Default Input Update
@@ -891,39 +1221,45 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case InfoMsg:
-		m.BaseModelID = msg.ModelID
-		if m.OverrideModelID == "" {
-			m.ActiveModel = m.BaseModelID
-		} else {
-			m.ActiveModel = fmt.Sprintf("%s (LOCKED)", m.OverrideModelID)
-		}
+		m.BaseModelID = m.resolveModelDisplayName(msg.ModelID)
+		m.refreshModelBanner()
 
 	case HistoryResultMsg:
 		if msg.Err != nil {
-			m.appendHistory(BlockComponent, errorStyle.Render(fmt.Sprintf("❌ Failed to fetch history: %v\n\n", msg.Err)))
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "HISTORY LOOKUP FAILED", msg.Err.Error(), "ERROR", m.width))
 		} else if len(msg.Conversations) == 0 {
-			m.appendHistory(BlockComponent, toolStyle.Render("📭 No conversation history found.\n\n"))
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("started", "CONVERSATION HISTORY", "No saved sessions found in local vault.", "0 SESSIONS", m.width))
 		} else {
 			m.lastHistoryResults = msg.Conversations
 
+			hdrStyle := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
+			idxStyle := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true)
+			titleColStyle := lipgloss.NewStyle().Foreground(colorIvory)
+			countStyle := lipgloss.NewStyle().Foreground(colorLedEmerald)
+			timeStyle := lipgloss.NewStyle().Foreground(colorAsh)
+			divStyle := lipgloss.NewStyle().Foreground(colorTitaniumMid)
+
 			var sb strings.Builder
-			sb.WriteString("\n📜 **Conversation History**\n\n")
-			sb.WriteString("| # | Title | Messages | Last Active |\n")
-			sb.WriteString("|---|-------|----------|-------------|\n")
+			sb.WriteString(hdrStyle.Render(fmt.Sprintf("%-5s %-44s %-10s %s", "IDX", "SESSION TITLE", "MESSAGES", "LAST ACTIVE")) + "\n")
+			sb.WriteString(divStyle.Render(strings.Repeat("─", 74)) + "\n")
 			for i, c := range msg.Conversations {
 				title := c.Title
-				if len(title) > 40 {
-					title = title[:40] + "…"
+				if len(title) > 42 {
+					title = title[:42] + "…"
 				}
 				updated := c.UpdatedAt
 				if t, err := time.Parse(time.RFC3339, c.UpdatedAt); err == nil {
 					updated = t.Format("Jan 02 15:04")
 				}
-				sb.WriteString(fmt.Sprintf("| %d | %s | %d | %s |\n", i+1, title, c.MessageCount, updated))
+				row := idxStyle.Render(fmt.Sprintf("#%-4d", i+1)) + " " +
+					titleColStyle.Render(fmt.Sprintf("%-44s", title)) + " " +
+					countStyle.Render(fmt.Sprintf("%-10d", c.MessageCount)) + " " +
+					timeStyle.Render(updated)
+				sb.WriteString(row + "\n")
 			}
-			sb.WriteString("\n💡 Type `/load <#>` to replay a conversation (e.g. `/load 1`).\n")
+			sb.WriteString("\n" + timeStyle.Render("Tip: Type ") + idxStyle.Render("/load <#>") + timeStyle.Render(" to replay a conversation (e.g. /load 1)."))
 
-			m.appendHistory(BlockMarkdown, sb.String())
+			m.appendHistory(BlockComponent, m.renderCmdBlock("/history", sb.String()))
 		}
 		if m.Ready {
 			m.Viewport.SetContent(m.renderMarkdown(m.History))
@@ -936,32 +1272,57 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		var block string
+		updatedHistory := false
 		switch msg.Event.Type {
 		case v1.SystemEvent_JOB_STARTED:
-			block = fmt.Sprintf("\n⏳ **Background Job Started:** %s (ID: %s)\n", msg.Event.Title, msg.Event.JobId)
+			if strings.HasPrefix(msg.Event.Title, "Architecture Planner") {
+				m.IsPlanning = true
+			}
+			notif := m.renderNotification("⚙", msg.Event.Title+":", fmt.Sprintf("Background daemon initialized (ID: %s)", msg.Event.JobId), "DAEMON ACTIVE")
+			m.appendHistory(BlockComponent, notif)
+			updatedHistory = true
 		case v1.SystemEvent_JOB_COMPLETED:
-			block = fmt.Sprintf("\n✅ **Job Completed:** %s\n```\n%s\n```\n", msg.Event.Title, msg.Event.Payload)
-			// NOTE: Future visual integration: Intercept PLAN_PROPOSAL events here to show a dedicated planner UI
+			isPlanner := strings.HasPrefix(msg.Event.Title, "Architecture Planner")
+			if isPlanner {
+				m.IsPlanning = false
+			}
+			notif := m.renderNotification("✓", msg.Event.Title+":", "Execution finished with zero perimeter egress.", "STRICT_LOCAL VERIFIED")
+			if isPlanner && m.ActiveCardHistoryIdx >= 0 && m.ActiveCardHistoryIdx < len(m.History) {
+				m.insertHistoryAt(m.ActiveCardHistoryIdx, BlockComponent, notif)
+				m.ActiveCardHistoryIdx++
+			} else {
+				m.appendHistory(BlockComponent, notif)
+			}
+			if !isPlanner && strings.TrimSpace(msg.Event.Payload) != "" && strings.TrimSpace(msg.Event.Payload) != "Plan successfully generated and pushed to UI." {
+				m.appendHistory(BlockMarkdown, strings.TrimSpace(msg.Event.Payload), SenderVraxter)
+			}
+			updatedHistory = true
 		case v1.SystemEvent_JOB_FAILED:
-			block = fmt.Sprintf("\n❌ **Job Failed:** %s\n```\n%s\n```\n", msg.Event.Title, msg.Event.Payload)
+			m.IsPlanning = false
+			m.IsStreaming = false
+			notif := m.renderNotification("✕", msg.Event.Title+":", msg.Event.Payload, "EXECUTION ERROR")
+			m.appendHistory(BlockComponent, notif)
+			updatedHistory = true
 		case v1.SystemEvent_SWARM_PROGRESS:
-			block = fmt.Sprintf("\n🐝 **Swarm:** %s\n", msg.Event.Payload)
+			notif := m.renderNotification("⚡", "Swarm Telemetry:", msg.Event.Payload, "PHASE ACTIVE")
+			m.appendHistory(BlockComponent, notif)
+			updatedHistory = true
 		case v1.SystemEvent_PLAN_PROPOSED:
+			m.IsPlanning = false
+			m.IsStreaming = false
 			m.IsWaitingForApproval = true
 			m.ProposedPlan = msg.Event.Payload
 			m.PlanActionIndex = 0 // Default to PROCEED
 			m.ShowAmendInput = false
 			m.Input.Blur()
+			m.ActiveCardHistoryIdx = len(m.History)
 			m.appendHistory(BlockComponent, m.renderPlan(msg.Event.Payload, m.width, "")+"\n")
+			updatedHistory = true
 		}
 
-		if block != "" {
-			m.appendHistory(BlockMarkdown, block, SenderSystem)
-			if m.Ready {
-				m.Viewport.SetContent(m.renderMarkdown(m.History))
-				m.Viewport.GotoBottom()
-			}
+		if updatedHistory && m.Ready {
+			m.Viewport.SetContent(m.renderMarkdown(m.History))
+			m.Viewport.GotoBottom()
 		}
 
 		if msg.Event.Type == v1.SystemEvent_JOB_STARTED || msg.Event.Type == v1.SystemEvent_JOB_COMPLETED || msg.Event.Type == v1.SystemEvent_JOB_FAILED {
@@ -971,14 +1332,85 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.listenForSystemEvents(m.systemEvents)
 
 	case EventMsgWrapper:
-		// Real-time Model Sync: Update the header if the server's driving model changed
-		if msg.Event.ActiveModelID != "" && msg.Event.ActiveModelID != m.ActiveModel {
-			m.ActiveModel = msg.Event.ActiveModelID
+		// Real-time Model Sync & Fallback Tracking
+		if msg.Event.ActiveModelID != "" {
+			drivingModel := m.resolveModelDisplayName(msg.Event.ActiveModelID)
+			cleanDriving := strings.Trim(strings.ToLower(drivingModel), "'\" ")
+
+			if m.OverrideModelID != "" {
+				lockedDisplay := m.resolveModelDisplayName(m.OverrideModelID)
+				cleanOverride := strings.Trim(strings.ToLower(m.OverrideModelID), "'\" ")
+				cleanDisplay := strings.Trim(strings.ToLower(lockedDisplay), "'\" ")
+
+				if cleanDriving != cleanOverride && cleanDriving != cleanDisplay &&
+					!strings.Contains(cleanOverride, cleanDriving) && !strings.Contains(cleanDisplay, cleanDriving) {
+					// Fallback occurred away from the locked override model
+					m.ActiveModel = fmt.Sprintf("%s (FALLBACK)", drivingModel)
+					m.FailoverModel = fmt.Sprintf("failed: %s", lockedDisplay)
+				} else {
+					m.ActiveModel = fmt.Sprintf("%s (LOCKED)", lockedDisplay)
+				}
+			} else if m.BaseModelID != "" {
+				baseDisplay := m.resolveModelDisplayName(m.BaseModelID)
+				cleanBase := strings.Trim(strings.ToLower(baseDisplay), "'\" ")
+
+				if cleanDriving != cleanBase && !strings.Contains(cleanBase, cleanDriving) && !strings.Contains(cleanDriving, cleanBase) {
+					// Fallback occurred away from the primary default model
+					m.ActiveModel = fmt.Sprintf("%s (FALLBACK)", drivingModel)
+				} else {
+					m.ActiveModel = baseDisplay
+				}
+			} else {
+				m.ActiveModel = drivingModel
+			}
 		}
 
 		switch msg.Event.Type {
 		case llm.EventTypeToken:
 			content := msg.Event.Content
+
+			// Intercept System Telemetry Notifications (Do NOT render inside message body box)
+			if strings.Contains(content, "Sub-Agent Swarm Spawned") || strings.Contains(content, "Delegating task to") {
+				return m, nil
+			}
+			if strings.Contains(content, "Control returned to Vraxter") {
+				return m, nil
+			}
+			if strings.Contains(content, "Spawned Architecture Planner Daemon") || strings.Contains(content, "Spawned Plan Execution Daemon") {
+				return m, nil
+			}
+			if strings.Contains(content, "Skill Execution Approved") {
+				cleanMsg := strings.TrimSpace(strings.ReplaceAll(content, "\n", " "))
+				cleanMsg = strings.ReplaceAll(cleanMsg, "**", "")
+				cleanMsg = strings.ReplaceAll(cleanMsg, "`", "")
+				cleanMsg = strings.TrimPrefix(cleanMsg, "✅")
+				cleanMsg = strings.TrimSpace(cleanMsg)
+				m.appendHistory(BlockComponent, m.renderNotification("✓", "Skill Approved:", cleanMsg, "APPROVED"))
+				return m, nil
+			}
+			if strings.HasPrefix(strings.TrimSpace(content), "▶️ **Running skill:**") {
+				cleanMsg := strings.TrimSpace(strings.ReplaceAll(content, "\n", " "))
+				cleanMsg = strings.ReplaceAll(cleanMsg, "**", "")
+				cleanMsg = strings.ReplaceAll(cleanMsg, "`", "")
+				cleanMsg = strings.TrimPrefix(cleanMsg, "▶️")
+				cleanMsg = strings.TrimSpace(cleanMsg)
+				m.appendHistory(BlockComponent, m.renderNotification("◆", "Running Skill:", cleanMsg, "ACTIVE"))
+				return m, nil
+			}
+			if strings.Contains(content, "Sub-Agent Specialist") && strings.Contains(content, "created") {
+				cleanMsg := strings.TrimSpace(strings.ReplaceAll(content, "\n", " "))
+				cleanMsg = strings.TrimPrefix(cleanMsg, "✅")
+				cleanMsg = strings.TrimSpace(cleanMsg)
+				m.appendHistory(BlockComponent, m.renderNotification("✓", "Specialist Created:", cleanMsg, "REGISTERED"))
+				return m, nil
+			}
+			if strings.Contains(content, "created and installed successfully") {
+				cleanMsg := strings.TrimSpace(strings.ReplaceAll(content, "\n", " "))
+				cleanMsg = strings.TrimPrefix(cleanMsg, "✅")
+				cleanMsg = strings.TrimSpace(cleanMsg)
+				m.appendHistory(BlockComponent, m.renderNotification("✓", "Skill Installed:", cleanMsg, "INSTALLED"))
+				return m, nil
+			}
 
 			// Chain of Thought (CoT) Detection
 			if !m.isThinking && strings.Contains(content, "<thought>") {
@@ -1055,33 +1487,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		case llm.EventTypeSkillCall:
 			label := msg.Event.Content
-			icon := "◆"
 			if label == "vraxter-return-control" {
-				label = "Specialist boundary reached. Resuming Supervisor context..."
-				icon = "◈"
 				m.CurrentFocus = "vraxter"     // ◈ Focus shifts for THIS turn
 				m.HasSentVraxterBanner = false // Allow supervisor banner to spawn
 				m.ActiveSpecialistID = ""      // Clear latched specialist
 				m.SpecialistBanner = ""
+				m.appendHistory(BlockComponent, m.renderNotification("◈", "Supervisor Resumed:", "Specialist boundary reached. Control returned to Vraxter", "VRAXTER"))
 			} else {
-				label = fmt.Sprintf("running tool: %s...", label)
+				m.appendHistory(BlockComponent, m.renderNotification("◆", "Running Tool:", label, "ACTIVE"))
 			}
-
-			sigil := lipgloss.NewStyle().Foreground(colorGold).Render("  " + icon)
-			text := lipgloss.NewStyle().Foreground(colorMutedGray).Italic(true).Render(" " + label)
-			m.appendHistory(BlockComponent, sigil+text+"\n\n")
 		case llm.EventTypePlanProposal:
+			m.IsPlanning = false
 			m.IsWaitingForApproval = true
 			m.ProposedPlan = msg.Event.Content
 			m.PlanActionIndex = 0 // Default to PROCEED
 			m.ShowAmendInput = false
 			m.Input.Blur()
+			m.ActiveCardHistoryIdx = len(m.History)
 			m.appendHistory(BlockComponent, m.renderPlan(msg.Event.Content, m.width, "")+"\n")
 		case llm.EventTypeSkillApprovalRequest:
 			m.IsWaitingForSkillApproval = true
 			m.PendingSkillPayload = msg.Event.Content
 			m.PlanActionIndex = 0 // Default to PROCEED
 			m.Input.Blur()
+			m.ActiveCardHistoryIdx = len(m.History)
 			m.appendHistory(BlockComponent, m.renderSkillApproval(msg.Event.SkillID, msg.Event.Content, m.width, "")+"\n")
 		case llm.EventTypeSpecialistResult:
 			// Format: id|name|content
@@ -1094,14 +1523,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					actualContent = parts[2]
 				}
 
-				// Latch the Context & Focus
-				m.ActiveSpecialistID = id
-				m.SpecialistBanner = strings.ToUpper(name)
-				m.CurrentFocus = "specialist"
-
-				// Prepend the Rich Specialist Banner state if not sent yet
-				if !m.HasSentVraxterBanner {
-					m.HasSentVraxterBanner = true
+				if id == "" && name == "" {
+					// Control returned to Vraxter
+					if m.ActiveSpecialistID != "" || m.CurrentFocus == "specialist" {
+						m.ActiveSpecialistID = ""
+						m.SpecialistBanner = ""
+						m.CurrentFocus = "vraxter"
+						m.HasSentVraxterBanner = false
+						m.appendHistory(BlockComponent, m.renderNotification("◈", "Supervisor Resumed:", "Control returned to Vraxter", "VRAXTER"))
+					}
+				} else {
+					// Delegated to specialist
+					if m.ActiveSpecialistID != id {
+						m.ActiveSpecialistID = id
+						m.SpecialistBanner = strings.ToUpper(name)
+						m.CurrentFocus = "specialist"
+						m.HasSentVraxterBanner = false
+						m.appendHistory(BlockComponent, m.renderNotification("⚡", "Swarm Delegated:", "@"+name, "SWARM ACTIVE"))
+					}
 				}
 
 				if actualContent != "" {
@@ -1110,9 +1549,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case llm.EventTypeError:
 			m.Error = msg.Event.Err
+			m.IsPlanning = false
 			m.IsStreaming = false
 			errNotice := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FF1744")).
+				Foreground(colorLedCrimson).
 				Bold(true).
 				Render(fmt.Sprintf("  ❌  Error: %v", m.Error))
 			m.appendHistory(BlockComponent, errNotice+"\n\n")
@@ -1130,15 +1570,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(append(cmds, msg.Next)...)
 		}
 		return m, tea.Batch(cmds...)
-
-	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.Spinner, cmd = m.Spinner.Update(msg)
-		// If we are in the "Thinking" state, we need to refresh the chat to show the animation
-		if m.IsStreaming && !m.HasSentVraxterBanner && m.Ready {
-			m.Viewport.SetContent(m.renderMarkdown(m.History))
-		}
-		return m, cmd
 	}
 
 	if !m.IsStreaming {
@@ -1167,6 +1598,26 @@ func (m *Model) appendHistory(t BlockType, content string, sender ...SenderType)
 	} else {
 		m.History = append(m.History, HistoryBlock{Type: t, Content: content, Sender: s})
 	}
+}
+
+func (m *Model) insertHistoryAt(idx int, t BlockType, content string, sender ...SenderType) {
+	s := SenderSystem
+	if len(sender) > 0 {
+		s = sender[0]
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(m.History) {
+		m.appendHistory(t, content, sender...)
+		return
+	}
+	block := HistoryBlock{Type: t, Content: content, Sender: s}
+	newHistory := make([]HistoryBlock, 0, len(m.History)+1)
+	newHistory = append(newHistory, m.History[:idx]...)
+	newHistory = append(newHistory, block)
+	newHistory = append(newHistory, m.History[idx:]...)
+	m.History = newHistory
 }
 
 func splitArgs(input string) []string {
@@ -1203,6 +1654,68 @@ func splitArgs(input string) []string {
 	return args
 }
 
+func (m *Model) renderHelpContent() string {
+	catStyle := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
+	cmdStyle := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true)
+	argStyle := lipgloss.NewStyle().Foreground(colorCopper)
+	descStyle := lipgloss.NewStyle().Foreground(colorStone)
+	divStyle := lipgloss.NewStyle().Foreground(colorTitaniumMid)
+
+	type helpRow struct {
+		cmd  string
+		args string
+		desc string
+	}
+	renderSection := func(title string, rows []helpRow) string {
+		var sb strings.Builder
+		sb.WriteString(catStyle.Render("◆ "+title) + "\n")
+		sb.WriteString(divStyle.Render(strings.Repeat("─", 72)) + "\n")
+		for _, r := range rows {
+			left := cmdStyle.Render(r.cmd)
+			if r.args != "" {
+				left += " " + argStyle.Render(r.args)
+			}
+			pad := 26 - lipgloss.Width(left)
+			if pad < 2 {
+				pad = 2
+			}
+			sb.WriteString("  " + left + strings.Repeat(" ", pad) + descStyle.Render(r.desc) + "\n")
+		}
+		return sb.String()
+	}
+
+	var out strings.Builder
+	out.WriteString(renderSection("SESSION & ROUTING", []helpRow{
+		{"/activate", "<id>", "Manually switch and lock the active model for this session"},
+		{"/restore, /auto", "", "Restore automatic use-case based model routing"},
+		{"/history", "", "Browse past conversation sessions in the local vault"},
+		{"/load", "<#>", "Replay a past conversation by its index from /history"},
+		{"/session", "<id>", "Switch context to a different session ID"},
+		{"/new, /reset", "", "Generate a fresh session ID and clear history"},
+		{"/clear", "", "Clear the chat viewport"},
+	}) + "\n")
+
+	out.WriteString(renderSection("AUTONOMOUS EXECUTION & SWARM", []helpRow{
+		{"/plan", "<task>", "Break down a complex task into a multi-phase .vrx plan"},
+		{"/jobs", "", "List all background daemon jobs currently running"},
+		{"/skills", "[args]", "Manage & synthesize skills (/skills add <name> <spec>)"},
+		{"/specialists", "[args]", "Manage domain specialists (or delegate via @<name>)"},
+	}) + "\n")
+
+	out.WriteString(renderSection("WORKSTATION & CONFIGURATION", []helpRow{
+		{"/start", "", "Unified startup wizard (Profile ➔ Providers ➔ Models)"},
+		{"/airgap, /isolation", "", "Inspect zero-egress perimeter defense status & telemetry"},
+		{"/factory-reset", "[--confirm]", "Restore Vraxter completely to clean factory defaults"},
+		{"/providers", "[args]", "Manage AI providers (/providers setup for wizard)"},
+		{"/models", "[args]", "Manage models linked to providers (/models setup)"},
+		{"/user", "[args]", "Manage operator profile (/user setup for wizard)"},
+		{"/help, /?", "", "Show this command reference"},
+		{"/quit, /exit", "", "Exit Vraxter"},
+	}))
+
+	return strings.TrimRight(out.String(), "\n")
+}
+
 func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	parts := splitArgs(cmd)
 	if len(parts) == 0 {
@@ -1212,22 +1725,63 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	switch parts[0] {
 	case "/jobs":
 		if len(m.ActiveJobs) == 0 {
-			m.appendHistory(BlockComponent, toolStyle.Render("📭 No background jobs are currently running.\n\n"))
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("started", "BACKGROUND DAEMON JOBS", "No background jobs are currently running.", "0 ACTIVE", m.width))
 			return nil
 		}
+		hdrStyle := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
+		idStyle := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true)
+		titleColStyle := lipgloss.NewStyle().Foreground(colorIvory)
+		statusColStyle := lipgloss.NewStyle().Foreground(colorLedEmerald).Bold(true)
+		timeStyle := lipgloss.NewStyle().Foreground(colorAsh)
+		divStyle := lipgloss.NewStyle().Foreground(colorTitaniumMid)
+
 		var sb strings.Builder
-		sb.WriteString("\n⚙️ **Active Background Jobs**\n\n")
-		sb.WriteString("| ID | Title | Status | Started |\n")
-		sb.WriteString("|---|-------|--------|---------|\n")
+		sb.WriteString(hdrStyle.Render(fmt.Sprintf("%-14s %-36s %-12s %s", "JOB ID", "TASK TITLE", "STATUS", "STARTED")) + "\n")
+		sb.WriteString(divStyle.Render(strings.Repeat("─", 74)) + "\n")
 		for _, j := range m.ActiveJobs {
 			started := j.StartTime
 			if t, err := time.Parse(time.RFC3339, j.StartTime); err == nil {
 				started = t.Format("15:04:05")
 			}
-			sb.WriteString(fmt.Sprintf("| `%s` | %s | %s | %s |\n", j.Id, j.Title, j.Status, started))
+			row := idStyle.Render(fmt.Sprintf("%-14s", j.Id)) + " " +
+				titleColStyle.Render(fmt.Sprintf("%-36s", j.Title)) + " " +
+				statusColStyle.Render(fmt.Sprintf("%-12s", j.Status)) + " " +
+				timeStyle.Render(started)
+			sb.WriteString(row + "\n")
 		}
-		sb.WriteString("\n")
-		m.appendHistory(BlockMarkdown, sb.String())
+		m.appendHistory(BlockComponent, m.renderCmdBlock(cmd, strings.TrimRight(sb.String(), "\n")))
+		return nil
+	case "/airgap", "/isolation":
+		lockStatus := "IMMUTABLE (Enforced via --airgap / VRAXTER_AIRGAP)"
+		if !m.IsAirgapLocked {
+			lockStatus = "DYNAMIC (Process Settings)"
+		}
+		modeStr := strings.ToUpper(m.IsolationMode)
+		if modeStr == "" {
+			modeStr = "AIRGAP (DEFAULT)"
+		}
+
+		cardWidth := m.width - 6
+		if cardWidth < 50 {
+			cardWidth = 50
+		}
+
+		hdrStyle := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true)
+		lblStyle := lipgloss.NewStyle().Foreground(colorAsh)
+		valStyle := lipgloss.NewStyle().Foreground(colorIvory).Bold(true)
+		emStyle := lipgloss.NewStyle().Foreground(colorLedEmerald).Bold(true)
+
+		var sb strings.Builder
+		sb.WriteString(hdrStyle.Render("🛡️ VRAXTER PERIMETER DEFENSE TELEMETRY") + "\n")
+		sb.WriteString(lipgloss.NewStyle().Foreground(colorCopperLine).Render(strings.Repeat("─", cardWidth-4)) + "\n")
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("ACTIVE MODE:"), emStyle.Render(modeStr)))
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("LOCK STATUS:"), valStyle.Render(lockStatus)))
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("PERMITTED INTERFACES:"), valStyle.Render("Loopback (127.0.0.1, ::1) only")))
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("DNS RESOLVER:"), emStyle.Render("0 External Queries (In-Memory Rejection Active)")))
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("SOCKET DIALER:"), emStyle.Render("AirgapDialer (Zero-Egress syscall.EPERM)")))
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("CLOUD PROVIDERS:"), lipgloss.NewStyle().Foreground(colorLedCrimson).Bold(true).Render("DEACTIVATED")))
+
+		m.appendHistory(BlockComponent, m.renderCmdBlock(cmd, strings.TrimRight(sb.String(), "\n")))
 		return nil
 	case "/clear":
 		m.History = []HistoryBlock{}
@@ -1235,28 +1789,30 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	case "/session":
 		if len(parts) > 1 {
 			m.SessionID = parts[1]
-			m.appendHistory(BlockComponent, fmt.Sprintf("**🔄 Session switched to '%s'**\n\n", m.SessionID))
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("confirmed", "SESSION CONTEXT SWITCHED", fmt.Sprintf("Active session bound to '%s'", m.SessionID), "ACTIVE", m.width))
 		} else {
-			m.appendHistory(BlockComponent, "**❌ Usage: /session <id>**\n\n")
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "INVALID SYNTAX", "Usage: /session <session_id>", "ARGS REQUIRED", m.width))
 		}
 		return nil
 	case "/help", "/?":
-		help := "\n🤖 Vraxter TUI Commands:" + helpCommand
-
-		m.appendHistory(BlockComponent, toolStyle.Render(help)+"\n\n")
+		m.appendHistory(BlockComponent, m.renderCmdBlock(cmd, m.renderHelpContent()))
 		return nil
 	case "/activate":
 		if len(parts) < 2 {
-			m.appendHistory(BlockComponent, errorStyle.Render("❌ Usage: /activate <model_id_or_alias>\n\n"))
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "INVALID SYNTAX", "Usage: /activate <model_id_or_alias>", "ARGS REQUIRED", m.width))
 			return nil
 		}
-		m.OverrideModelID = parts[1]
-		m.ActiveModel = fmt.Sprintf("%s (LOCKED)", m.OverrideModelID)
-		m.appendHistory(BlockComponent, toolStyle.Render(fmt.Sprintf("🎯 Model override active: %s. All future requests will ignore automatic routing.\n\n", m.OverrideModelID)))
+		rawTarget := strings.TrimSpace(strings.Join(parts[1:], " "))
+		rawTarget = strings.Trim(rawTarget, "'\"")
+		m.OverrideModelID = rawTarget
+		m.refreshModelBanner()
+		displayName := m.resolveModelDisplayName(rawTarget)
+		m.appendHistory(BlockComponent, m.renderExecutionBanner("confirmed", "MODEL OVERRIDE LOCKED", fmt.Sprintf("Pinned active model to '%s'. Automatic routing bypassed.", displayName), "LOCKED", m.width))
 		return nil
 	case "/restore", "/auto":
 		m.OverrideModelID = ""
-		m.appendHistory(BlockComponent, toolStyle.Render("🔄 Model routing restored to automatic (Use-Case driven).\n\n"))
+		m.refreshModelBanner()
+		m.appendHistory(BlockComponent, m.renderExecutionBanner("confirmed", "AUTOMATIC ROUTING RESTORED", "Model selection returned to use-case driven routing.", "AUTO ROUTE", m.width))
 		return m.fetchInfo()
 	case "/history":
 		return func() tea.Msg {
@@ -1265,7 +1821,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		}
 	case "/load":
 		if len(parts) < 2 {
-			m.appendHistory(BlockComponent, errorStyle.Render("❌ Usage: /load <#> — Use the row number from /history\n\n"))
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "INVALID SYNTAX", "Usage: /load <#> — Use the row number from /history", "ARGS REQUIRED", m.width))
 			return nil
 		}
 
@@ -1274,9 +1830,9 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		if idx, err := strconv.Atoi(parts[1]); err == nil {
 			if idx < 1 || idx > len(m.lastHistoryResults) {
 				if len(m.lastHistoryResults) == 0 {
-					m.appendHistory(BlockComponent, errorStyle.Render("❌ Run /history first to see available conversations.\n\n"))
+					m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "HISTORY NOT LOADED", "Run /history first to list available conversations.", "NO INDEX", m.width))
 				} else {
-					m.appendHistory(BlockComponent, errorStyle.Render(fmt.Sprintf("❌ Invalid index. Choose a number between 1 and %d.\n\n", len(m.lastHistoryResults))))
+					m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "INDEX OUT OF BOUNDS", fmt.Sprintf("Choose a conversation index between 1 and %d.", len(m.lastHistoryResults)), "INVALID IDX", m.width))
 				}
 				return nil
 			}
@@ -1290,7 +1846,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		if len(displayLabel) > 30 {
 			displayLabel = displayLabel[:30] + "…"
 		}
-		m.appendHistory(BlockComponent, toolStyle.Render(fmt.Sprintf("📂 Loading conversation '%s'...\n\n", displayLabel)))
+		m.appendHistory(BlockComponent, m.renderExecutionBanner("started", "LOADING CONVERSATION", fmt.Sprintf("Replaying transcript for session '%s'...", displayLabel), "SYNCING", m.width))
 
 		return func() tea.Msg {
 			msgs, err := m.grpcClient.GetConversation(m.ctx, targetID)
@@ -1326,7 +1882,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 			name := parts[2]
 			desc := strings.Join(parts[3:], " ")
 			m.IsStreaming = true
-			m.appendHistory(BlockComponent, toolStyle.Render(fmt.Sprintf("🔨 Manually triggering creation of skill '%s'...\n\n", name)))
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("swarm", "SKILL SYNTHESIS DISPATCHED", fmt.Sprintf("Triggering @vraxter-coder for skill '%s'", name), "DISPATCHED", m.width))
 
 			// We send a direct tool call payload to the server.
 			// The server's ProcessRawIntent will see the [VRAX_TOOL] prefix and route it to DispatchToolPayload.
@@ -1350,112 +1906,133 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		}
 	case "/plan":
 		if len(parts) < 2 {
-			m.appendHistory(BlockComponent, errorStyle.Render("❌ Usage: /plan <task details>\n\n"))
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "INVALID SYNTAX", "Usage: /plan <task details>", "ARGS REQUIRED", m.width))
 			return nil
 		}
-		m.appendHistory(BlockMarkdown, "  ") // Use simple indentation for standard chat markers to avoid height overload
+		m.HasSentVraxterBanner = false
+		m.IsPlanning = true
 		m.IsStreaming = true
-		return m.fireExecution(cmd)
+		m.ActiveCardHistoryIdx = -1
+		m.ProposedPlan = ""
+		m.IsWaitingForApproval = false
+		return tea.Batch(m.fireExecution(cmd), m.Spinner.Tick)
 	case "/new", "/reset":
 		m.SessionID = fmt.Sprintf("new-%d-%x", time.Now().Unix(), md5.Sum([]byte(uuid.New().String())))
 		m.History = []HistoryBlock{}
-		m.appendHistory(BlockComponent, toolStyle.Render("✨ Memory Refreshed. New Session Started.\n\n"))
+		m.ActiveCardHistoryIdx = -1
+		m.IsPlanning = false
+		m.appendHistory(BlockComponent, m.renderExecutionBanner("confirmed", "SESSION MEMORY REFRESHED", fmt.Sprintf("Initialized clean context (%s)", m.SessionID), "NEW SESSION", m.width))
 		return nil
 	case "/accept":
 		if !m.IsWaitingForApproval {
-			m.appendHistory(BlockComponent, errorStyle.Render("❌ No plan currently awaiting approval.\n\n"))
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "NO ACTIVE PLAN", "No architectural plan is currently awaiting approval.", "IDLE", m.width))
 			return nil
 		}
 
 		// Update History in-place to show Acceptance INSIDE the box
-		if len(m.History) > 0 {
-			m.History[len(m.History)-1].Content = m.renderPlan(m.ProposedPlan, m.width, "✅ PLAN ACCEPTED") + "\n"
-		}
+		m.updateActiveCard(m.renderPlan(m.ProposedPlan, m.width, "PLAN ACCEPTED · EXECUTING") + "\n")
 
 		m.IsWaitingForApproval = false
+		m.ShowAmendInput = false
 		m.IsStreaming = true
+		m.restoreInputStyles()
 
-		// Restore Input State
-		m.Input.Prompt = "❯ "
-		tas := m.Input.Styles()
-		tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-		m.Input.SetStyles(tas)
-		m.Input.Focus()
-
-		return m.fireExecution("!EXECUTE_PLAN " + m.ProposedPlan)
-	case "/reject":
+		return tea.Batch(m.fireExecution("!EXECUTE_PLAN "+m.ProposedPlan), m.Spinner.Tick)
+	case "/reject", "/deny":
 		if m.IsWaitingForSkillApproval {
-			// Handle Skill Rejection
-			if len(m.History) > 0 {
-				var call types.ToolCall
-				skillID := ""
-				if err := json.Unmarshal([]byte(m.PendingSkillPayload), &call); err == nil {
-					skillID = call.SkillID
-				}
-				m.History[len(m.History)-1].Content = m.renderSkillApproval(skillID, m.PendingSkillPayload, m.width, "❌ SKILL REJECTED") + "\n"
-			}
-			
-			m.IsWaitingForSkillApproval = false
-			m.IsStreaming = true // Needs to stream the rejection back to LLM
-
-			// Restore Input State
-			m.Input.Prompt = "❯ "
-			tas := m.Input.Styles()
-			tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-			m.Input.SetStyles(tas)
-			m.Input.Focus()
-
-			return m.fireExecution("!REJECT_SKILL " + m.PendingSkillPayload)
-		}
-
-		// Otherwise handle Plan Rejection
-		// Update History in-place to show Rejection INSIDE the box
-		if len(m.History) > 0 {
-			m.History[len(m.History)-1].Content = m.renderPlan(m.ProposedPlan, m.width, "❌ PLAN REJECTED") + "\n"
-		}
-
-		m.IsWaitingForApproval = false
-		m.ProposedPlan = ""
-
-		// Restore Input State
-		m.Input.Prompt = "❯ "
-		tas := m.Input.Styles()
-		tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-		m.Input.SetStyles(tas)
-		m.Input.Focus()
-
-		return nil
-	case "/approve":
-		if !m.IsWaitingForSkillApproval {
-			m.appendHistory(BlockComponent, errorStyle.Render("❌ No skill currently awaiting approval.\n\n"))
-			return nil
-		}
-
-		// Update History in-place to show Acceptance INSIDE the box
-		if len(m.History) > 0 {
 			var call types.ToolCall
 			skillID := ""
 			if err := json.Unmarshal([]byte(m.PendingSkillPayload), &call); err == nil {
 				skillID = call.SkillID
 			}
-			m.History[len(m.History)-1].Content = m.renderSkillApproval(skillID, m.PendingSkillPayload, m.width, "✅ SKILL APPROVED") + "\n"
+			m.updateActiveCard(m.renderSkillApproval(skillID, m.PendingSkillPayload, m.width, "SKILL REJECTED") + "\n")
+
+			m.IsWaitingForSkillApproval = false
+			m.IsStreaming = true
+			m.restoreInputStyles()
+
+			return tea.Batch(m.fireExecution("!REJECT_SKILL "+m.PendingSkillPayload), m.Spinner.Tick)
 		}
+
+		if !m.IsWaitingForApproval {
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "NOTHING TO REJECT", "No pending plan or skill execution is awaiting approval.", "IDLE", m.width))
+			return nil
+		}
+
+		// Otherwise handle Plan Rejection
+		m.updateActiveCard(m.renderPlan(m.ProposedPlan, m.width, "PLAN REJECTED") + "\n")
+
+		m.IsWaitingForApproval = false
+		m.ShowAmendInput = false
+		m.ProposedPlan = ""
+		m.restoreInputStyles()
+
+		return nil
+	case "/approve":
+		if !m.IsWaitingForSkillApproval {
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "NO PENDING SKILL", "No skill execution is currently awaiting approval.", "IDLE", m.width))
+			return nil
+		}
+
+		var call types.ToolCall
+		skillID := ""
+		if err := json.Unmarshal([]byte(m.PendingSkillPayload), &call); err == nil {
+			skillID = call.SkillID
+		}
+		m.updateActiveCard(m.renderSkillApproval(skillID, m.PendingSkillPayload, m.width, "SKILL APPROVED") + "\n")
 
 		m.IsWaitingForSkillApproval = false
 		m.IsStreaming = true
+		m.restoreInputStyles()
 
-		// Restore Input State
-		m.Input.Prompt = "❯ "
-		tas := m.Input.Styles()
-		tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-		m.Input.SetStyles(tas)
-		m.Input.Focus()
-
-		return m.fireExecution("!APPROVE_SKILL " + m.PendingSkillPayload)
-	case "/deny": // We use /deny as an alias for /reject specifically for skills, or we can overload /reject. Let's overload /reject below.
-		fallthrough
+		return tea.Batch(m.fireExecution("!APPROVE_SKILL "+m.PendingSkillPayload), m.Spinner.Tick)
 	case "/quit", "/exit":
-		m.appendHistory(BlockComponent, toolStyle.Render("👋 Press Ctrl+C or ESC to exit.\n\n"))
+		m.appendHistory(BlockComponent, m.renderExecutionBanner("started", "TERMINAL EXIT", "Press Ctrl+C to close the Vraxter workstation.", "STANDBY", m.width))
+		return nil
+	case "/factory-reset":
+		if len(parts) < 2 || parts[1] != "--confirm" {
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "FACTORY RESET WARNING", "This will wipe all models, providers, specialists, and keys.\nAn automatic backup will be created in ~/.config/vraxter.backup-<timestamp>.\nType '/factory-reset --confirm' to proceed.", "ACTION REQUIRED", m.width))
+			return nil
+		}
+
+		if m.appStore != nil {
+			m.appStore.Close()
+			m.appStore = nil
+		}
+
+		backupPath, err := config.PerformFactoryReset(true)
+		if err != nil {
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "RESET FAILED", err.Error(), "ERR", m.width))
+			return nil
+		}
+
+		cfg := config.Load()
+		newStore, err := db.NewStore(cfg.DBPath)
+		if err != nil {
+			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "DB INIT FAILED", err.Error(), "ERR", m.width))
+			return nil
+		}
+		m.appStore = newStore
+
+		newCrypto, err := security.NewCryptoService(cfg.KeyPath)
+		if err == nil {
+			m.appCrypto = newCrypto
+		}
+
+		pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
+		mRepo := db.NewModelRepository(m.appStore, m.appCrypto)
+		pMgr := services.NewProviderManager(pRepo, "ask", nil)
+		mMgr := services.NewModelManager(mRepo, pRepo)
+
+		m.History = []HistoryBlock{}
+		m.SessionID = fmt.Sprintf("fresh-%d", time.Now().Unix())
+		m.ActiveModel = "Not configured"
+		m.FailoverModel = "none"
+		m.OverrideModelID = ""
+		m.BaseModelID = ""
+
+		m.appendHistory(BlockComponent, m.renderExecutionBanner("confirmed", "FACTORY RESET COMPLETE", fmt.Sprintf("Vraxter restored to factory defaults.\nBackup saved to: %s\nLaunching setup wizard...", backupPath), "RESET COMPLETE", m.width))
+		m.ActiveSetup = NewStartupWizard(pMgr, mMgr)
 		return nil
 	case "/start":
 		pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
@@ -1481,6 +2058,12 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 			pMgr := services.NewProviderManager(pRepo, "ask", nil)
 			mMgr := services.NewModelManager(mRepo, pRepo)
 			m.ActiveSetup = NewModelWizard(pMgr, mMgr)
+			return nil
+		}
+		if parts[0] == "/specialists" && len(parts) >= 2 && (parts[1] == "create" || parts[1] == "setup" || parts[1] == "add" || parts[1] == "new") {
+			specRepo := db.NewSpecialistRepository(m.appStore)
+			modelsRepo := db.NewModelRepository(m.appStore, m.appCrypto)
+			m.ActiveSetup = NewSpecialistWizard(specRepo, modelsRepo)
 			return nil
 		}
 
@@ -1514,7 +2097,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 			return cmdOutputMsg{input: cmdInput, output: cleanOut}
 		}
 	default:
-		m.appendHistory(BlockComponent, errorStyle.Render(fmt.Sprintf("❌ Unknown command: %s. Type /help for options.\n\n", parts[0])))
+		m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "UNKNOWN COMMAND", fmt.Sprintf("Unrecognized command '%s'. Type /help to inspect available commands.", parts[0]), "SYNTAX ERR", m.width))
 		return nil
 	}
 }
@@ -1522,14 +2105,14 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 func (m *Model) renderDiscoveryRich(pID string, models []interfaces.ModelMetadata) string {
 	width := m.width - 6
 
-	styleGold := lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-	styleID := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8"))
-	styleMuted := lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	styleHeader := lipgloss.NewStyle().Foreground(lipgloss.Color("#777777"))
-	styleCaps := lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	styleDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2a2a2a"))
-	bracket := lipgloss.NewStyle().Foreground(lipgloss.Color("#1a3a1a")).Render
-	ctxVal := lipgloss.NewStyle().Foreground(colorEmerald).Bold(true)
+	styleGold := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
+	styleID := lipgloss.NewStyle().Foreground(colorIvory)
+	styleMuted := lipgloss.NewStyle().Foreground(colorAsh)
+	styleHeader := lipgloss.NewStyle().Foreground(colorStone)
+	styleCaps := lipgloss.NewStyle().Foreground(colorAsh)
+	styleDivider := lipgloss.NewStyle().Foreground(colorTitaniumLight)
+	bracket := lipgloss.NewStyle().Foreground(colorSlate).Render
+	ctxVal := lipgloss.NewStyle().Foreground(colorLedEmerald).Bold(true)
 
 	ctxBadge := func(ctx int) string {
 		var label string
@@ -1545,7 +2128,7 @@ func (m *Model) renderDiscoveryRich(pID string, models []interfaces.ModelMetadat
 		return bracket("[") + ctxVal.Render(label) + bracket("]")
 	}
 
-	// Agrupar modelos por tipo
+	// Group models by type
 	groups := make(map[string][]interfaces.ModelMetadata)
 	for _, mod := range models {
 		group := "LLM (Text)"
@@ -1568,12 +2151,12 @@ func (m *Model) renderDiscoveryRich(pID string, models []interfaces.ModelMetadat
 
 	var sb strings.Builder
 
-	// Título
+	// Title
 	sb.WriteString(styleGold.Render(
 		fmt.Sprintf("◆ REMOTE MODELS · %s", strings.ToUpper(pID)),
 	) + "\n\n")
 
-	// Header de columnas
+	// Column headers
 	const idW = 42
 	const ctxW = 8
 	sb.WriteString(
@@ -1593,22 +2176,22 @@ func (m *Model) renderDiscoveryRich(pID string, models []interfaces.ModelMetadat
 			continue
 		}
 
-		// Header de grupo
+		// Group header
 		sb.WriteString("\n" + styleMuted.Render(fmt.Sprintf("── %s", gTitle)) + "\n")
 
 		for _, mod := range ms {
 			badge := ctxBadge(mod.ContextWindow)
 
-			// ID — pad manual para alinear columna
+			// ID - manual padding to align column
 			idRendered := styleID.Render(mod.ID)
-			idPad := idW - len(mod.ID) // usamos len del string raw para el pad
+			idPad := idW - len(mod.ID) // use raw string length for pad
 			if idPad < 0 {
 				idPad = 0
 			}
 
-			// Context badge — ancho fijo
-			// El badge visual es [XY] = 2 brackets + label
-			// Calculamos el raw label width para el pad
+			// Context badge - fixed width
+			// Visual badge is [XY] = 2 brackets + label
+			// Calculate raw label width for pad
 			rawBadgeW := len(fmt.Sprintf("[%s]", func() string {
 				if mod.ContextWindow <= 0 {
 					return "N/A"
@@ -1652,46 +2235,543 @@ func (m *Model) renderDiscoveryRich(pID string, models []interfaces.ModelMetadat
 	return sb.String()
 }
 
+func rgbTriplet(hex string) string {
+	c := strings.TrimPrefix(hex, "#")
+	if len(c) != 6 {
+		return "8;9;12"
+	}
+	r, _ := strconv.ParseUint(c[0:2], 16, 8)
+	g, _ := strconv.ParseUint(c[2:4], 16, 8)
+	b, _ := strconv.ParseUint(c[4:6], 16, 8)
+	return fmt.Sprintf("%d;%d;%d", r, g, b)
+}
+
+func ansiBg(hex string) string {
+	return "\x1b[48;2;" + rgbTriplet(hex) + "m"
+}
+
+func ansiFg(hex string) string {
+	return "\x1b[38;2;" + rgbTriplet(hex) + "m"
+}
+
+const sgrAttrReset = "\x1b[22;23;24;25;27;28;29m"
+
+// applySurfaceLine rewrites every SGR sequence in line so that any reset (0, empty, 39, 49)
+// immediately restores the surface's background (bgHex) and default foreground (fgHex).
+// By replacing 0/39/49 with explicit attribute/color sequences and emitting bounded SGR chunks,
+// repeated calls across nested containers are 100% idempotent and never exceed ansi.MaxParams (32).
+func applySurfaceLine(line string, bgHex, fgHex string) string {
+	bgSeq := ansiBg(bgHex)
+	fgSeq := ansiFg(fgHex)
+
+	rewritten := sgrSeqRe.ReplaceAllStringFunc(line, func(m string) string {
+		content := m[2 : len(m)-1]
+		if content == "" || content == "0" || content == "00" {
+			return sgrAttrReset + bgSeq + fgSeq
+		}
+		parts := strings.Split(content, ";")
+		var b strings.Builder
+		var cur []string
+		flushCur := func() {
+			if len(cur) > 0 {
+				b.WriteString("\x1b[" + strings.Join(cur, ";") + "m")
+				cur = cur[:0]
+			}
+		}
+		for i := 0; i < len(parts); i++ {
+			p := parts[i]
+			if p == "38" || p == "48" || p == "58" {
+				if i+1 < len(parts) && parts[i+1] == "2" && i+4 < len(parts) {
+					flushCur()
+					b.WriteString("\x1b[" + strings.Join(parts[i:i+5], ";") + "m")
+					i += 4
+					continue
+				}
+				if i+1 < len(parts) && parts[i+1] == "5" && i+2 < len(parts) {
+					flushCur()
+					b.WriteString("\x1b[" + strings.Join(parts[i:i+3], ";") + "m")
+					i += 2
+					continue
+				}
+			}
+			if p == "0" || p == "00" {
+				flushCur()
+				b.WriteString(sgrAttrReset + bgSeq + fgSeq)
+				continue
+			}
+			if p == "49" {
+				flushCur()
+				b.WriteString(bgSeq)
+				continue
+			}
+			if p == "39" {
+				flushCur()
+				b.WriteString(fgSeq)
+				continue
+			}
+			cur = append(cur, p)
+			if len(cur) >= 8 {
+				flushCur()
+			}
+		}
+		flushCur()
+		return b.String()
+	})
+
+	return bgSeq + fgSeq + rewritten + bgSeq + fgSeq
+}
+
+// paintBlockSurface paints each line of content onto a solid background of totalWidth.
+func paintBlockSurface(content string, totalWidth int, bgHex, fgHex string) string {
+	if totalWidth < 1 {
+		totalWidth = 1
+	}
+	bgSeq := ansiBg(bgHex)
+	fgSeq := ansiFg(fgHex)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		visW := lipgloss.Width(line)
+		fill := totalWidth - visW
+		if fill < 0 {
+			fill = 0
+		}
+		painted := applySurfaceLine(line, bgHex, fgHex)
+		lines[i] = bgSeq + fgSeq + painted + strings.Repeat(" ", fill) + "\x1b[0m"
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderSolidBox renders a bordered container where borders, vertical/horizontal padding,
+// and all interior text share a continuous, non-bleeding background color.
+func renderSolidBox(content string, totalWidth int, padY, padX int, bgHex, fgHex string, border lipgloss.Border, borderFgHex string) string {
+	if totalWidth < 6 {
+		totalWidth = 6
+	}
+	innerWidth := totalWidth - 2
+	contentWidth := innerWidth - (padX * 2)
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	bgSeq := ansiBg(bgHex)
+	fgSeq := ansiFg(fgHex)
+	bFgSeq := ansiFg(borderFgHex)
+
+	leftPad := strings.Repeat(" ", padX)
+	rightPad := strings.Repeat(" ", padX)
+	emptyInner := bgSeq + fgSeq + strings.Repeat(" ", innerWidth)
+
+	rawLines := strings.Split(content, "\n")
+	var bodyRows []string
+
+	for i := 0; i < padY; i++ {
+		bodyRows = append(bodyRows, emptyInner)
+	}
+
+	for _, line := range rawLines {
+		visW := lipgloss.Width(line)
+		fillCount := contentWidth - visW
+		if fillCount < 0 {
+			fillCount = 0
+		}
+		painted := applySurfaceLine(line, bgHex, fgHex)
+		row := bgSeq + fgSeq + leftPad + painted + strings.Repeat(" ", fillCount) + rightPad
+		bodyRows = append(bodyRows, row)
+	}
+
+	for i := 0; i < padY; i++ {
+		bodyRows = append(bodyRows, emptyInner)
+	}
+
+	topBorder := bgSeq + bFgSeq + border.TopLeft + strings.Repeat(border.Top, innerWidth) + border.TopRight + "\x1b[0m"
+	bottomBorder := bgSeq + bFgSeq + border.BottomLeft + strings.Repeat(border.Bottom, innerWidth) + border.BottomRight + "\x1b[0m"
+
+	var out strings.Builder
+	out.WriteString(topBorder + "\n")
+	for _, r := range bodyRows {
+		out.WriteString(bgSeq + bFgSeq + border.Left + r + bgSeq + bFgSeq + border.Right + "\x1b[0m\n")
+	}
+	out.WriteString(bottomBorder)
+	return out.String()
+}
+
+// renderLeftAccentBlock renders a chat message block (.tui-msg-user, .tui-msg-vraxter, .tui-msg-specialist)
+// with a subtle 1-cell thin left accent bar ("│") and a uniform background across padding and wrapped content.
+func renderLeftAccentBlock(content string, totalWidth int, padY, padX int, bgHex, fgHex, accentFgHex string) string {
+	if totalWidth < 6 {
+		totalWidth = 6
+	}
+	innerWidth := totalWidth - 1
+	contentWidth := innerWidth - (padX * 2)
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	bgSeq := ansiBg(bgHex)
+	fgSeq := ansiFg(fgHex)
+	accentSeq := ansiFg(accentFgHex)
+
+	leftPad := strings.Repeat(" ", padX)
+	rightPad := strings.Repeat(" ", padX)
+	emptyRow := bgSeq + accentSeq + "│" + bgSeq + fgSeq + strings.Repeat(" ", innerWidth) + "\x1b[0m"
+
+	var rawLines []string
+	for _, l := range strings.Split(content, "\n") {
+		if lipgloss.Width(l) > contentWidth {
+			sub := lipgloss.NewStyle().Width(contentWidth).Render(l)
+			rawLines = append(rawLines, strings.Split(sub, "\n")...)
+		} else {
+			rawLines = append(rawLines, l)
+		}
+	}
+
+	var rows []string
+	for i := 0; i < padY; i++ {
+		rows = append(rows, emptyRow)
+	}
+	for _, line := range rawLines {
+		visW := lipgloss.Width(line)
+		fillCount := contentWidth - visW
+		if fillCount < 0 {
+			fillCount = 0
+		}
+		painted := applySurfaceLine(line, bgHex, fgHex)
+		row := bgSeq + accentSeq + "│" + bgSeq + fgSeq + leftPad + painted + strings.Repeat(" ", fillCount) + rightPad + "\x1b[0m"
+		rows = append(rows, row)
+	}
+	for i := 0; i < padY; i++ {
+		rows = append(rows, emptyRow)
+	}
+
+	return strings.Join(rows, "\n") + "\n"
+}
+
+// renderPill renders a single-line badge/pill with a locked background that resets cleanly at its right edge.
+func renderPill(text string, bgHex, fgHex string, bold bool) string {
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color(fgHex))
+	if bold {
+		style = style.Bold(true)
+	}
+	rendered := style.Render(text)
+	return ansiBg(bgHex) + ansiFg(fgHex) + applySurfaceLine(rendered, bgHex, fgHex) + "\x1b[0m"
+}
+
+// highlightUserToken returns a highlighted chip if the token is a /command or @specialist mention.
+func highlightUserToken(tok string) string {
+	if len(tok) > 1 && (strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "@")) {
+		return renderPill(tok, hexAutocompleteSelBg, hexCopperSpecular, true)
+	}
+	return lipgloss.NewStyle().Foreground(colorIvory).Render(tok)
+}
+
+// renderUserMessage formats a SenderUser message with a leading "> " command prompt,
+// highlighted /command and @specialist tokens, and a right-aligned "YOU" label inside a subtle left-accent panel.
+func (m *Model) renderUserMessage(raw string, blockWidth int) string {
+	if blockWidth < 20 {
+		blockWidth = 20
+	}
+	contentWidth := blockWidth - 1 - 4 // 1 left border + 2 left pad + 2 right pad
+	if contentWidth < 12 {
+		contentWidth = 12
+	}
+
+	promptGlyph := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("> ")
+	metaBadge := lipgloss.NewStyle().Foreground(colorAsh).Render("YOU")
+	maxTextWidth := contentWidth - 2 - lipgloss.Width(metaBadge) - 2
+	if maxTextWidth < 8 {
+		maxTextWidth = contentWidth - 2
+	}
+
+	paragraphs := strings.Split(strings.TrimSpace(raw), "\n")
+	var wrappedLines []string
+
+	for _, para := range paragraphs {
+		words := strings.Fields(para)
+		if len(words) == 0 {
+			wrappedLines = append(wrappedLines, "")
+			continue
+		}
+		var curLine strings.Builder
+		curVisW := 0
+		for _, w := range words {
+			styledW := highlightUserToken(w)
+			wVis := lipgloss.Width(styledW)
+			if curVisW == 0 {
+				curLine.WriteString(styledW)
+				curVisW = wVis
+			} else if curVisW+1+wVis <= maxTextWidth {
+				curLine.WriteString(" " + styledW)
+				curVisW += 1 + wVis
+			} else {
+				wrappedLines = append(wrappedLines, curLine.String())
+				curLine.Reset()
+				curLine.WriteString(styledW)
+				curVisW = wVis
+			}
+		}
+		if curLine.Len() > 0 {
+			wrappedLines = append(wrappedLines, curLine.String())
+		}
+	}
+
+	if len(wrappedLines) == 0 {
+		wrappedLines = []string{""}
+	}
+
+	var outLines []string
+	for i, l := range wrappedLines {
+		if i == 0 {
+			left := promptGlyph + l
+			gap := contentWidth - lipgloss.Width(left) - lipgloss.Width(metaBadge)
+			if gap >= 2 {
+				outLines = append(outLines, left+strings.Repeat(" ", gap)+metaBadge)
+			} else {
+				outLines = append(outLines, left)
+			}
+		} else {
+			outLines = append(outLines, "  "+l)
+		}
+	}
+
+	return renderLeftAccentBlock(strings.Join(outLines, "\n"), blockWidth, 1, 2, hexUserBlockBg, hexIvory, hexSlate)
+}
+
 func (m *Model) renderCmdBlock(input, output string) string {
-	width := m.width - 6
+	width := m.width - 2
+	if width < 40 {
+		width = 40
+	}
+	innerWidth := width - 2
 
-	slashStyle := lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-	cmdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8"))
-	metaStyle := lipgloss.NewStyle().Foreground(colorMutedGray)
-	bodyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#7a8090")).
-		PaddingLeft(1).
-		PaddingTop(1).
-		PaddingBottom(1).
-		Width(width - 2)
+	if strings.TrimSpace(output) == "" {
+		output = "Command completed."
+	}
 
-	// Sin background en el header — solo el texto con padding
-	headerStyle := lipgloss.NewStyle().
-		PaddingLeft(1).
-		Width(width)
+	kickerStyle := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
+	cmdDisplay := strings.TrimSpace(input)
+	if !strings.HasPrefix(cmdDisplay, "/") {
+		cmdDisplay = "/" + cmdDisplay
+	}
+	cmdPill := renderPill(" "+cmdDisplay+" ", hexAutocompleteSelBg, hexCopperSpecular, true)
 
-	dividerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#1e2530"))
+	linesCount := strings.Count(strings.TrimRight(output, "\n"), "\n") + 1
+	metaPill := renderPill(fmt.Sprintf(" %d LINES ", linesCount), hexTitaniumDark, hexAsh, false)
 
-	lines := strings.Count(output, "\n")
-	meta := metaStyle.Render(fmt.Sprintf("%d lines", lines))
-
-	cmdText := slashStyle.Render("/ ") + cmdStyle.Render(input[1:])
-	pad := width - 4 - lipgloss.Width(cmdText) - lipgloss.Width(meta)
+	cmdText := kickerStyle.Render("◆ COMMAND OUTPUT // ") + cmdPill
+	pad := innerWidth - 4 - lipgloss.Width(cmdText) - lipgloss.Width(metaPill)
 	if pad < 1 {
 		pad = 1
 	}
 
-	header := headerStyle.Render(cmdText + strings.Repeat(" ", pad) + meta)
-	divider := dividerStyle.Render(strings.Repeat("─", width-2))
-	body := bodyStyle.Render(output)
+	headerLine := "  " + cmdText + strings.Repeat(" ", pad) + metaPill + "  "
+	header := paintBlockSurface(headerLine, innerWidth, hexCodeHeaderBg, hexIvory)
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#1e2530")).
-		Width(width).
-		MarginBottom(1).
-		Render(lipgloss.JoinVertical(lipgloss.Left, header, divider, body)) + "\n"
+	dividerLine := lipgloss.NewStyle().Foreground(colorTitaniumMid).Render(strings.Repeat("─", innerWidth))
+	divider := paintBlockSurface(dividerLine, innerWidth, hexCodeBg, hexTitaniumMid)
+
+	var bodyLines []string
+	bodyLines = append(bodyLines, "")
+	for _, l := range strings.Split(strings.TrimRight(output, "\n"), "\n") {
+		if lipgloss.Width(l) > innerWidth-4 {
+			wrapped := lipgloss.NewStyle().Width(innerWidth - 4).Render(l)
+			for _, wl := range strings.Split(wrapped, "\n") {
+				bodyLines = append(bodyLines, "  "+wl)
+			}
+		} else {
+			bodyLines = append(bodyLines, "  "+l)
+		}
+	}
+	bodyLines = append(bodyLines, "")
+	body := paintBlockSurface(strings.Join(bodyLines, "\n"), innerWidth, hexCodeBg, hexStone)
+
+	bdr := lipgloss.NormalBorder()
+	bFg := ansiFg(hexTitaniumMid)
+	accentFg := ansiFg(hexCopper)
+	hBg := ansiBg(hexCodeHeaderBg)
+	cBg := ansiBg(hexCodeBg)
+
+	var out strings.Builder
+	out.WriteString(hBg + accentFg + bdr.TopLeft + bFg + strings.Repeat(bdr.Top, innerWidth) + bdr.TopRight + "\x1b[0m\n")
+	out.WriteString(hBg + accentFg + bdr.Left + strings.TrimSuffix(header, "\x1b[0m") + hBg + bFg + bdr.Right + "\x1b[0m\n")
+	out.WriteString(cBg + accentFg + bdr.Left + strings.TrimSuffix(divider, "\x1b[0m") + cBg + bFg + bdr.Right + "\x1b[0m\n")
+	for _, bl := range strings.Split(body, "\n") {
+		out.WriteString(cBg + accentFg + bdr.Left + strings.TrimSuffix(bl, "\x1b[0m") + cBg + bFg + bdr.Right + "\x1b[0m\n")
+	}
+	out.WriteString(cBg + accentFg + bdr.BottomLeft + bFg + strings.Repeat(bdr.Bottom, innerWidth) + bdr.BottomRight + "\x1b[0m\n\n")
+	return out.String()
+}
+
+func (m *Model) updateActiveCard(newContent string) {
+	if len(m.History) == 0 {
+		return
+	}
+	if m.ActiveCardHistoryIdx >= 0 && m.ActiveCardHistoryIdx < len(m.History) {
+		m.History[m.ActiveCardHistoryIdx].Content = newContent
+		return
+	}
+	for i := len(m.History) - 1; i >= 0; i-- {
+		if m.History[i].Type == BlockComponent {
+			m.History[i].Content = newContent
+			return
+		}
+	}
+	m.History[len(m.History)-1].Content = newContent
+}
+
+func (m *Model) restoreInputStyles() {
+	m.Input.Prompt = "❯ "
+	tas := m.Input.Styles()
+	tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorCopperLight).Background(colorInputBg).Bold(true)
+	tas.Focused.Base = lipgloss.NewStyle().Background(colorInputBg)
+	tas.Focused.CursorLine = lipgloss.NewStyle().Background(colorInputBg)
+	tas.Focused.Text = lipgloss.NewStyle().Foreground(colorIvory).Background(colorInputBg)
+	m.Input.SetStyles(tas)
+	m.Input.Focus()
+}
+
+// renderSubCard renders an inner bordered box with a solid background and a subtle thin colored left accent bar ("│"),
+// safe to nest inside renderSolidBox without background color bleeding.
+func renderSubCard(content string, totalWidth int, padY, padX int, bgHex, fgHex, leftAccentHex, borderHex string) string {
+	if totalWidth < 8 {
+		totalWidth = 8
+	}
+	innerWidth := totalWidth - 2
+	contentWidth := innerWidth - (padX * 2)
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	bgSeq := ansiBg(bgHex)
+	fgSeq := ansiFg(fgHex)
+	accentSeq := ansiFg(leftAccentHex)
+	bFgSeq := ansiFg(borderHex)
+	bdr := lipgloss.NormalBorder()
+
+	leftPad := strings.Repeat(" ", padX)
+	rightPad := strings.Repeat(" ", padX)
+	emptyRow := bgSeq + accentSeq + bdr.Left + bgSeq + fgSeq + strings.Repeat(" ", innerWidth) + bgSeq + bFgSeq + bdr.Right + "\x1b[0m"
+
+	var rawLines []string
+	for _, l := range strings.Split(content, "\n") {
+		if lipgloss.Width(l) > contentWidth {
+			sub := lipgloss.NewStyle().Width(contentWidth).Render(l)
+			rawLines = append(rawLines, strings.Split(sub, "\n")...)
+		} else {
+			rawLines = append(rawLines, l)
+		}
+	}
+
+	var out strings.Builder
+	out.WriteString(bgSeq + accentSeq + bdr.TopLeft + bFgSeq + strings.Repeat(bdr.Top, innerWidth) + bdr.TopRight + "\x1b[0m\n")
+	for i := 0; i < padY; i++ {
+		out.WriteString(emptyRow + "\n")
+	}
+	for _, line := range rawLines {
+		visW := lipgloss.Width(line)
+		fill := contentWidth - visW
+		if fill < 0 {
+			fill = 0
+		}
+		painted := applySurfaceLine(line, bgHex, fgHex)
+		out.WriteString(bgSeq + accentSeq + bdr.Left + bgSeq + fgSeq + leftPad + painted + strings.Repeat(" ", fill) + rightPad + bgSeq + bFgSeq + bdr.Right + "\x1b[0m\n")
+	}
+	for i := 0; i < padY; i++ {
+		out.WriteString(emptyRow + "\n")
+	}
+	out.WriteString(bgSeq + accentSeq + bdr.BottomLeft + bFgSeq + strings.Repeat(bdr.Bottom, innerWidth) + bdr.BottomRight + "\x1b[0m")
+	return out.String()
+}
+
+// renderNotification renders a sleek, boutique telemetry notification line (BlockComponent)
+// matching the aesthetic of tool/skill execution without creating an assistant message body box.
+func (m *Model) renderNotification(icon, title, detail, badge string) string {
+	sigilColor := colorCopperSpecular
+	switch icon {
+	case "✓":
+		sigilColor = colorLedEmerald
+	case "✕":
+		sigilColor = colorLedCrimson
+	case "⚙":
+		sigilColor = colorSapphireBright
+	case "◆":
+		sigilColor = colorGold
+	case "◈":
+		sigilColor = colorCopperLight
+	case "⚡":
+		sigilColor = colorCopperSpecular
+	}
+
+	iconStyle := lipgloss.NewStyle().Foreground(sigilColor).Bold(true)
+	titleStyle := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
+	detailStyle := lipgloss.NewStyle().Foreground(colorIvory)
+	badgeStyle := lipgloss.NewStyle().Foreground(colorAsh)
+
+	var sb strings.Builder
+	sb.WriteString("  " + iconStyle.Render(icon) + " ")
+	if title != "" {
+		sb.WriteString(titleStyle.Render(title) + " ")
+	}
+	if detail != "" {
+		sb.WriteString(detailStyle.Render(detail) + " ")
+	}
+	if badge != "" {
+		sb.WriteString(badgeStyle.Render("[" + badge + "]"))
+	}
+	sb.WriteString("\n\n")
+	return sb.String()
+}
+
+// renderExecutionBanner renders a compact telemetry block matching .tui-execution-confirmed in the TUI CSS.
+func (m *Model) renderExecutionBanner(kind, title, detail, badge string, width int) string {
+	boxWidth := width - 2
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	innerWidth := boxWidth - 6
+
+	bgHex := "#0A1410"
+	accentHex := hexLedEmerald
+	borderHex := "#193829"
+	icon := "✓"
+	titleColor := colorLedEmerald
+	badgeColor := colorCopperSpecular
+
+	switch kind {
+	case "started":
+		bgHex = "#10131A"
+		accentHex = hexSapphireBright
+		borderHex = hexSapphireDeep
+		icon = "⚙"
+		titleColor = colorSapphireBright
+	case "swarm":
+		bgHex = hexSpecialistBlockBg
+		accentHex = hexCopper
+		borderHex = hexCopperLine
+		icon = "⚡"
+		titleColor = colorCopperLight
+	case "failed":
+		bgHex = "#180C0E"
+		accentHex = hexLedCrimson
+		borderHex = "#4A1820"
+		icon = "✕"
+		titleColor = colorLedCrimson
+		badgeColor = colorLedCrimson
+	}
+
+	left := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(icon+" "+strings.ToUpper(title)) +
+		"  " +
+		lipgloss.NewStyle().Foreground(colorIvory).Render(detail)
+	right := lipgloss.NewStyle().Foreground(badgeColor).Bold(true).Render(badge)
+
+	gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(right)
+	var row string
+	if gap >= 2 {
+		row = left + strings.Repeat(" ", gap) + right
+	} else {
+		row = left + "\n" + right
+	}
+
+	return renderSubCard(row, boxWidth, 0, 2, bgHex, hexIvory, accentHex, borderHex) + "\n"
 }
 
 func (m *Model) renderPlan(jsonStr string, width int, status string) string {
@@ -1712,56 +2792,94 @@ func (m *Model) renderPlan(jsonStr string, width int, status string) string {
 		return errorStyle.Render(fmt.Sprintf("❌ Error parsing plan: %v", err))
 	}
 
-	boxWidth := width - 10
-	if boxWidth < 50 {
-		boxWidth = 50
+	boxWidth := width - 2
+	if boxWidth < 54 {
+		boxWidth = 54
+	}
+	contentWidth := boxWidth - 6 // 2 border + 4 horizontal padding
+
+	accentStyle := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true)
+	kickerStyle := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(colorAsh)
+	stoneStyle := lipgloss.NewStyle().Foreground(colorStone)
+	ivoryBold := lipgloss.NewStyle().Foreground(colorIvory).Bold(true)
+	divider := lipgloss.NewStyle().Foreground(colorCopperLine).Render(strings.Repeat("─", contentWidth))
+
+	estText := strings.TrimSpace(plan.Estimations)
+	if estText == "" {
+		estText = "DETERMINISTIC"
 	}
 
-	accentStyle := lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-	phaseStyle := lipgloss.NewStyle().Foreground(colorEmerald).Bold(true)
-	assigneeStyle := lipgloss.NewStyle().Foreground(colorOrange)
-	opaqeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#999999")).Faint(true)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Italic(true)
-	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8"))
-	mutedStyle := lipgloss.NewStyle().Foreground(colorMutedGray).Faint(true)
-	divider := mutedStyle.Render(strings.Repeat("─", boxWidth-6))
-
-	doc := strings.Builder{}
-
-	taskSnippet := plan.Goal
-	if len(taskSnippet) > 55 {
-		taskSnippet = taskSnippet[:55] + "…"
+	outerBorderHex := hexCopperSpecular
+	var statusBadge string
+	switch {
+	case strings.Contains(status, "ACCEPTED"):
+		outerBorderHex = hexLedEmerald
+		statusBadge = renderPill(" ✓ "+status+" ", hexLedEmerald, hexVoid, true)
+	case strings.Contains(status, "AMENDED"):
+		outerBorderHex = hexCopper
+		statusBadge = renderPill(" ↻ "+status+" ", "#261B0E", hexCopperLight, true)
+	case status != "":
+		outerBorderHex = hexLedCrimson
+		statusBadge = renderPill(" ✕ "+status+" ", hexLedCrimson, hexVoid, true)
+	default:
+		outerBorderHex = hexCopperSpecular
+		statusBadge = renderPill(" ● AWAITING HITL DECISION ", "#261B0E", hexLedAmber, true)
 	}
-	phaseBadge := fmt.Sprintf("%d phases · %s", len(plan.Phases), plan.Estimations)
-	headerLeft := accentStyle.Render("◈ PLAN PROPOSAL") +
-		lipgloss.NewStyle().Foreground(colorMutedGray).Render(" | "+taskSnippet)
-	headerRight := opaqeStyle.
-		Border(lipgloss.Border{Left: "┃"}, false, false, false, true).
-		BorderForeground(colorMutedGray).
-		Background(lipgloss.Color("#161C1D")).
-		PaddingLeft(1).
-		Render(phaseBadge)
-	pad := boxWidth - 6 - lipgloss.Width(headerLeft) - lipgloss.Width(headerRight)
-	if pad < 1 {
-		pad = 1
-	}
-	doc.WriteString(headerLeft + strings.Repeat(" ", pad) + headerRight + "\n")
-	doc.WriteString(divider)
 
-	// NARRATIVE
-	if plan.Narrative != "" {
+	var doc strings.Builder
+
+	// 1. Header Bar (.vraxter-block-head / .arc-header)
+	headerLeft := accentStyle.Render(`VRAXTER SUPERVISOR // .VRX IMPLEMENTATION STRATEGY`)
+	hPad := contentWidth - lipgloss.Width(headerLeft) - lipgloss.Width(statusBadge)
+	if hPad < 1 {
+		hPad = 1
+	}
+	doc.WriteString(headerLeft + strings.Repeat(" ", hPad) + statusBadge + "\n")
+	doc.WriteString(divider + "\n")
+
+	// 2. Executive Objective & Architectural Rationale Sub-Card
+	subInnerWidth := contentWidth - 6
+	if subInnerWidth < 20 {
+		subInnerWidth = 20
+	}
+
+	var summaryBuf strings.Builder
+	objKicker := kickerStyle.Render("◈ MISSION OBJECTIVE")
+	phaseCountPill := renderPill(fmt.Sprintf(" %d PHASES · %s ", len(plan.Phases), strings.ToUpper(estText)), hexSapphireDeep, hexSapphireBright, true)
+	objGap := subInnerWidth - lipgloss.Width(objKicker) - lipgloss.Width(phaseCountPill)
+	if objGap < 1 {
+		objGap = 1
+	}
+	summaryBuf.WriteString(objKicker + strings.Repeat(" ", objGap) + phaseCountPill + "\n")
+
+	goalWrapped := lipgloss.NewStyle().Foreground(colorIvory).Bold(true).Width(subInnerWidth).Render(strings.TrimSpace(plan.Goal))
+	summaryBuf.WriteString(goalWrapped)
+
+	if strings.TrimSpace(plan.Reasoning) != "" {
+		subDiv := lipgloss.NewStyle().Foreground(colorTitaniumMid).Render(strings.Repeat("─", subInnerWidth))
+		summaryBuf.WriteString("\n" + subDiv + "\n")
+		summaryBuf.WriteString(lipgloss.NewStyle().Foreground(colorCopper).Bold(true).Render("◈ ARCHITECTURAL RATIONALE") + "\n")
+		reasonWrapped := lipgloss.NewStyle().Foreground(colorStone).Width(subInnerWidth).Render(strings.TrimSpace(plan.Reasoning))
+		summaryBuf.WriteString(reasonWrapped)
+	}
+
+	if strings.TrimSpace(plan.Narrative) != "" {
 		empty := ""
 		zero := uint(0)
-		gold := "#FFD700"
-		emerald := "#00FF41"
-		orange := "#FFAA00"
+		gold := "#E2A576"
+		emerald := "#3CE68A"
+		orange := "#C87D4B"
+		ivory := "#F4F1EA"
 
 		ns := styles.DarkStyleConfig
 		ns.Document.BackgroundColor = &empty
+		ns.Document.Color = &ivory
 		ns.Document.Margin = &zero
 		ns.Paragraph.BackgroundColor = &empty
 		ns.Paragraph.Margin = &zero
 		ns.Text.BackgroundColor = &empty
+		ns.Text.Color = &ivory
 		ns.Heading.BackgroundColor = &empty
 		ns.Heading.Margin = &zero
 		ns.H1.BackgroundColor = &empty
@@ -1778,250 +2896,333 @@ func (m *Model) renderPlan(jsonStr string, width int, status string) string {
 
 		r, _ := glamour.NewTermRenderer(
 			glamour.WithStyles(ns),
-			glamour.WithWordWrap(boxWidth-6),
+			glamour.WithWordWrap(subInnerWidth),
 		)
 		rendered, _ := r.Render(plan.Narrative)
-		rendered = utils.StripANSIBackgrounds(rendered)
-		doc.WriteString(rendered)
-		doc.WriteString(divider + "\n")
+		rendered = strings.TrimSpace(utils.StripANSIBackgrounds(rendered))
+		if rendered != "" {
+			subDiv := lipgloss.NewStyle().Foreground(colorTitaniumMid).Render(strings.Repeat("─", subInnerWidth))
+			summaryBuf.WriteString("\n" + subDiv + "\n")
+			summaryBuf.WriteString(mutedStyle.Bold(true).Render("◈ STRATEGY NOTES") + "\n")
+			summaryBuf.WriteString(rendered)
+		}
 	}
 
-	// GOAL + REASONING
-	goalText := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#c8c8c8")).
-		Width(boxWidth - 14).
-		Render(plan.Goal)
-	doc.WriteString(accentStyle.Render("🎯 Goal:  ") + goalText + "\n")
+	doc.WriteString(renderSubCard(summaryBuf.String(), contentWidth, 0, 2, hexCodeHeaderBg, hexIvory, hexCopper, hexTitaniumMid) + "\n\n")
 
-	reasonText := lipgloss.NewStyle().
-		Foreground(colorMutedGray).
-		Width(boxWidth - 14).
-		Render(plan.Reasoning)
-	doc.WriteString(accentStyle.Italic(true).Render("🤔 Why:   ") + reasonText + "\n")
+	// 3. Execution Phases Stack (.plan-step-pill sub-cards)
+	doc.WriteString(kickerStyle.Render("// EXECUTION PHASES & SPECIALIST ROUTING") + "\n")
 
-	doc.WriteString(divider + "\n")
-
-	// PHASES
 	for i, p := range plan.Phases {
-		// Phase header
-		doc.WriteString(fmt.Sprintf("%s %d  %s\n",
-			phaseStyle.Render("Phase"),
-			i+1,
-			textStyle.Bold(true).Render(p.Title),
-		))
+		var phaseBuf strings.Builder
 
-		// Description
-		if p.Description != "" {
-			doc.WriteString(descStyle.Render("   "+p.Description) + "\n")
+		phaseNumPill := renderPill(fmt.Sprintf(" PHASE %02d ", i+1), "#271E18", hexCopperSpecular, true)
+		specName := strings.TrimPrefix(strings.TrimSpace(p.Specialist), "@")
+		if specName == "" {
+			specName = "supervisor"
 		}
+		specPill := renderPill(" ⚡ @"+strings.ToUpper(specName)+" ", "#0E2018", hexLedEmerald, true)
 
-		// Tasks
-		for _, t := range p.Tasks {
-			doc.WriteString(opaqeStyle.Render(fmt.Sprintf("   ─ %s", t)) + "\n")
-		}
-
-		// Assignee
-		doc.WriteString(
-			assigneeStyle.Bold(true).Render("   ◆ ") +
-				assigneeStyle.Render("Asignee: ") +
-				lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8")).Bold(true).Render(p.Specialist) + "\n",
-		)
-
-		if i < len(plan.Phases)-1 {
-			doc.WriteString("\n")
-		}
-	}
-
-	doc.WriteString("\n" + divider + "\n")
-	doc.WriteString(accentStyle.Render("⏳ Estimate: ") + opaqeStyle.Render(plan.Estimations))
-
-	if status != "" {
-		doc.WriteString("\n" + divider + "\n")
-		statusStyle := lipgloss.NewStyle().Bold(true).Padding(0, 1)
-		if strings.Contains(status, "ACCEPTED") {
-			statusStyle = statusStyle.Foreground(colorEmerald)
+		titleText := ivoryBold.Render(strings.TrimSpace(p.Title))
+		leftHead := phaseNumPill + "  " + titleText
+		pGap := subInnerWidth - lipgloss.Width(leftHead) - lipgloss.Width(specPill)
+		if pGap >= 1 {
+			phaseBuf.WriteString(leftHead + strings.Repeat(" ", pGap) + specPill)
 		} else {
-			statusStyle = statusStyle.Foreground(lipgloss.Color("#FF5252"))
-		}
-		doc.WriteString(statusStyle.Render(status))
-	} else if m.IsWaitingForApproval {
-		doc.WriteString("\n" + divider + "\n")
-
-		labels := []string{"PROCEED", "REJECT", "AMEND"}
-		colors := []color.Color{
-			colorEmerald,
-			lipgloss.Color("#FF5252"),
-			colorGold,
+			phaseBuf.WriteString(leftHead + "\n" + specPill)
 		}
 
-		var parts []string
-		for i, label := range labels {
-			s := lipgloss.NewStyle().Foreground(colors[i]).Bold(i == m.PlanActionIndex)
-			if i == m.PlanActionIndex {
-				s = s.Reverse(true)
-			} else {
-				s = s.Faint(true)
+		if strings.TrimSpace(p.Description) != "" || len(p.Tasks) > 0 {
+			subDiv := lipgloss.NewStyle().Foreground(colorTitaniumMid).Render(strings.Repeat("─", subInnerWidth))
+			phaseBuf.WriteString("\n" + subDiv)
+		}
+
+		if strings.TrimSpace(p.Description) != "" {
+			descWrapped := stoneStyle.Width(subInnerWidth).Render(strings.TrimSpace(p.Description))
+			phaseBuf.WriteString("\n" + descWrapped)
+		}
+
+		if len(p.Tasks) > 0 {
+			bullet := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("▸ ")
+			taskWrapW := subInnerWidth - 3
+			if taskWrapW < 10 {
+				taskWrapW = 10
 			}
-			parts = append(parts, s.Render(" "+label+" "))
+			for _, t := range p.Tasks {
+				wrappedTask := lipgloss.NewStyle().Foreground(colorIvory).Width(taskWrapW).Render(strings.TrimSpace(t))
+				tLines := strings.Split(wrappedTask, "\n")
+				for li, tl := range tLines {
+					if li == 0 {
+						phaseBuf.WriteString("\n " + bullet + tl)
+					} else {
+						phaseBuf.WriteString("\n   " + tl)
+					}
+				}
+			}
 		}
 
-		hintStyle := lipgloss.NewStyle().Foreground(colorMutedGray).Faint(true)
-		doc.WriteString(hintStyle.Render("◈ ") + strings.Join(parts, "  "))
+		doc.WriteString(renderSubCard(phaseBuf.String(), contentWidth, 0, 2, hexCodeBg, hexIvory, hexSapphireBright, hexTitaniumMid) + "\n")
 	}
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#2a2a2a")).
-		Padding(1, 2).
-		Width(boxWidth).
-		Render(doc.String())
+	// 4. Footer Telemetry Bar
+	doc.WriteString(divider + "\n")
+	estLeft := kickerStyle.Render("⏳ ESTIMATE: ") +
+		ivoryBold.Render(estText) +
+		mutedStyle.Render("  ·  SEMANTIC HANDOFF MASK ACTIVE")
+
+	var footerRight string
+	switch {
+	case strings.Contains(status, "ACCEPTED"):
+		footerRight = lipgloss.NewStyle().Foreground(colorLedEmerald).Bold(true).Render("SWARM DISPATCHED · DAEMON RUNNING")
+	case strings.Contains(status, "AMENDED"):
+		footerRight = lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("RE-SYNTHESIZING STRATEGY")
+	case status != "":
+		footerRight = lipgloss.NewStyle().Foreground(colorLedCrimson).Bold(true).Render("EXECUTION ABORTED")
+	default:
+		footerRight = lipgloss.NewStyle().Foreground(colorLedAmber).Bold(true).Render("←/→ SELECT · ↵ CONFIRM · ESC REJECT")
+	}
+
+	fGap := contentWidth - lipgloss.Width(estLeft) - lipgloss.Width(footerRight)
+	if fGap >= 1 {
+		doc.WriteString(estLeft + strings.Repeat(" ", fGap) + footerRight)
+	} else {
+		doc.WriteString(estLeft + "\n" + footerRight)
+	}
+
+	return renderSolidBox(doc.String(), boxWidth, 1, 2, hexApprovalCardBg, hexIvory, lipgloss.NormalBorder(), outerBorderHex) + "\n"
 }
 
-// renderSkillApproval visually formats the Skill Approval prompt
+// renderSkillApproval visually formats the Skill Approval prompt (.tui-approval-request-card in CSS)
 func (m *Model) renderSkillApproval(skillID, payload string, width int, status string) string {
-	boxWidth := width - 10
-	if boxWidth > 110 {
-		boxWidth = 110
+	boxWidth := width - 2
+	if boxWidth < 54 {
+		boxWidth = 54
 	}
-	if boxWidth < 50 {
-		boxWidth = 50
-	}
+	contentWidth := boxWidth - 6
 
 	var doc strings.Builder
 
-	// Header
-	accentColor := lipgloss.Color("#FF9800") // Orange/Warning
-	headerStyle := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(lipgloss.Color("#444")).Width(boxWidth - 4)
-	doc.WriteString(headerStyle.Render("🔒 ENTERPRISE POLICY: MANUAL SKILL APPROVAL REQUIRED") + "\n\n")
+	headerTitle := lipgloss.NewStyle().Foreground(colorLedAmber).Bold(true).Render("🔒 ENTERPRISE POLICY: MANUAL SKILL APPROVAL REQUIRED")
+	outerBorderHex := hexCopperSpecular
+	var statusBadge string
+	if status != "" {
+		if strings.Contains(status, "APPROVED") {
+			outerBorderHex = hexLedEmerald
+			statusBadge = renderPill(" ✓ "+status+" ", hexLedEmerald, hexVoid, true)
+		} else {
+			outerBorderHex = hexLedCrimson
+			statusBadge = renderPill(" ✕ "+status+" ", hexLedCrimson, hexVoid, true)
+		}
+	} else {
+		statusBadge = renderPill(" ● WAITING FOR INPUT DECISION ", "#261B0E", hexLedAmber, true)
+	}
 
-	// Info
-	doc.WriteString(lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("Skill ID: %s", skillID)) + "\n\n")
+	hPad := contentWidth - lipgloss.Width(headerTitle) - lipgloss.Width(statusBadge)
+	if hPad < 1 {
+		hPad = 1
+	}
+	doc.WriteString(headerTitle + strings.Repeat(" ", hPad) + statusBadge + "\n")
+	doc.WriteString(lipgloss.NewStyle().Foreground(colorCopperLine).Render(strings.Repeat("─", contentWidth)) + "\n")
 
-	// Payload JSON parsed for reading
+	kStyle := lipgloss.NewStyle().Foreground(colorAsh)
+	vStyle := lipgloss.NewStyle().Foreground(colorIvory).Bold(true)
+	cStyle := lipgloss.NewStyle().Foreground(colorCopperSpecular)
+
+	var isoBadge string
+	switch m.IsolationMode {
+	case "local_lan":
+		isoBadge = lipgloss.NewStyle().Foreground(lipgloss.Color("#7AA2F7")).Bold(true).Render("LOCAL_LAN")
+	case "hybrid":
+		isoBadge = lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true).Render("HYBRID")
+	default:
+		isoBadge = lipgloss.NewStyle().Foreground(colorLedEmerald).Bold(true).Render("🛡️ AIRGAP (ZERO EGRESS)")
+	}
+
+	metaRow := kStyle.Render("SKILL ID & BINARY: ") + vStyle.Render(skillID) + " " + cStyle.Render("(Wazero WASI Sandbox)") +
+		"   " + kStyle.Render("PERIMETER: ") + isoBadge
+	doc.WriteString(metaRow + "\n\n")
+
+	var paramContent string
 	var call types.ToolCall
 	if err := json.Unmarshal([]byte(payload), &call); err == nil {
 		pretty, _ := json.MarshalIndent(call.Params, "", "  ")
-		doc.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8")).Render(string(pretty)) + "\n")
+		paramContent = lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("◆ INVOCATION PAYLOAD") + "\n" +
+			lipgloss.NewStyle().Foreground(colorStone).Render(string(pretty))
 	} else {
-		doc.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8")).Render(payload) + "\n")
+		paramContent = lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("◆ INVOCATION PAYLOAD") + "\n" +
+			lipgloss.NewStyle().Foreground(colorStone).Render(payload)
 	}
+	doc.WriteString(renderSubCard(paramContent, contentWidth, 0, 2, hexCodeBg, hexStone, hexSapphireBright, hexTitaniumMid))
 
-	if status != "" {
-		doc.WriteString("\n")
-		statusStyle := lipgloss.NewStyle().Bold(true).Padding(0, 1)
-		if strings.Contains(status, "APPROVED") {
-			statusStyle = statusStyle.Foreground(colorEmerald)
-		} else {
-			statusStyle = statusStyle.Foreground(lipgloss.Color("#FF5252"))
-		}
-		doc.WriteString(statusStyle.Render(status))
-	} else if m.IsWaitingForSkillApproval {
-		doc.WriteString("\n")
-		labels := []string{"APPROVE", "REJECT"}
-		colors := []color.Color{colorEmerald, lipgloss.Color("#FF5252")}
-		var parts []string
-		for i, label := range labels {
-			s := lipgloss.NewStyle().Foreground(colors[i]).Bold(i == m.PlanActionIndex)
-			if i == m.PlanActionIndex {
-				s = s.Reverse(true)
-			} else {
-				s = s.Faint(true)
-			}
-			parts = append(parts, s.Render(" "+label+" "))
-		}
-		hintStyle := lipgloss.NewStyle().Foreground(colorMutedGray).Faint(true)
-		doc.WriteString(hintStyle.Render("◈ ") + strings.Join(parts, "  "))
-	}
-
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(accentColor).
-		Padding(1, 2).
-		Width(boxWidth).
-		Render(doc.String())
+	return renderSolidBox(doc.String(), boxWidth, 1, 2, hexApprovalCardBg, hexIvory, lipgloss.NormalBorder(), outerBorderHex) + "\n"
 }
 
+// renderDecisionBridge renders the interactive approval bar directly inside the Input Shelf (.tui-input-shelf.is-approval)
 func (m *Model) renderDecisionBridge(width int) string {
 	if m.PendingRunSkill != "" {
 		return m.renderSkillRunPrompt(width)
 	}
-	btnStyle := lipgloss.NewStyle().Bold(true).Padding(0, 3).MarginRight(1)
-
-	proceedBase := btnStyle.Copy().Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#1B5E20")).Foreground(lipgloss.Color("#1B5E20"))
-	rejectBase := btnStyle.Copy().Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#B71C1C")).Foreground(lipgloss.Color("#B71C1C"))
-	amendBase := btnStyle.Copy().Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#FF8F00")).Foreground(lipgloss.Color("#FF8F00"))
-
-	if m.PlanActionIndex == 0 {
-		proceedBase = proceedBase.Copy().Background(colorEmerald).
-			Foreground(colorOnyx).BorderForeground(colorEmerald)
-	} else if m.PlanActionIndex == 1 {
-		rejectBase = rejectBase.Copy().Background(lipgloss.Color("#FF5252")).
-			Foreground(colorOnyx).BorderForeground(lipgloss.Color("#FF5252"))
-	} else if m.PlanActionIndex == 2 {
-		amendBase = amendBase.Copy().Background(lipgloss.Color("#FFD54F")).
-			Foreground(colorOnyx).BorderForeground(lipgloss.Color("#FFD54F"))
+	contentWidth := width - 6
+	if contentWidth < 20 {
+		contentWidth = 20
 	}
 
-	buttons := lipgloss.JoinHorizontal(lipgloss.Top,
-		proceedBase.Render("PROCEED"),
-		rejectBase.Render("REJECT"),
-		amendBase.Render("AMEND"),
-	)
+	var proceedBtn, rejectBtn, amendBtn string
+	if m.PlanActionIndex == 0 {
+		proceedBtn = renderPill(" ✓ ACCEPT / PROCEED [↵] ", hexLedEmerald, hexVoid, true)
+	} else {
+		proceedBtn = renderPill(" ✓ ACCEPT / PROCEED [↵] ", "#0E2018", hexLedEmerald, true)
+	}
 
-	content := buttons
+	if m.PlanActionIndex == 1 {
+		rejectBtn = renderPill(" ✕ DENY / REJECT [ESC] ", hexLedCrimson, hexVoid, true)
+	} else {
+		rejectBtn = renderPill(" ✕ DENY / REJECT [ESC] ", "#221114", hexLedCrimson, true)
+	}
+
+	buttons := proceedBtn + "  " + rejectBtn
+	labelText := "◈ AUTHORIZE PLAN EXECUTION"
+	if m.IsWaitingForSkillApproval {
+		labelText = "◈ AUTHORIZE SKILL EXECUTION"
+	} else {
+		if m.PlanActionIndex == 2 {
+			amendBtn = renderPill(" AMEND ", hexLedAmber, hexVoid, true)
+		} else {
+			amendBtn = renderPill(" AMEND ", "#211810", hexCopperLight, true)
+		}
+		buttons = buttons + "  " + amendBtn
+	}
+
+	amberDot := lipgloss.NewStyle().Foreground(colorLedAmber).Bold(true).Render("━ ")
+	label := amberDot + lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true).Render(labelText)
+
+	gap := contentWidth - lipgloss.Width(label) - lipgloss.Width(buttons)
+	if gap < 1 {
+		gap = 1
+	}
+	row := label + strings.Repeat(" ", gap) + buttons
+
+	content := row
 	if m.ShowAmendInput {
 		m.Input.Prompt = "❯ FEEDBACK: "
 		tas := m.Input.Styles()
-		tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorOrange).Bold(true)
+		tas.Focused.Prompt = lipgloss.NewStyle().Foreground(colorCopper).Background(colorApprovalShelfBg).Bold(true)
+		tas.Focused.Base = lipgloss.NewStyle().Background(colorApprovalShelfBg)
+		tas.Focused.CursorLine = lipgloss.NewStyle().Background(colorApprovalShelfBg)
+		tas.Focused.Text = lipgloss.NewStyle().Foreground(colorIvory).Background(colorApprovalShelfBg)
 		m.Input.SetStyles(tas)
-		content = lipgloss.JoinVertical(lipgloss.Left,
-			buttons,
-			lipgloss.NewStyle().PaddingTop(1).Render(m.Input.View()),
-		)
+		div := lipgloss.NewStyle().Foreground(colorCopperLine).Render(strings.Repeat("─", contentWidth))
+		content = row + "\n" + div + "\n" + m.Input.View()
 	}
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), true, false, false, false).
-		BorderForeground(lipgloss.Color("#2a2a2a")). // más sutil que gold
-		Padding(1, 0).
-		Width(width).
-		Render(content)
+	return renderSolidBox(content, width, 0, 2, hexApprovalShelfBg, hexIvory, lipgloss.NormalBorder(), hexCopperSpecular)
 }
 
 func (m *Model) renderSkillRunPrompt(width int) string {
-	btnStyle := lipgloss.NewStyle().Bold(true).Padding(0, 3).MarginRight(1)
-
-	runBase := btnStyle.Copy().Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#1B5E20")).Foreground(lipgloss.Color("#1B5E20"))
-	dismissBase := btnStyle.Copy().Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#555555")).Foreground(lipgloss.Color("#555555"))
-
-	if m.PlanActionIndex == 0 {
-		runBase = runBase.Copy().Background(colorEmerald).
-			Foreground(colorOnyx).BorderForeground(colorEmerald)
-	} else if m.PlanActionIndex == 1 {
-		dismissBase = dismissBase.Copy().Background(lipgloss.Color("#888888")).
-			Foreground(colorOnyx).BorderForeground(lipgloss.Color("#888888"))
+	contentWidth := width - 6
+	if contentWidth < 20 {
+		contentWidth = 20
 	}
 
-	buttons := lipgloss.JoinHorizontal(lipgloss.Top,
-		runBase.Render("RUN NOW"),
-		dismissBase.Render("DONE"),
-	)
+	var runBtn, dismissBtn string
+	if m.PlanActionIndex == 0 {
+		runBtn = renderPill(" ✓ RUN NOW [↵] ", hexLedEmerald, hexVoid, true)
+	} else {
+		runBtn = renderPill(" ✓ RUN NOW [↵] ", "#0E2018", hexLedEmerald, true)
+	}
 
-	label := lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render(fmt.Sprintf("◈ SKILL READY: %s ", m.PendingRunSkill))
+	if m.PlanActionIndex == 1 {
+		dismissBtn = renderPill(" DONE [ESC] ", hexAsh, hexVoid, true)
+	} else {
+		dismissBtn = renderPill(" DONE [ESC] ", hexTitaniumMid, hexStone, true)
+	}
 
-	content := lipgloss.JoinHorizontal(lipgloss.Center, label, buttons)
+	buttons := runBtn + "  " + dismissBtn
+	amberDot := lipgloss.NewStyle().Foreground(colorLedAmber).Bold(true).Render("━ ")
+	label := amberDot + lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true).Render(fmt.Sprintf("◈ SKILL READY: %s", m.PendingRunSkill))
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), true, false, false, false).
-		BorderForeground(lipgloss.Color("#2a2a2a")).
-		Padding(1, 0).
-		Width(width).
-		Render(content)
+	gap := contentWidth - lipgloss.Width(label) - lipgloss.Width(buttons)
+	if gap < 1 {
+		gap = 1
+	}
+	row := label + strings.Repeat(" ", gap) + buttons
+
+	return renderSolidBox(row, width, 0, 2, hexApprovalShelfBg, hexIvory, lipgloss.NormalBorder(), hexCopperSpecular)
+}
+
+// renderCommandDeck renders the Top Rail (.deck-top-rail) of the Double-Rail Command Deck.
+func (m *Model) renderCommandDeck() string {
+	panelWidth := m.width - 2
+	if panelWidth < 20 {
+		panelWidth = 20
+	}
+
+	outerLineStyle := lipgloss.NewStyle().Foreground(colorSlate)
+	innerLineStyle := lipgloss.NewStyle().Foreground(colorCopperLine)
+	shortcutStyle := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true)
+
+	shortcutText := " /? HELP • Shift+↵ NEWLINE • ^C QUIT "
+	if m.IsWaitingForApproval || m.IsWaitingForSkillApproval {
+		shortcutText = " ←/→ NAVIGATE • ENTER CONFIRM • ESC REJECT "
+	}
+	shortcuts := shortcutStyle.Render(shortcutText)
+
+	// Running jobs pill (.rail-jobs-pill)
+	activeJobsPill := ""
+	if len(m.ActiveJobs) > 0 {
+		var titles []string
+		for _, j := range m.ActiveJobs {
+			titles = append(titles, j.Title)
+		}
+		label := fmt.Sprintf(" ⚙ %d RUNNING: %s ", len(m.ActiveJobs), strings.Join(titles, ", "))
+		if len(label) > 38 {
+			label = label[:35] + "... "
+		}
+		activeJobsPill = " " + renderPill(label, hexCopper, hexVoid, true) + " "
+	}
+
+	// Focus Identity Pill (.rail-focus-pill)
+	identityLabel := "FOCUS: SUPERVISOR FOCUS"
+	if m.IsWaitingForApproval || m.IsWaitingForSkillApproval {
+		identityLabel = "FOCUS: VRAXTER SHIELD (HITL GATE)"
+	} else if m.SpecialistBanner != "" {
+		identityLabel = fmt.Sprintf("FOCUS: @%s", m.SpecialistBanner)
+	}
+	focusBorder := lipgloss.NewStyle().Foreground(colorCopperLineStrong).Render("│")
+	focusInner := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render(" " + identityLabel + " ")
+	focusPill := ansiBg(hexFocusPillBg) + applySurfaceLine(focusBorder+focusInner+focusBorder, hexFocusPillBg, hexCopperLight) + "\x1b[0m"
+
+	// Ambient Isolation Capsule (.rail-isolation-pill)
+	isolationCapsule := ""
+	switch m.IsolationMode {
+	case "local_lan":
+		isoBorder := lipgloss.NewStyle().Foreground(lipgloss.Color("#2E3A4E")).Render("│")
+		isoInner := lipgloss.NewStyle().Foreground(lipgloss.Color("#7AA2F7")).Bold(true).Render(" 🌐 LAN ONLY ")
+		isolationCapsule = " " + ansiBg("#12161F") + isoBorder + isoInner + isoBorder + "\x1b[0m"
+	case "hybrid":
+		isoBorder := lipgloss.NewStyle().Foreground(colorCopperLineStrong).Render("│")
+		isoInner := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true).Render(" ⚡ HYBRID ")
+		isolationCapsule = " " + ansiBg("#20150E") + isoBorder + isoInner + isoBorder + "\x1b[0m"
+	default: // "airgap"
+		lockLabel := "AIRGAP LOCKED"
+		if !m.IsAirgapLocked && m.IsolationMode != "airgap" && m.IsolationMode != "" {
+			lockLabel = "AIRGAP STRICT"
+		}
+		isoBorder := lipgloss.NewStyle().Foreground(lipgloss.Color("#1B4D3E")).Render("│")
+		isoInner := lipgloss.NewStyle().Foreground(lipgloss.Color("#38FFA3")).Bold(true).Render(" 🛡️ " + lockLabel + " ")
+		isolationCapsule = " " + ansiBg("#0A1A12") + isoBorder + isoInner + isoBorder + "\x1b[0m"
+	}
+
+	leftPart := outerLineStyle.Render("──") + shortcuts + activeJobsPill
+	rightPart := isolationCapsule + " " + focusPill + outerLineStyle.Render(" ──")
+
+	gapWidth := panelWidth - lipgloss.Width(leftPart) - lipgloss.Width(rightPart)
+	if gapWidth < 1 {
+		gapWidth = 1
+	}
+	filler := innerLineStyle.Render(strings.Repeat("─", gapWidth))
+
+	return paintBlockSurface(" "+leftPart+filler+rightPart+" ", m.width, hexTuiBg, hexAsh)
 }
 
 func (m Model) fireExecution(query string) tea.Cmd {
@@ -2066,6 +3267,9 @@ func (m *Model) View() tea.View {
 		if sw, ok := m.ActiveSetup.(*StartupWizard); ok {
 			sw.width = m.width
 		}
+		if spw, ok := m.ActiveSetup.(*SpecialistWizard); ok {
+			spw.Width = m.width
+		}
 		content := "\033]0;Vraxter Workstation\007" + m.ActiveSetup.View().Content
 		v := tea.NewView(content)
 		v.AltScreen = true
@@ -2080,124 +3284,108 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
-	header := m.renderHeader()
+	panelWidth := m.width - 2
+	if panelWidth < 20 {
+		panelWidth = 20
+	}
+
+	// 1. Welcome Header (.tui-welcome-header)
+	header := " " + strings.ReplaceAll(m.renderHeader(), "\n", "\n ")
+
+	// 2. Top Rail of Command Deck (.deck-top-rail)
+	commandDeck := m.renderCommandDeck()
+
+	// 3. Autocomplete Overlay (.tui-autocomplete-overlay)
+	var autocompleteBlock string
+	if m.Autocomplete.IsActive && len(m.Autocomplete.Items) > 0 {
+		autocompleteBlock = " " + strings.ReplaceAll(m.renderAutocomplete(), "\n", "\n ")
+	}
+
+	// 4. Input Shelf (.tui-input-shelf: Active vs Inactive Streaming vs Approval Decision Bridge)
+	var rawInputShelf string
+	if m.IsWaitingForApproval || m.IsWaitingForSkillApproval {
+		rawInputShelf = m.renderDecisionBridge(panelWidth)
+	} else if m.IsStreaming || m.IsPlanning {
+		contentWidth := panelWidth - 6
+		if contentWidth < 10 {
+			contentWidth = 10
+		}
+		chevron := lipgloss.NewStyle().Foreground(colorSlate).Bold(true).Render("❯ ")
+		procLabel := "Vraxter is processing..."
+		badgeLabel := " INPUT LOCKED · STREAMING "
+		if m.IsPlanning {
+			procLabel = "Synthesizing .vrx implementation strategy..."
+			badgeLabel = " INPUT LOCKED · PLANNING "
+		}
+		procText := lipgloss.NewStyle().Foreground(colorAsh).Render(procLabel)
+		left := chevron + procText
+		badge := renderPill(badgeLabel, hexInactiveBadgeBg, hexAsh, false)
+		gap := contentWidth - lipgloss.Width(left) - lipgloss.Width(badge)
+		if gap < 1 {
+			gap = 1
+		}
+		row := left + strings.Repeat(" ", gap) + badge
+		rawInputShelf = renderSolidBox(row, panelWidth, 0, 2, hexTuiBg, hexAsh, lipgloss.NormalBorder(), hexTitaniumMid)
+	} else {
+		m.Input.SetWidth(panelWidth - 6)
+		rawInputShelf = renderSolidBox(m.Input.View(), panelWidth, 0, 2, hexInputBg, hexIvory, lipgloss.NormalBorder(), hexCopperLineStrong)
+	}
+	inputShelf := " " + strings.ReplaceAll(rawInputShelf, "\n", "\n ")
+
+	// 5. Bottom Rail (.deck-bottom-rail)
+	watermark := fmt.Sprintf(" © %d Vraxter · Sovereign Autonomous AI Engine ", time.Now().Year())
+	wmStyle := lipgloss.NewStyle().Foreground(colorAsh).Render(watermark)
+	wmWidth := lipgloss.Width(wmStyle)
+	lineStyle := lipgloss.NewStyle().Foreground(colorTitaniumLight)
+
+	var bottomRailInner string
+	if panelWidth > wmWidth+4 {
+		leftWidth := (panelWidth - wmWidth) / 2
+		rightWidth := panelWidth - leftWidth - wmWidth
+		bottomRailInner = lineStyle.Render(strings.Repeat("─", leftWidth)) + wmStyle + lineStyle.Render(strings.Repeat("─", rightWidth))
+	} else {
+		bottomRailInner = lineStyle.Render(strings.Repeat("─", panelWidth))
+	}
+	bottomRail := paintBlockSurface(" "+bottomRailInner+" ", m.width, hexTuiBg, hexAsh)
+
+	// 6. Sticky Status Bar (System Feedback)
+	var statusBar string
+	if m.StatusMessage != "" {
+		statusBar = paintBlockSurface(" 💡 "+m.StatusMessage, m.width, hexTitaniumDark, hexCopperLight)
+	}
+
+	// Calculate dynamic Viewport height so layout always fits screen
+	usedHeight := lipgloss.Height(header) + lipgloss.Height(commandDeck) + lipgloss.Height(inputShelf) + lipgloss.Height(bottomRail)
+	if autocompleteBlock != "" {
+		usedHeight += lipgloss.Height(autocompleteBlock)
+	}
+	if statusBar != "" {
+		usedHeight += lipgloss.Height(statusBar)
+	}
+	chatHeight := m.height - usedHeight
+	if chatHeight < 3 {
+		chatHeight = 3
+	}
+	m.Viewport.SetWidth(panelWidth)
+	m.Viewport.SetHeight(chatHeight)
 
 	chatArea := lipgloss.NewStyle().
 		Padding(0, 1).
-		Height(m.height - lipgloss.Height(header) - m.Input.Height() - 7). // Subtle Air Balance
+		Height(chatHeight).
 		Render(m.Viewport.View())
 
-	// --- COMMAND DECK (DOUBLE-RAIL CONSOLE) ---
-	footerWidth := m.width - 4
-
-	// 1. Top Rail w/ Integrated Shortcuts & Identity Pill
-	shortcutPills := lipgloss.NewStyle().
-		Foreground(colorGold).
-		Bold(true).
-		Render(" /? HELP • Shift+↵ NEWLINE • ^C QUIT ")
-
-	if m.IsWaitingForApproval {
-		shortcutPills = lipgloss.NewStyle().
-			Foreground(colorGold).
-			Bold(true).
-			Render(" ←/→ NAVIGATE • ENTER CONFIRM • ESC REJECT ")
+	var sections []string
+	sections = append(sections, header, chatArea)
+	if autocompleteBlock != "" {
+		sections = append(sections, autocompleteBlock)
+	}
+	sections = append(sections, commandDeck, inputShelf, bottomRail)
+	if statusBar != "" {
+		sections = append(sections, statusBar)
 	}
 
-	identityLabel := " FOCUS: SUPERVISOR FOCUS "
-	if m.SpecialistBanner != "" {
-		identityLabel = fmt.Sprintf(" FOCUS: %s ", m.SpecialistBanner)
-	}
-	identityPill := lipgloss.NewStyle().
-		Background(colorDeepGray).
-		Foreground(colorOrange).
-		Bold(true).
-		Render(identityLabel)
-
-	// Build the active jobs indicator
-	activeJobsStr := ""
-	if len(m.ActiveJobs) > 0 {
-		var titles []string
-		for _, j := range m.ActiveJobs {
-			titles = append(titles, j.Title)
-		}
-		label := fmt.Sprintf(" ⚙️ %d RUNNING: %s ", len(m.ActiveJobs), strings.Join(titles, ", "))
-		if len(label) > 40 {
-			label = label[:37] + "... "
-		}
-		activeJobsStr = lipgloss.NewStyle().
-			Background(colorGold).
-			Foreground(colorOnyx).
-			Bold(true).
-			Render(label)
-	}
-
-	// Build the line with the shortcuts embedded at the start and identity at the end
-	railTotalWidth := footerWidth - 2
-	var topLine string
-	
-	// Deduct widths of all components
-	usedSpace := lipgloss.Width(shortcutPills) + lipgloss.Width(identityPill) + lipgloss.Width(activeJobsStr) + 2
-	if usedSpace < railTotalWidth {
-		lineBg := strings.Repeat("─", railTotalWidth-usedSpace)
-		topLine = faintStyle.Render("──") + shortcutPills + activeJobsStr + faintStyle.Render("─"+lineBg+"─") + identityPill + faintStyle.Render("──")
-	} else {
-		topLine = faintStyle.Render("──") + shortcutPills + activeJobsStr + identityPill + faintStyle.Render("──")
-	}
-
-	// 2. Input Area
-	var inputShelf string
-	if m.IsWaitingForApproval {
-		inputShelf = m.renderDecisionBridge(footerWidth)
-	} else {
-		inputContent := m.Input.View()
-		if m.IsStreaming {
-			inputContent = faintStyle.Render("❯ Vraxter is processing...")
-		}
-
-		inputShelf = inputShelfStyle.
-			Width(footerWidth).
-			MaxWidth(footerWidth).
-			Render(inputContent)
-	}
-
-	// 3. Bottom Rail
-	// 3. Bottom Rail
-	watermark := fmt.Sprintf(" © %d Vraxter ", time.Now().Year())
-	wmStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render(watermark)
-	wmWidth := lipgloss.Width(wmStyle)
-	
-	var bottomRail string
-	if footerWidth > wmWidth + 4 {
-		leftWidth := (footerWidth - wmWidth) / 2
-		rightWidth := footerWidth - leftWidth - wmWidth
-		bottomRail = faintStyle.Render(strings.Repeat("─", leftWidth)) + wmStyle + faintStyle.Render(strings.Repeat("─", rightWidth))
-	} else {
-		bottomRail = faintStyle.Render(strings.Repeat("─", footerWidth))
-	}
-
-	// 4. Sticky Status Bar (System Feedback)
-	var statusBar string
-	if m.StatusMessage != "" {
-		statusBar = "\n" + statusBarStyle.Width(m.width).Render(" 💡 "+m.StatusMessage)
-	}
-
-	// 5. Autocomplete Overlay
-	var autocompleteBlock string
-	if m.Autocomplete.IsActive && len(m.Autocomplete.Items) > 0 {
-		autocompleteBlock = m.renderAutocomplete()
-	} else {
-		autocompleteBlock = "" // Subtle Air Spacer
-	}
-
-	content := "\033]0;Vraxter Workstation\007" + lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		chatArea,
-		topLine,
-		autocompleteBlock, // Replace Subtle Air Spacer with Autocomplete or empty string
-		inputShelf,
-		bottomRail,
-		statusBar,
-	)
+	fullScreen := paintBlockSurface(lipgloss.JoinVertical(lipgloss.Left, sections...), m.width, hexTuiBg, hexIvory)
+	content := "\033]0;Vraxter Workstation\007" + fullScreen
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -2209,7 +3397,27 @@ func (m *Model) renderAutocomplete() string {
 		return ""
 	}
 
+	panelWidth := m.width - 2
+	if panelWidth < 40 {
+		panelWidth = 40
+	}
+	contentWidth := panelWidth - 6
+
+	headTitle := "// WORKSTATION COMMANDS (/ AUTOCOMPLETE OVERLAY)"
+	if m.Autocomplete.Type == "specialist" {
+		headTitle = "// SPECIALIST SWARM ROSTER (@ AUTOCOMPLETE OVERLAY)"
+	}
+	headLeft := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render(headTitle)
+	headRight := lipgloss.NewStyle().Foreground(colorCopperLight).Render("↑/↓ SELECT · TAB/ENTER COMPLETE")
+	headGap := contentWidth - lipgloss.Width(headLeft) - lipgloss.Width(headRight)
+	if headGap < 1 {
+		headGap = 1
+	}
+
 	var sb strings.Builder
+	sb.WriteString(headLeft + strings.Repeat(" ", headGap) + headRight + "\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(colorCopperLine).Render(strings.Repeat("─", contentWidth)) + "\n")
+
 	maxItems := 5
 	startIdx := 0
 	if m.Autocomplete.Cursor >= maxItems {
@@ -2219,21 +3427,36 @@ func (m *Model) renderAutocomplete() string {
 	for i := startIdx; i < len(m.Autocomplete.Items) && i < startIdx+maxItems; i++ {
 		item := m.Autocomplete.Items[i]
 		if i == m.Autocomplete.Cursor {
-			sb.WriteString(lipgloss.NewStyle().Background(colorDeepGray).Foreground(colorGold).Bold(true).Render(" ❯ "+item+" ") + "\n")
+			left := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true).Render(" ❯ " + item)
+			right := lipgloss.NewStyle().Foreground(colorLedEmerald).Bold(true).Render("[SELECTED ↵] ")
+			gap := contentWidth - lipgloss.Width(left) - lipgloss.Width(right)
+			if gap < 1 {
+				gap = 1
+			}
+			row := left + strings.Repeat(" ", gap) + right
+			sb.WriteString(paintBlockSurface(row, contentWidth, hexAutocompleteSelBg, hexIvory) + "\n")
 		} else {
-			sb.WriteString(lipgloss.NewStyle().Foreground(colorMutedGray).Render("   "+item+" ") + "\n")
+			left := lipgloss.NewStyle().Foreground(colorAsh).Render("   " + item)
+			right := lipgloss.NewStyle().Foreground(colorSlate).Render("STANDBY ")
+			gap := contentWidth - lipgloss.Width(left) - lipgloss.Width(right)
+			if gap < 1 {
+				gap = 1
+			}
+			row := left + strings.Repeat(" ", gap) + right
+			sb.WriteString(paintBlockSurface(row, contentWidth, hexAutocompleteBg, hexAsh) + "\n")
 		}
 	}
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorDeepGray).
-		Padding(0, 1).
-		Render(strings.TrimRight(sb.String(), "\n"))
+	return renderSolidBox(strings.TrimRight(sb.String(), "\n"), panelWidth, 0, 2, hexAutocompleteBg, hexAsh, lipgloss.NormalBorder(), hexCopper)
 }
 
 func (m *Model) renderMarkdown(history []HistoryBlock) string {
 	var fullContent strings.Builder
+
+	blockWidth := m.width - 2
+	if blockWidth < 20 {
+		blockWidth = 20
+	}
 
 	for _, block := range history {
 		var content string
@@ -2242,6 +3465,13 @@ func (m *Model) renderMarkdown(history []HistoryBlock) string {
 			content = block.Content
 			content = stripANSI(content)
 			content = sanitizePromptLeaks(content)
+
+			if block.Sender == SenderUser {
+				if strings.TrimSpace(content) != "" {
+					fullContent.WriteString(m.renderUserMessage(content, blockWidth) + "\n")
+				}
+				continue
+			}
 
 			// --- PRO-CODE SPLITTER LOGIC ---
 			lastIndex := 0
@@ -2264,7 +3494,7 @@ func (m *Model) renderMarkdown(history []HistoryBlock) string {
 				}
 				code := content[match[4]:match[5]]
 
-				messageText.WriteString(m.renderCodeBlock(lang, code, m.width-12))
+				messageText.WriteString(m.renderCodeBlock(lang, code, blockWidth-6))
 
 				lastIndex = match[1]
 			}
@@ -2277,25 +3507,27 @@ func (m *Model) renderMarkdown(history []HistoryBlock) string {
 			}
 
 			// --- BLOCK WRAPPER ---
-			// Trim Space to eliminate trailing newlines from Glamour or appends
 			finalBlockContent := strings.TrimSpace(messageText.String())
 			if finalBlockContent == "" {
 				continue
 			}
 
 			switch block.Sender {
-			case SenderUser:
-				fullContent.WriteString(userBlockStyle.Width(m.width-6).Render(finalBlockContent) + "\n")
 			case SenderVraxter:
-				fullContent.WriteString(vraxterBlockStyle.Width(m.width-6).Render(finalBlockContent) + "\n")
+				fullContent.WriteString(renderLeftAccentBlock(finalBlockContent, blockWidth, 1, 2, hexVraxterBlockBg, hexIvory, hexCopperSpecular) + "\n")
 			case SenderSpecialist:
-				fullContent.WriteString(specialistBlockStyle.Width(m.width-6).Render(finalBlockContent) + "\n")
+				fullContent.WriteString(renderLeftAccentBlock(finalBlockContent, blockWidth, 1, 2, hexSpecialistBlockBg, hexStone, hexCopperLight) + "\n")
 			default:
 				fullContent.WriteString(finalBlockContent + "\n")
 			}
 
 		case BlockThought:
-			fullContent.WriteString(thoughtStyle.Render(block.Content) + "\n\n")
+			thoughtText := strings.TrimSpace(block.Content)
+			if thoughtText != "" {
+				header := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("◈ NEURAL CHAIN OF THOUGHT") + "\n"
+				body := thoughtStyle.Render(thoughtText)
+				fullContent.WriteString(renderLeftAccentBlock(header+body, blockWidth, 0, 2, hexCodeHeaderBg, hexAsh, hexSlate) + "\n")
+			}
 
 		case BlockComponent:
 			// Component block: render directly bypassing Glamour
@@ -2303,29 +3535,40 @@ func (m *Model) renderMarkdown(history []HistoryBlock) string {
 		}
 	}
 
-	// 3. Optional: Neural Link Thinking Indicator
-	if m.IsStreaming && !m.HasSentVraxterBanner {
-		// Vertically center the text relative to the 2-line spinner for stability
-		indicatorText := "Working..."
-		joined := lipgloss.JoinHorizontal(lipgloss.Center,
-			m.Spinner.View(),
-			lipgloss.NewStyle().PaddingLeft(2).Render(indicatorText),
-		)
+	// 3. Static 2x4 Sigil Neural Link Thinking / Planning Indicator
+	if (m.IsStreaming && !m.HasSentVraxterBanner) || m.IsPlanning {
+		sigilLines := strings.Split(m.Spinner.View(), "\n")
+		row0 := `\/\/`
+		row1 := `/\/\`
+		if len(sigilLines) >= 2 {
+			row0 = sigilLines[0]
+			row1 = sigilLines[1]
+		} else if len(sigilLines) == 1 {
+			row0 = sigilLines[0]
+		}
 
-		thinkingIndicator := lipgloss.NewStyle().
-			Foreground(colorGold).
-			Faint(true).
-			Padding(0, 2).
-			Render(joined)
+		titleLabel := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true).Render("◈ VRAXTER SUPERVISOR")
+		subKicker := lipgloss.NewStyle().Foreground(colorAsh).Render(" // NEURAL ENGINE ACTIVE")
+		statusLabel := "Synthesizing response & routing context..."
+		if m.IsPlanning {
+			subKicker = lipgloss.NewStyle().Foreground(colorCopperLight).Render(" // ARCHITECTURE PLANNER DAEMON")
+			statusLabel = "Decomposing objective into multi-phase .vrx execution strategy..."
+		} else if m.StatusMessage != "" {
+			statusLabel = m.StatusMessage
+		}
+		amberSlit := lipgloss.NewStyle().Foreground(colorLedAmber).Bold(true).Render("━ ")
+		statusLine := amberSlit + lipgloss.NewStyle().Foreground(colorStone).Render(statusLabel)
 
-		fullContent.WriteString("\n" + thinkingIndicator + "\n")
+		thinkingContent := row0 + "   " + titleLabel + subKicker + "\n" +
+			row1 + "   " + statusLine
+
+		fullContent.WriteString(renderLeftAccentBlock(thinkingContent, blockWidth, 1, 2, hexVraxterBlockBg, hexIvory, hexCopperSpecular) + "\n")
 	}
 
 	return fullContent.String()
 }
 
 func (m *Model) renderMarkdownString(content string) string {
-
 	out, err := m.renderer.Render(content)
 	if err != nil {
 		return content
@@ -2345,8 +3588,11 @@ func (m *Model) renderCodeBlock(lang, code string, width int) string {
 	if lang == "" {
 		lang = "CODE"
 	}
+	if width < 20 {
+		width = 20
+	}
+	innerWidth := width - 2
 
-	// 1. Clean the lang string of any rogue ANSI to prevent background corruption in the header
 	reANSI := regexp.MustCompile("\x1b\\[[0-9;]*m")
 	lang = reANSI.ReplaceAllString(lang, "")
 	lang = strings.ToUpper(lang)
@@ -2355,84 +3601,44 @@ func (m *Model) renderCodeBlock(lang, code string, width int) string {
 	if lang == "CODE" {
 		inner = strings.TrimSpace(code)
 	} else {
-		// Use Chroma directly instead of Glamour.
-		// Glamour renders a full Markdown block (adding margins, padding, and background spaces),
-		// which collides with your custom Lipgloss wrapper.
 		var buf bytes.Buffer
-
-		// You can change "dracula" to any Chroma theme you prefer (e.g., "monokai", "nord").
 		err := quick.Highlight(&buf, strings.TrimSpace(code), strings.ToLower(lang), "terminal16m", "dracula")
-
 		if err == nil {
-			inner = buf.String()
-			// Strip Chroma's background colors so your Lipgloss background "#080b0f" shines through cleanly
-			inner = utils.StripANSIBackgrounds(inner)
-
-			// Prevent global reset from clearing Lipgloss's background color mid-line.
-			// We replace Chroma's reset (\x1b[m / \x1b[0m) with a full reset followed by the default
-			// foreground (#abb2bf) and background (#080b0f) of the code block.
-			restoreSeq := "\x1b[0m\x1b[38;2;171;178;191m\x1b[48;2;8;11;15m"
-			inner = strings.ReplaceAll(inner, "\x1b[m", restoreSeq)
-			inner = strings.ReplaceAll(inner, "\x1b[0m", restoreSeq)
+			inner = utils.StripANSIBackgrounds(buf.String())
 		} else {
 			inner = strings.TrimSpace(code)
 		}
 	}
 
-	// 2. Manually pad EVERY line to ensure the background stretches fully across
-	// without triggering Lipgloss's internal ANSI-padding bugs.
-	lines := strings.Split(inner, "\n")
-	paddedWidth := width - 4 // width - 2 (Border) - 2 (PaddingLeft)
-	for i, line := range lines {
-		visibleLen := lipgloss.Width(line)
-		if paddedWidth > 0 && visibleLen < paddedWidth {
-			lines[i] = line + strings.Repeat(" ", paddedWidth-visibleLen)
-		}
-	}
-	inner = strings.Join(lines, "\n")
-
-	dotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#d4af37")) // colorGold
+	dotStyle := lipgloss.NewStyle().Foreground(colorCopperLight)
 	langStyle := dotStyle.Bold(true)
+	headerLine := " " + dotStyle.Render("◆ ") + langStyle.Render(lang)
+	header := paintBlockSurface(headerLine, innerWidth, hexCodeHeaderBg, hexCopperLight)
 
-	// 3. Header strictly padded without using Width() to prevent Lipgloss reflow bugs
-	headerText := dotStyle.Render("◆ ") + langStyle.Render(lang)
-	// Replace internal resets so the header's #0a0d12 background isn't prematurely cleared
-	headerText = strings.ReplaceAll(headerText, "\x1b[m", "\x1b[39m\x1b[48;2;10;13;18m")
-	headerText = strings.ReplaceAll(headerText, "\x1b[0m", "\x1b[39m\x1b[48;2;10;13;18m")
+	dividerLine := lipgloss.NewStyle().Foreground(colorTitaniumMid).Render(strings.Repeat("─", innerWidth))
+	divider := paintBlockSurface(dividerLine, innerWidth, hexCodeBg, hexTitaniumMid)
 
-	headerVisibleLen := lipgloss.Width(headerText)
-	headerPaddedWidth := width - 3
-	if headerPaddedWidth > 0 && headerVisibleLen < headerPaddedWidth {
-		headerText += strings.Repeat(" ", headerPaddedWidth-headerVisibleLen)
+	var bodyLines []string
+	for _, line := range strings.Split(inner, "\n") {
+		bodyLines = append(bodyLines, "  "+line)
 	}
+	body := paintBlockSurface(strings.Join(bodyLines, "\n"), innerWidth, hexCodeBg, hexStone)
 
-	header := lipgloss.NewStyle().
-		Background(lipgloss.Color("#0a0d12")).
-		PaddingLeft(1).
-		Width(width).
-		Render(headerText)
+	bdr := lipgloss.RoundedBorder()
+	bFg := ansiFg(hexTitaniumMid)
+	sFg := ansiFg(hexSapphireBright)
+	hBg := ansiBg(hexCodeHeaderBg)
+	cBg := ansiBg(hexCodeBg)
 
-	// 4. Body strictly padded without using Width() to prevent right-side black gaps
-	body := lipgloss.NewStyle().
-		Background(lipgloss.Color("#080b0f")).
-		Foreground(lipgloss.Color("#abb2bf")).
-		PaddingLeft(2).
-		Width(width).
-		Render(inner)
-
-	// 5. Divider strictly width-2 WITH the #080b0f background
-	divider := lipgloss.NewStyle().
-		Background(lipgloss.Color("#080b0f")).
-		Foreground(lipgloss.Color("#1e2530")).
-		Render(strings.Repeat("─", width))
-
-	// 6. Outer wrapper strictly controls the border, NO outer background
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#1e2530")).
-		Width(width).
-		MarginBottom(1).
-		Render(lipgloss.JoinVertical(lipgloss.Left, header, divider, body)) + "\n"
+	var out strings.Builder
+	out.WriteString(hBg + sFg + bdr.TopLeft + bFg + strings.Repeat(bdr.Top, innerWidth) + bdr.TopRight + "\x1b[0m\n")
+	out.WriteString(hBg + sFg + bdr.Left + strings.TrimSuffix(header, "\x1b[0m") + hBg + bFg + bdr.Right + "\x1b[0m\n")
+	out.WriteString(cBg + sFg + bdr.Left + strings.TrimSuffix(divider, "\x1b[0m") + cBg + bFg + bdr.Right + "\x1b[0m\n")
+	for _, bl := range strings.Split(body, "\n") {
+		out.WriteString(cBg + sFg + bdr.Left + strings.TrimSuffix(bl, "\x1b[0m") + cBg + bFg + bdr.Right + "\x1b[0m\n")
+	}
+	out.WriteString(cBg + sFg + bdr.BottomLeft + bFg + strings.Repeat(bdr.Bottom, innerWidth) + bdr.BottomRight + "\x1b[0m\n")
+	return "\n" + out.String()
 }
 
 func stripANSI(str string) string {
@@ -2444,11 +3650,20 @@ func stripANSI(str string) string {
 func buildRenderer(width int) (*glamour.TermRenderer, error) {
 	empty := ""
 	zero := uint(0)
+	ivory := "#F4F1EA"
+	stone := "#B8B5AE"
+	copperSpecular := "#F7D4B2"
+	copperLight := "#E2A576"
+	copper := "#C87D4B"
+	copperMid := "#A65E30"
+	sapphireBright := "#5B8FD9"
+	titaniumLight := "#2A303C"
 
 	s := styles.DarkStyleConfig
 
 	// Document
 	s.Document.BackgroundColor = &empty
+	s.Document.Color = &ivory
 	s.Document.Margin = &zero
 
 	// Paragraph - The main culprit for background-per-line artifacts
@@ -2457,14 +3672,21 @@ func buildRenderer(width int) (*glamour.TermRenderer, error) {
 
 	// Text base
 	s.Text.BackgroundColor = &empty
+	s.Text.Color = &ivory
+	s.Strong.Color = &copperSpecular
+	s.Emph.Color = &copperLight
 
 	// Headings
 	s.Heading.BackgroundColor = &empty
 	s.Heading.Margin = &zero
 	s.H1.BackgroundColor = &empty
+	s.H1.Color = &copperSpecular
 	s.H2.BackgroundColor = &empty
+	s.H2.Color = &copperLight
 	s.H3.BackgroundColor = &empty
+	s.H3.Color = &copper
 	s.H4.BackgroundColor = &empty
+	s.H4.Color = &copperMid
 
 	// Lists
 	s.List.BackgroundColor = &empty
@@ -2472,11 +3694,20 @@ func buildRenderer(width int) (*glamour.TermRenderer, error) {
 
 	// Blockquote
 	s.BlockQuote.BackgroundColor = &empty
+	s.BlockQuote.Color = &stone
 	s.BlockQuote.Margin = &zero
 	s.BlockQuote.Indent = &zero
 
 	// Code inline - Transparent base
 	s.Code.BackgroundColor = &empty
+	s.Code.Color = &sapphireBright
+
+	// Links
+	s.Link.Color = &sapphireBright
+	s.LinkText.Color = &copperLight
+
+	// Horizontal Rule
+	s.HorizontalRule.Color = &titaniumLight
 
 	// Code block - Intentional dark background
 	s.CodeBlock.BackgroundColor = &empty
@@ -2495,13 +3726,23 @@ func buildRenderer(width int) (*glamour.TermRenderer, error) {
 func (m *Model) renderHeader() string {
 	mascot := m.renderMascot()
 
-	statusText := agentStyle.Render("● System Ready | Multi-Model Active")
-	if m.IsStreaming {
-		statusText = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("● Vraxter is Thinking...")
+	statusIcon := agentIconStyle.Render("━ ")
+	statusText := agentStyle.Render("System Ready | 🛡️ Air-Gap Active (Zero Egress Perimeter)")
+	if m.IsolationMode == "local_lan" {
+		statusText = agentStyle.Render("System Ready | 🌐 Local LAN Perimeter")
+	} else if m.IsolationMode == "hybrid" {
+		statusText = agentStyle.Render("System Ready | ⚡ Hybrid Mode (HITL Shield)")
 	}
+	if m.IsPlanning {
+		statusIcon = lipgloss.NewStyle().Foreground(colorLedAmber).Bold(true).Render("━ ")
+		statusText = lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true).Render("Vraxter is Planning Strategy...")
+	} else if m.IsStreaming {
+		statusIcon = lipgloss.NewStyle().Foreground(colorLedAmber).Bold(true).Render("━ ")
+		statusText = lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true).Render("Vraxter is Thinking...")
+	}
+	statusBlock := statusIcon + statusText
 
 	// Left Side: Identity
-	// Format to Title Case for the welcome message
 	displayTitle := strings.ToLower(m.UserName)
 	if len(displayTitle) > 0 {
 		displayTitle = strings.ToUpper(string(displayTitle[0])) + displayTitle[1:]
@@ -2512,7 +3753,8 @@ func (m *Model) renderHeader() string {
 	infoPanel := lipgloss.JoinVertical(lipgloss.Left,
 		titleStyle.Render(fmt.Sprintf("Welcome back, %s!", displayTitle)),
 		faintStyle.Render(fmt.Sprintf("Session: %s", m.SessionID)),
-		statusText,
+		"",
+		statusBlock,
 	)
 
 	mascotHeight := lipgloss.Height(mascot)
@@ -2523,41 +3765,71 @@ func (m *Model) renderHeader() string {
 
 	leftSegment := lipgloss.JoinHorizontal(lipgloss.Top,
 		mascot,
-		lipgloss.NewStyle().Width(3).Render(""),
+		"   ",
 		centeredInfo,
 	)
 
-	// Right Side: Tips & Model
-	rightSide := []string{
-		lipgloss.NewStyle().Foreground(colorOrange).Bold(true).Render("Tips for getting started"),
-		faintStyle.Render("• /start to configure everything at once"),
-		faintStyle.Render("• /plan <task> for autonomous mode"),
-		faintStyle.Render("• Type ? for quick command help"),
-		"",
+	// Vertical separator matching mascotHeight without uncolored margins
+	var sepRows []string
+	sepLine := lipgloss.NewStyle().Foreground(colorCopperLine).Render(" │  ")
+	for i := 0; i < mascotHeight; i++ {
+		sepRows = append(sepRows, sepLine)
 	}
-	if m.BaseModelID != "" && m.BaseModelID != m.ActiveModel {
-		rightSide = append(rightSide, lipgloss.NewStyle().Foreground(colorEmerald).Faint(true).Render(fmt.Sprintf("Default: %s", m.BaseModelID)))
+	separator := strings.Join(sepRows, "\n")
+
+	panelWidth := m.width - 2
+	if panelWidth < 40 {
+		panelWidth = 40
 	}
-	rightSide = append(rightSide, lipgloss.NewStyle().Foreground(colorEmerald).Bold(true).Render(fmt.Sprintf("Active:  %s", m.ActiveModel)))
+	contentWidth := panelWidth - 6 // 2 border + 4 horizontal padding
+	sepWidth := lipgloss.Width(sepLine)
+	leftWidth := (contentWidth - sepWidth) / 2
+	rightWidth := contentWidth - sepWidth - leftWidth
+
+	// Right Side: Tips & Active Routing (.tui-wh-right in CSS)
+	kickerStyle := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
+	cmdCodeStyle := lipgloss.NewStyle().Foreground(colorCopperSpecular)
+	labelIvory := lipgloss.NewStyle().Foreground(colorIvory)
+
+	activeColor := colorLedEmerald
+	if strings.Contains(m.ActiveModel, "(FALLBACK)") {
+		activeColor = colorLedAmber
+	}
+	activeLine := labelIvory.Render("Active: ") + lipgloss.NewStyle().Foreground(activeColor).Bold(true).Render(m.ActiveModel)
+	failoverLabel := m.FailoverModel
+	if failoverLabel == "" {
+		failoverLabel = "none"
+	}
+	failoverBadge := lipgloss.NewStyle().Foreground(colorCopperLight).Render(fmt.Sprintf("[Failover: %s]", failoverLabel))
+
+	rawCombined := fmt.Sprintf("Active: %s  [Failover: %s]", m.ActiveModel, failoverLabel)
+	var rightSide []string
+	if len(rawCombined) <= rightWidth {
+		rightSide = []string{
+			kickerStyle.Render("TIPS FOR GETTING STARTED & ACTIVE ROUTING"),
+			faintStyle.Render("• ") + cmdCodeStyle.Render("/start") + faintStyle.Render(" to configure everything  ·  ") + cmdCodeStyle.Render("/plan <task>") + faintStyle.Render(" for autonomous mode"),
+			faintStyle.Render("• Type ") + cmdCodeStyle.Render("?") + faintStyle.Render(" for quick command help  ·  ") + cmdCodeStyle.Render("@") + faintStyle.Render(" for domain specialists"),
+			"",
+			activeLine + "  " + failoverBadge,
+		}
+	} else {
+		rightSide = []string{
+			kickerStyle.Render("TIPS FOR GETTING STARTED & ACTIVE ROUTING"),
+			faintStyle.Render("• ") + cmdCodeStyle.Render("/start") + faintStyle.Render(" to configure  ·  ") + cmdCodeStyle.Render("/plan <task>") + faintStyle.Render(" for autonomous mode"),
+			faintStyle.Render("• Type ") + cmdCodeStyle.Render("?") + faintStyle.Render(" for help  ·  ") + cmdCodeStyle.Render("@") + faintStyle.Render(" for specialists"),
+			activeLine,
+			failoverBadge,
+		}
+	}
 
 	tips := lipgloss.JoinVertical(lipgloss.Left, rightSide...)
+	centeredTips := lipgloss.NewStyle().
+		Height(mascotHeight).
+		AlignVertical(lipgloss.Center).
+		Render(tips)
 
-	// Combine both segments with a vertical separator
-	separator := lipgloss.NewStyle().
-		MarginLeft(1).
-		MarginRight(1).
-		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(colorOrange).
-		Height(8). // Match mascot height
-		Render("")
-
-	// Symmetrical Calculation: 50/50 split
-	// m.width-4 is total box width. Deduct 2 for border and 4 for padding (Padding(1,2))
-	availableWidth := m.width - 4 - 6
-	halfWidth := availableWidth / 2
-
-	leftCol := lipgloss.NewStyle().Width(halfWidth).Align(lipgloss.Left).Render(leftSegment)
-	rightCol := lipgloss.NewStyle().Width(halfWidth).Align(lipgloss.Left).Render(tips)
+	leftCol := lipgloss.NewStyle().Width(leftWidth).Align(lipgloss.Left).Render(leftSegment)
+	rightCol := lipgloss.NewStyle().Width(rightWidth).Align(lipgloss.Left).Render(centeredTips)
 
 	headerContent := lipgloss.JoinHorizontal(lipgloss.Top,
 		leftCol,
@@ -2565,17 +3837,13 @@ func (m *Model) renderHeader() string {
 		rightCol,
 	)
 
-	// Anchored left within a correctly-sized gold box
-	return headerBoxStyle.
-		Width(m.width - 2).
-		Render(headerContent)
+	return renderSolidBox(headerContent, panelWidth, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper)
 }
 
 func (m *Model) renderMascot() string {
-	// Mascot: "The Crimson Sigil" (Full-Size Substrate)
-	outerSigilStyle := lipgloss.NewStyle().Foreground(colorOrange)
+	// Mascot: Brushed Copper Sigil (.tui-sigil-ascii in CSS)
+	outerSigilStyle := lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
 
-	// Complex layered ASCII with colors - Interlocking Design
 	mPart1 := outerSigilStyle.Render(`\    /\    /`)
 	mPart2 := outerSigilStyle.Render(` \  /  \  / `)
 	mPart3 := outerSigilStyle.Render(`  \/    \/  `)

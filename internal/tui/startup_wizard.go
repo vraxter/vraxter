@@ -85,6 +85,9 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		
 		if m.state == StateImplementation {
 			switch msg.String() {
+			case "shift+tab", "ctrl+b", "alt+left", "backspace":
+				m.state = StateSplash
+				return m, nil
 			case "h", "H":
 				m.SelectedImplementation = "habitat"
 				m.state = StateUserProfile
@@ -116,6 +119,15 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch m.state {
 	case StateUserProfile:
+		if km, ok := msg.(tea.KeyPressMsg); ok {
+			switch km.String() {
+			case "shift+tab", "ctrl+b", "alt+left":
+				if m.userWizard.step == 0 {
+					m.state = StateImplementation
+					return m, nil
+				}
+			}
+		}
 		var sub tea.Model
 		sub, cmd = m.userWizard.Update(msg)
 		m.userWizard = sub.(*UserWizardModel)
@@ -124,6 +136,18 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.provWizard.Init()
 		}
 	case StateProviderConfig:
+		if km, ok := msg.(tea.KeyPressMsg); ok {
+			switch km.String() {
+			case "shift+tab", "ctrl+b", "alt+left":
+				if m.provWizard.step == 0 {
+					m.userWizard.Done = false
+					m.userWizard.step = len(m.userWizard.inputs) - 1
+					m.userWizard.inputs[m.userWizard.step].Focus()
+					m.state = StateUserProfile
+					return m, nil
+				}
+			}
+		}
 		var sub tea.Model
 		sub, cmd = m.provWizard.Update(msg)
 		m.provWizard = sub.(*ProviderWizard)
@@ -138,6 +162,18 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.modelWizard.Init()
 		}
 	case StateModelRegister:
+		if km, ok := msg.(tea.KeyPressMsg); ok {
+			switch km.String() {
+			case "shift+tab", "ctrl+b", "alt+left", "backspace":
+				if m.modelWizard.step == StepProviderSelect {
+					m.provWizard.done = false
+					m.provWizard.step = len(m.provWizard.inputs) - 1
+					m.provWizard.inputs[m.provWizard.step].Focus()
+					m.state = StateProviderConfig
+					return m, nil
+				}
+			}
+		}
 		var sub tea.Model
 		sub, cmd = m.modelWizard.Update(msg)
 		m.modelWizard = sub.(*ModelWizard)
@@ -151,9 +187,18 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = StateFinished
 		}
 	case StateFinished:
-		if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "enter" {
-			m.Done = true
-			return m, nil
+		if km, ok := msg.(tea.KeyPressMsg); ok {
+			switch km.String() {
+			case "enter":
+				m.Done = true
+				return m, nil
+			case "shift+tab", "ctrl+b", "alt+left", "backspace":
+				m.modelWizard.done = false
+				m.modelWizard.step = StepConfigSelect
+				m.modelWizard.usageInput.Focus()
+				m.state = StateModelRegister
+				return m, nil
+			}
 		}
 	}
 
@@ -191,24 +236,19 @@ func (m *StartupWizard) renderSplash() string {
 
 	var s strings.Builder
 	s.WriteString("\n\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("    ◈ WELCOME TO VRAXTER") + "\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("    The autonomous workstation for the modern engineer.") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("    ◈ WELCOME TO VRAXTER") + "\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorAsh).Render("    The autonomous workstation for the modern engineer.") + "\n\n")
 
-	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Width(width - 8).Render(
+	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Foreground(colorStone).Width(width - 8).Render(
 		"This wizard will guide you through the initial configuration:\n\n" +
 			" 1. Create your Identity\n" +
 			" 2. Connect a Provider (OpenAI, Google, etc.)\n" +
 			" 3. Register your first Model\n",
 	))
 
-	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorGold).Render("Press ENTER to begin your journey..."))
+	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorCopperLight).Render("Press ENTER to begin your journey..."))
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#2a2a2a")).
-		Padding(1, 2).
-		Width(width).
-		Render(s.String())
+	return renderSolidBox(s.String(), width, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper)
 }
 
 func (m *StartupWizard) renderFinished() string {
@@ -220,23 +260,18 @@ func (m *StartupWizard) renderFinished() string {
 	var s strings.Builder
 	s.WriteString("\n\n")
 	s.WriteString(lipgloss.NewStyle().Foreground(setupDoneStyle.GetForeground()).Bold(true).Render("    ◈ CONFIGURATION COMPLETE") + "\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("    Vraxter has been initialized and is ready for action.") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorAsh).Render("    Vraxter has been initialized and is ready for action.") + "\n\n")
 
-	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Width(width - 8).Render(
+	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Foreground(colorStone).Width(width - 8).Render(
 		"You can now start chatting with your models. Simply type your request \n" +
 			"in the console after exiting this wizard.\n\n" +
 			"To modify these settings later, use:\n" +
 			" /user setup      /providers setup      /models setup",
 	))
 
-	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorGold).Render("Press ENTER to enter the workstation..."))
+	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorCopperLight).Render("Press ENTER to enter the workstation..."))
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#2a2a2a")).
-		Padding(1, 2).
-		Width(width).
-		Render(s.String())
+	return renderSolidBox(s.String(), width, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper)
 }
 
 func (m *StartupWizard) renderImplementationSelector() string {
@@ -247,10 +282,10 @@ func (m *StartupWizard) renderImplementationSelector() string {
 
 	var s strings.Builder
 	s.WriteString("\n\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("    ◈ SELECT IMPLEMENTATION WORLD") + "\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("    Vraxter activates different powers based on your environment.") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("    ◈ SELECT IMPLEMENTATION WORLD") + "\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorAsh).Render("    Vraxter activates different powers based on your environment.") + "\n\n")
 
-	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Width(width - 8).Render(
+	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Foreground(colorStone).Width(width - 8).Render(
 		"Please select your implementation type:\n\n" +
 			" [c] Core        (Engineering Workstation & Local Skills)\n" +
 			" [h] Habitat     (Spatial Awareness & IoT Routing)\n" +
@@ -259,12 +294,7 @@ func (m *StartupWizard) renderImplementationSelector() string {
 			" [s] Sovereign   (All Powers Unlocked)\n",
 	))
 
-	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorGold).Render("Press the corresponding key to select..."))
+	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorCopperLight).Render("Press the corresponding key to select..."))
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#2a2a2a")).
-		Padding(1, 2).
-		Width(width).
-		Render(s.String())
+	return renderSolidBox(s.String(), width, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper)
 }

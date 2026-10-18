@@ -11,6 +11,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/llm"
@@ -22,27 +23,41 @@ type ProviderManager struct {
 	repo           *db.ProviderRepository
 	privacyPolicy  string
 	whitelistedIPs []string
+	isolationMode  string
 }
 
-func NewProviderManager(repo *db.ProviderRepository, privacyPolicy string, whitelistedIPs []string) *ProviderManager {
-	return &ProviderManager{repo: repo, privacyPolicy: privacyPolicy, whitelistedIPs: whitelistedIPs}
+func NewProviderManager(repo *db.ProviderRepository, privacyPolicy string, whitelistedIPs []string, isolationMode ...string) *ProviderManager {
+	iso := "airgap"
+	if len(isolationMode) > 0 && isolationMode[0] != "" {
+		iso = isolationMode[0]
+	} else if privacyPolicy == "strict_local" {
+		iso = "airgap"
+	} else if privacyPolicy == "custom" {
+		iso = "hybrid"
+	}
+	return &ProviderManager{repo: repo, privacyPolicy: privacyPolicy, whitelistedIPs: whitelistedIPs, isolationMode: iso}
 }
 
 func (m *ProviderManager) AddProvider(ctx context.Context, name, pType, apiKey, baseURL string) (string, error) {
-	// 0. Enforce Privacy Policy
-	if m.privacyPolicy == "strict_local" {
-		isCloud := pType == "openai" || pType == "anthropic" || pType == "google"
-		if isCloud {
-			return "", fmt.Errorf("network privacy policy is set to strict_local: cloud provider '%s' is blocked", pType)
-		}
-		if pType == "custom" && baseURL != "" {
-			allowed, err := utils.IsAllowedNetwork(baseURL, m.whitelistedIPs)
-			if err != nil {
-				return "", fmt.Errorf("network verification failed: %w", err)
-			}
-			if !allowed {
-				return "", fmt.Errorf("network privacy policy is set to strict_local: custom provider URL points to an unapproved public IP")
-			}
+	pType = strings.ToLower(strings.TrimSpace(pType))
+	baseURL = strings.TrimSpace(baseURL)
+	if pType == "ollama" && baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+	if pType == "custom" && baseURL == "" {
+		return "", fmt.Errorf("custom provider requires a base URL")
+	}
+
+	// 0. Enforce Isolation Policy
+	isAirgap := m.isolationMode == "airgap" || m.privacyPolicy == "strict_local"
+	isCloud := pType == "openai" || pType == "anthropic" || pType == "google"
+	if isAirgap && isCloud {
+		return "", fmt.Errorf("isolation mode is set to airgap: cloud provider '%s' is blocked", pType)
+	}
+	if isAirgap && (pType == "custom" || pType == "ollama") && baseURL != "" {
+		allowed, err := utils.IsAllowedNetwork(baseURL, m.whitelistedIPs)
+		if err != nil || !allowed {
+			return "", fmt.Errorf("isolation mode is set to airgap: provider URL points to an unapproved public IP (%v)", err)
 		}
 	}
 
@@ -126,10 +141,10 @@ func (m *ProviderManager) UpdateProvider(ctx context.Context, idOrName string, n
 		p.BaseURL = *baseURL
 	}
 
-	if m.privacyPolicy == "strict_local" && p.Type == "custom" && p.BaseURL != "" {
+	if (m.isolationMode == "airgap" || m.privacyPolicy == "strict_local") && (p.Type == "custom" || p.Type == "ollama") && p.BaseURL != "" {
 		allowed, err := utils.IsAllowedNetwork(p.BaseURL, m.whitelistedIPs)
 		if err != nil {
-			return fmt.Errorf("network verification failed: %w", err)
+			return fmt.Errorf("network verification failed: unapproved public IP (%w)", err)
 		}
 		if !allowed {
 			return fmt.Errorf("network privacy policy is set to strict_local: custom provider URL points to an unapproved public IP")

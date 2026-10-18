@@ -37,6 +37,7 @@ import (
 	"github.com/vraxter/vraxter/internal/services"
 	"github.com/vraxter/vraxter/internal/skills"
 	"github.com/vraxter/vraxter/internal/tui"
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -53,6 +54,7 @@ var (
 	agentFlag          string
 	sessionFlag        string
 	modelFlag          string
+	airgapFlag         bool
 	newFlag            bool
 	verboseFlag        bool
 	daemonKey          string
@@ -63,6 +65,14 @@ var (
 func bootstrap() {
 	bootstrapOnce.Do(func() {
 		appConfig = config.Load()
+		if airgapFlag {
+			appConfig.IsolationMode = "airgap"
+			appConfig.IsAirgapLocked = true
+			appConfig.PrivacyPolicy = "strict_local"
+		}
+
+		// Enforce zero-egress network perimeter on all HTTP dials
+		utils.InstallAirgapPerimeter(appConfig.IsolationMode, appConfig.WhitelistedIPs)
 		
 		// Setup logging: Redirect all background service logs to a file
 		logFile, err := os.OpenFile(filepath.Join(appConfig.AppDir, "vraxter.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -100,11 +110,11 @@ func bootstrap() {
 			fmt.Printf("Warning: Startup Skill synchronization failed: %v\n", err)
 		}
 
-		tm := services.NewToolchainManager(appConfig.SDKDir)
+		tm := services.NewToolchainManager(appConfig.SDKDir, appConfig.IsAirgap())
 		coder := services.NewCoderService(skillRepo, tm, appConfig.SkillsDir, runner)
 		spatialSvc := services.NewSpatialService(appConfig.EnableGoogleHome, appConfig.SpatialConfigPath)
 
-		appEngine, err = core.NewEngine(appStore, appCrypto, registry, runner, coder, spatialSvc, verboseFlag, appConfig.AppDir, appConfig.RequireSkillApproval)
+		appEngine, err = core.NewEngine(appStore, appCrypto, registry, runner, coder, spatialSvc, verboseFlag, appConfig.AppDir, appConfig.RequireSkillApproval, appConfig.IsolationMode, appConfig.WhitelistedIPs)
 		if err != nil {
 			fmt.Printf("Fatal: Core Engine initialization failed: %v\n", err)
 			os.Exit(1)
@@ -113,7 +123,7 @@ func bootstrap() {
 		providerRepo := db.NewProviderRepository(appStore, appCrypto)
 		modelRepo := db.NewModelRepository(appStore, appCrypto)
 
-		appProviderManager = services.NewProviderManager(providerRepo, appConfig.PrivacyPolicy, appConfig.WhitelistedIPs)
+		appProviderManager = services.NewProviderManager(providerRepo, appConfig.PrivacyPolicy, appConfig.WhitelistedIPs, appConfig.IsolationMode)
 		appModelManager = services.NewModelManager(modelRepo, providerRepo)
 
 		appStateManager, err = env.NewStateManager(appConfig.AppDir)
@@ -152,6 +162,7 @@ func main() {
 	rootCmd.Flags().BoolVarP(&newFlag, "new", "n", false, "Start a completely fresh session (random UUID)")
 	rootCmd.PersistentFlags().BoolVarP(&verboseFlag, "verbose", "v", false, "Enable detailed logging")
 	rootCmd.PersistentFlags().StringVarP(&modelFlag, "model", "m", "", "Force use of a specific LLM model ID/alias")
+	rootCmd.PersistentFlags().BoolVar(&airgapFlag, "airgap", false, "Enforce strict zero-egress airgap perimeter")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -216,6 +227,8 @@ var rootCmd = &cobra.Command{
 
 			defer gClient.Close()
 			app := tui.NewModel(ctx, gClient, appStore, appCrypto, sessionID, "", userName)
+			app.IsolationMode = appConfig.IsolationMode
+			app.IsAirgapLocked = appConfig.IsAirgapLocked
 			p := tea.NewProgram(app)
 			if _, err := p.Run(); err != nil {
 				fmt.Printf("❌ Failed to start UI: %v\n", err)

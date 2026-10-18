@@ -103,13 +103,17 @@ func (c *ManagementClient) GetConfig(ctx context.Context) (*v1.ConfigResponse, e
 	return c.api.GetConfig(ctx, &v1.GetConfigRequest{})
 }
 
-func (c *ManagementClient) UpdateConfig(ctx context.Context, privacyPolicy *string, hubURL *string, requireSkillApproval *bool, whitelistedIPs []string) (*v1.ConfigResponse, error) {
-	return c.api.UpdateConfig(ctx, &v1.UpdateConfigRequest{
+func (c *ManagementClient) UpdateConfig(ctx context.Context, privacyPolicy *string, hubURL *string, requireSkillApproval *bool, whitelistedIPs []string, isolationMode ...*string) (*v1.ConfigResponse, error) {
+	req := &v1.UpdateConfigRequest{
 		PrivacyPolicy:        privacyPolicy,
 		HubUrl:               hubURL,
 		RequireSkillApproval: requireSkillApproval,
 		WhitelistedIps:       whitelistedIPs,
-	})
+	}
+	if len(isolationMode) > 0 && isolationMode[0] != nil {
+		req.IsolationMode = isolationMode[0]
+	}
+	return c.api.UpdateConfig(ctx, req)
 }
 
 // --- Skills Management ---

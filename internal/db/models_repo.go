@@ -35,7 +35,7 @@ func (r *ModelRepository) GetActiveModels() ([]types.ModelConfig, error) {
 		SELECT m.id, m.provider_id, m.alias, p.type, m.model, COALESCE(p.api_key, ''), COALESCE(p.base_url, ''), 
 		       m.priority, m.is_active, COALESCE(m.capabilities, ''), COALESCE(m.context_window, 8192), COALESCE(m.use_cases, ''),
 		       COALESCE(m.use_case_priorities, '{}'),
-		       (CASE WHEN p.type = 'ollama' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
+		       (CASE WHEN p.type = 'ollama' THEN 1 WHEN p.type = 'custom' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
 		WHERE m.is_active = 1 AND p.is_active = 1
@@ -76,7 +76,7 @@ func (r *ModelRepository) GetAllModels() ([]types.ModelConfig, error) {
 		SELECT m.id, m.provider_id, m.alias, p.type, m.model, COALESCE(p.api_key, ''), COALESCE(p.base_url, ''), 
 		       m.priority, m.is_active, COALESCE(m.capabilities, ''), COALESCE(m.context_window, 8192), COALESCE(m.use_cases, ''),
 		       COALESCE(m.use_case_priorities, '{}'),
-		       (CASE WHEN p.type = 'ollama' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
+		       (CASE WHEN p.type = 'ollama' THEN 1 WHEN p.type = 'custom' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
 		ORDER BY m.priority ASC, m.id DESC`
@@ -110,7 +110,7 @@ func (r *ModelRepository) GetModelByID(id string) (*types.ModelConfig, error) {
 		SELECT m.id, m.provider_id, m.alias, p.type, m.model, COALESCE(p.api_key, ''), COALESCE(p.base_url, ''), 
 		       m.priority, m.is_active, COALESCE(m.capabilities, ''), COALESCE(m.context_window, 8192), COALESCE(m.use_cases, ''),
 		       COALESCE(m.use_case_priorities, '{}'),
-		       (CASE WHEN p.type = 'ollama' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
+		       (CASE WHEN p.type = 'ollama' THEN 1 WHEN p.type = 'custom' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
 		WHERE m.id LIKE ? LIMIT 1`
@@ -136,7 +136,7 @@ func (r *ModelRepository) GetAllModelsPublic() ([]types.ModelConfig, error) {
 		SELECT m.id, m.provider_id, m.alias, p.type, m.model, COALESCE(p.base_url, ''), 
 		       m.priority, m.is_active, COALESCE(m.capabilities, ''), COALESCE(m.context_window, 8192), COALESCE(m.use_cases, ''),
 		       COALESCE(m.use_case_priorities, '{}'),
-		       (CASE WHEN p.type = 'ollama' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
+		       (CASE WHEN p.type = 'ollama' THEN 1 WHEN p.type = 'custom' THEN (p.base_url IS NOT NULL AND p.base_url != '') ELSE (p.api_key IS NOT NULL AND p.api_key != '') END) as is_configured
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
 		ORDER BY m.priority ASC`

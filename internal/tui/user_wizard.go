@@ -18,9 +18,9 @@ import (
 )
 
 var (
-	setupTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#d4af37")).Bold(true) // colorGold
-	setupFaintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))            // colorMutedGray
-	setupDoneStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#50fa7b"))            // colorEmerald
+	setupTitleStyle = lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
+	setupFaintStyle = lipgloss.NewStyle().Foreground(colorAsh)
+	setupDoneStyle  = lipgloss.NewStyle().Foreground(colorLedEmerald)
 )
 
 type SetupFinishedMsg struct {
@@ -83,6 +83,13 @@ func (m *UserWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.quitting = true
 			return m, nil
+		case "shift+tab", "ctrl+b", "alt+left":
+			if m.step > 0 {
+				m.inputs[m.step].Blur()
+				m.step--
+				m.inputs[m.step].Focus()
+			}
+			return m, nil
 		case "enter":
 			if m.step == len(m.inputs)-1 {
 				m.Done = true
@@ -94,6 +101,7 @@ func (m *UserWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, func() tea.Msg { return SetupFinishedMsg{Result: m.Result} }
 			}
+			m.inputs[m.step].Blur()
 			m.step++
 			m.inputs[m.step].Focus()
 			return m, nil
@@ -144,7 +152,7 @@ func (m *UserWizardModel) View() tea.View {
 
 		style := setupFaintStyle
 		if i == m.step {
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#d4af37")).Bold(true)
+			style = lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true)
 		} else if i < m.step {
 			style = setupDoneStyle
 		}
@@ -157,16 +165,11 @@ func (m *UserWizardModel) View() tea.View {
 	s.WriteString("\n\n")
 
 	// Current Input
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#c8c8c8")).Bold(true)
+	labelStyle := lipgloss.NewStyle().Foreground(colorIvory).Bold(true)
 	s.WriteString(fmt.Sprintf("%s\n", labelStyle.Render(steps[m.step])))
 	s.WriteString(m.inputs[m.step].View() + "\n\n")
 
-	s.WriteString(setupFaintStyle.Italic(true).Render("(Press Enter to continue, Esc to cancel)"))
+	s.WriteString(setupFaintStyle.Italic(true).Render("(Enter: Next | Shift+Tab: Back | Esc: Cancel)"))
 
-	return tea.NewView(lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#2a2a2a")).
-		Padding(1, 2).
-		Width(width).
-		Render(s.String()))
+	return tea.NewView(renderSolidBox(s.String(), width, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper))
 }

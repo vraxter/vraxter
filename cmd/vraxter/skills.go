@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	v1 "github.com/vraxter/vraxter/api/v1"
 	"github.com/vraxter/vraxter/internal/client"
@@ -186,9 +187,9 @@ var downloadSkillCmd = &cobra.Command{
 }
 
 var injectSkillCmd = &cobra.Command{
-	Use:   "inject <path_to_wasm>",
+	Use:   "inject <path_to_wasm_or_dir> [path_to_manifest]",
 	Short: "Locally inject an offline .wasm skill file into the engine",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
 		if err != nil {
@@ -198,11 +199,14 @@ var injectSkillCmd = &cobra.Command{
 		defer gClient.Close()
 
 		var manifestPtr *string
+		if len(args) == 2 && injectManifest == "" {
+			injectManifest = args[1]
+		}
 		if injectManifest != "" {
 			manifestPtr = &injectManifest
 		}
 		res, err := gClient.InjectSkill(context.Background(), &v1.InjectSkillRequest{
-			FilePath: args[0],
+			FilePath:     args[0],
 			ManifestPath: manifestPtr,
 		})
 		if err != nil {
@@ -213,7 +217,11 @@ var injectSkillCmd = &cobra.Command{
 		if !res.Success {
 			fmt.Printf("🚫 Failed: %s\n", res.Message)
 		} else {
-			fmt.Printf("✅ Success: %s (ID: %s)\n", res.Message, res.SkillId)
+			if res.SkillId != "" && !strings.Contains(res.Message, res.SkillId) {
+				fmt.Printf("✅ %s (ID: %s)\n", res.Message, res.SkillId)
+			} else {
+				fmt.Printf("✅ %s\n", res.Message)
+			}
 		}
 	},
 }
@@ -300,7 +308,7 @@ var trustSkillCmd = &cobra.Command{
 func init() {
 	downloadSkillCmd.Flags().StringVar(&downloadDest, "dest", "./", "Destination directory to download the skill")
 	downloadSkillCmd.Flags().BoolVar(&downloadSrc, "include-source", false, "Download the source code zip as well")
-	injectSkillCmd.Flags().StringVarP(&injectManifest, "manifest", "m", "", "Optional path to a custom manifest.json file for the skill")
+	injectSkillCmd.Flags().StringVarP(&injectManifest, "manifest", "M", "", "Optional path to a custom manifest.json file for the skill")
 	
 	skillsCmd.AddCommand(listSkillsCmd)
 	skillsCmd.AddCommand(infoSkillCmd)

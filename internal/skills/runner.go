@@ -11,6 +11,7 @@ package skills
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -23,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/types"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -74,12 +76,22 @@ func httpGetFn(ctx context.Context, mod api.Module, urlPtr, urlLen, outPtr, outM
 		return 0
 	}
 
-	// Verify the "network" capability exists in permissions
+	// Verify the "network" capability exists in V1 capabilities or legacy permissions
 	hasNetwork := false
-	for _, perm := range manifest.Permissions {
-		if perm == "network" {
+	if manifest.ManifestV1 != nil && manifest.ManifestV1.Capabilities != nil && manifest.ManifestV1.Capabilities.Network != nil {
+		netCap := manifest.ManifestV1.Capabilities.Network
+		if netCap.Mode != "" && strings.ToLower(netCap.Mode) != "none" {
 			hasNetwork = true
-			break
+		}
+	}
+
+	if !hasNetwork {
+		for _, perm := range manifest.Permissions {
+			p := strings.ToLower(strings.TrimSpace(perm))
+			if p == "network" || strings.HasPrefix(p, "network:") || strings.HasPrefix(p, "net:") {
+				hasNetwork = true
+				break
+			}
 		}
 	}
 
@@ -93,6 +105,13 @@ func httpGetFn(ctx context.Context, mod api.Module, urlPtr, urlLen, outPtr, outM
 		return 0
 	}
 	url := string(urlBytes)
+
+	// Enforce Airgap Network Shield: Verify destination URL in-memory without DNS leaks
+	allowed, err := utils.IsAllowedNetwork(url, nil)
+	if err != nil || !allowed {
+		fmt.Printf("\n[SHIELD SECURITY ALERT] Skill '%s' outbound HTTP request to '%s' blocked by Air-Gap Shield (Zero-Egress): %v\n", manifest.ID, url, err)
+		return 0
+	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
@@ -142,11 +161,7 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 		return nil, fmt.Errorf("failed to encode intent payload: %w", err)
 	}
 
-	timeout := rn.Timeout
-	if manifest.TimeoutSeconds > 0 {
-		timeout = time.Duration(manifest.TimeoutSeconds) * time.Second
-	}
-
+	timeout := manifest.GetExecutionTimeout(rn.Timeout)
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	execCtx = context.WithValue(execCtx, manifestKey, manifest)
@@ -167,7 +182,7 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 
 	isOfficial := manifest.IsOfficial
 	hasHighReputation := manifest.Score >= 4.0 && manifest.Downloads > 100
-	isSandboxSafe := len(manifest.Permissions) == 0
+	isSandboxSafe := len(manifest.Permissions) == 0 && (manifest.ManifestV1 == nil || manifest.ManifestV1.Capabilities == nil)
 
 	isAuthorized := isOfficial || hasHighReputation || isSandboxSafe
 
@@ -204,19 +219,97 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 		rn.mu.Unlock()
 	}
 
+	type activeMount struct {
+		guest string
+		host  string
+		mode  string
+	}
+	var activeMounts []activeMount
+
+	runTempDir, err := os.MkdirTemp("", "vraxter-run-"+manifest.ID+"-*")
+	if err == nil {
+		defer os.RemoveAll(runTempDir)
+	}
+
 	fsConfig := wazero.NewFSConfig()
-	for _, perm := range manifest.Permissions {
-		if strings.HasPrefix(perm, "fs_read:") {
-			dir := strings.TrimPrefix(perm, "fs_read:")
-			resolvedDir := ResolveMountPath(dir)
-			if resolvedDir != "" {
-				fsConfig = fsConfig.WithReadOnlyDirMount(resolvedDir, resolvedDir)
+
+	if manifest.ManifestV1 != nil && manifest.ManifestV1.Capabilities != nil && manifest.ManifestV1.Capabilities.FS != nil && len(manifest.ManifestV1.Capabilities.FS.Mounts) > 0 {
+		for _, mount := range manifest.ManifestV1.Capabilities.FS.Mounts {
+			var hostBase string
+			switch strings.ToLower(mount.Source) {
+			case "workspace":
+				hostBase, _ = os.Getwd()
+				if hostBase == "" {
+					hostBase = "."
+				}
+			case "input":
+				if inDir, ok := params["_input_dir"].(string); ok && inDir != "" {
+					hostBase = inDir
+				} else if inDir, ok := params["input_dir"].(string); ok && inDir != "" {
+					hostBase = inDir
+				} else {
+					hostBase = filepath.Join(runTempDir, "input")
+				}
+			case "output":
+				userHome, _ := os.UserHomeDir()
+				hostBase = filepath.Join(userHome, ".vraxter", "artifacts", "skills", manifest.ID)
+			case "skill_data":
+				userHome, _ := os.UserHomeDir()
+				hostBase = filepath.Join(userHome, ".vraxter", "skills", "data", manifest.ID)
+			case "ephemeral":
+				safeGuest := strings.ReplaceAll(mount.Guest, "/", "_")
+				hostBase = filepath.Join(runTempDir, "ephemeral"+safeGuest)
+			case "host":
+				hostBase = ResolveMountPath(mount.HostPath)
+			default:
+				hostBase = filepath.Join(runTempDir, "storage_"+mount.Source)
 			}
-		} else if strings.HasPrefix(perm, "fs_write:") {
-			dir := strings.TrimPrefix(perm, "fs_write:")
-			resolvedDir := ResolveMountPath(dir)
-			if resolvedDir != "" {
-				fsConfig = fsConfig.WithDirMount(resolvedDir, resolvedDir)
+
+			hostDir := hostBase
+			if mount.Subpath != "" {
+				hostDir = filepath.Join(hostBase, mount.Subpath)
+			}
+			_ = os.MkdirAll(hostDir, 0755)
+
+			if strings.ToLower(mount.Mode) == "ro" {
+				fsConfig = fsConfig.WithReadOnlyDirMount(hostDir, mount.Guest)
+			} else {
+				fsConfig = fsConfig.WithDirMount(hostDir, mount.Guest)
+			}
+
+			activeMounts = append(activeMounts, activeMount{
+				guest: mount.Guest,
+				host:  hostDir,
+				mode:  mount.Mode,
+			})
+		}
+	} else {
+		// Fallback for legacy permission strings
+		for _, perm := range manifest.Permissions {
+			p := strings.TrimSpace(perm)
+			low := strings.ToLower(p)
+			if strings.HasPrefix(low, "fs_read:") || strings.HasPrefix(low, "fs:read:") || strings.HasPrefix(low, "filesystem:read:") {
+				idx := strings.Index(p, ":")
+				if strings.HasPrefix(low, "fs:read:") || strings.HasPrefix(low, "filesystem:read:") {
+					idx = strings.LastIndex(p, ":")
+				}
+				dir := strings.TrimSpace(p[idx+1:])
+				resolvedDir := ResolveMountPath(dir)
+				if resolvedDir != "" {
+					fsConfig = fsConfig.WithReadOnlyDirMount(resolvedDir, resolvedDir)
+					activeMounts = append(activeMounts, activeMount{guest: resolvedDir, host: resolvedDir, mode: "ro"})
+				}
+			} else if strings.HasPrefix(low, "fs_write:") || strings.HasPrefix(low, "fs:write:") || strings.HasPrefix(low, "filesystem:write:") {
+				idx := strings.Index(p, ":")
+				if strings.HasPrefix(low, "fs:write:") || strings.HasPrefix(low, "filesystem:write:") {
+					idx = strings.LastIndex(p, ":")
+				}
+				dir := strings.TrimSpace(p[idx+1:])
+				resolvedDir := ResolveMountPath(dir)
+				if resolvedDir != "" {
+					fsConfig = fsConfig.WithDirMount(resolvedDir, resolvedDir)
+					activeMounts = append(activeMounts, activeMount{guest: resolvedDir, host: resolvedDir, mode: "rw"})
+				}
 			}
 		}
 	}
@@ -228,6 +321,26 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 		WithStderr(&stderr).
 		WithEnv("PATH", "").
 		WithFSConfig(fsConfig)
+
+	if manifest.ManifestV1 != nil && manifest.ManifestV1.Capabilities != nil {
+		caps := manifest.ManifestV1.Capabilities
+		if caps.Clock != nil {
+			if caps.Clock.Wall {
+				config = config.WithSysWalltime()
+			}
+			if caps.Clock.Monotonic {
+				config = config.WithSysNanotime()
+			}
+		}
+		if caps.Random != nil && *caps.Random {
+			config = config.WithRandSource(crand.Reader)
+		}
+		if caps.Env != nil && len(caps.Env.Vars) > 0 {
+			for k, v := range caps.Env.Vars {
+				config = config.WithEnv(k, v)
+			}
+		}
+	}
 
 	mod, err := rn.runtime.InstantiateModule(execCtx, compiled, config)
 	if err != nil {
@@ -241,6 +354,42 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 		)
 	}
 	defer mod.Close(execCtx)
+
+	// Check if output is via file
+	if manifest.ManifestV1 != nil && manifest.ManifestV1.IO != nil && strings.ToLower(manifest.ManifestV1.IO.Output.Via) == "file" {
+		outGuestPath := manifest.ManifestV1.IO.Output.Path
+		var matchedMount *activeMount
+		longestPrefix := -1
+		for i := range activeMounts {
+			m := &activeMounts[i]
+			gPrefix := m.guest
+			if outGuestPath == gPrefix || strings.HasPrefix(outGuestPath, strings.TrimSuffix(gPrefix, "/")+"/") {
+				if len(gPrefix) > longestPrefix {
+					longestPrefix = len(gPrefix)
+					matchedMount = m
+				}
+			}
+		}
+
+		if matchedMount == nil {
+			return nil, fmt.Errorf("skill '%s' was configured with file output at '%s', but no mount matches that guest path", manifest.ID, outGuestPath)
+		}
+
+		relPath := strings.TrimPrefix(outGuestPath, strings.TrimSuffix(matchedMount.guest, "/"))
+		relPath = strings.TrimPrefix(relPath, "/")
+		hostFilePath := filepath.Join(matchedMount.host, relPath)
+
+		data, err := os.ReadFile(hostFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("skill '%s' finished execution but failed to read expected output file at guest '%s' (host: %s): %w", manifest.ID, outGuestPath, hostFilePath, err)
+		}
+
+		return &types.ExecutionResult{
+			IntentID: manifest.ID,
+			Status:   types.StatusCompleted,
+			Output:   string(data),
+		}, nil
+	}
 
 	var response types.SkillResponse
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {

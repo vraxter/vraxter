@@ -86,6 +86,7 @@ message UpdateConfigRequest {
   optional string hub_url = 2;
   optional bool require_skill_approval = 3;
   repeated string whitelisted_ips = 4;
+  optional string isolation_mode = 5;
 }
 
 message ConfigResponse {
@@ -93,6 +94,8 @@ message ConfigResponse {
   string hub_url = 2;
   bool require_skill_approval = 3;
   repeated string whitelisted_ips = 4;
+  string isolation_mode = 5;
+  bool is_airgap_locked = 6;
 }
 
 // --- Skills ---

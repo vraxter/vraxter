@@ -45,7 +45,7 @@ func (s MatchSignal) Confidence() float64 {
 	case SignalReturnControl:
 		return 1.0
 	case SignalDomainMatch:
-		return 0.9
+		return 0.4
 	case SignalNameMention:
 		return 0.6
 	default:

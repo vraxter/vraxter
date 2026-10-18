@@ -10,6 +10,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/prompts"
 	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 // CodeGenService encapsulates the two-phase skill creation pipeline.
@@ -115,7 +117,7 @@ func (s *CodeGenService) GenerateAndCompile(
 			continue
 		}
 
-		// Parse Schema and Code blocks
+		// Parse Manifest, Schema, Permissions, and Code blocks
 		var permissions []string
 		schema := ""
 		code := ""
@@ -138,11 +140,38 @@ func (s *CodeGenService) GenerateAndCompile(
 			content = ""
 		}
 
+		manifestIdx := strings.Index(content, "[VRAX_MANIFEST]")
+		if manifestIdx != -1 {
+			manifestStr := strings.TrimSpace(content[manifestIdx+len("[VRAX_MANIFEST]"):])
+			if start := strings.Index(manifestStr, "{"); start != -1 {
+				if end := strings.LastIndex(manifestStr, "}"); end != -1 && end > start {
+					manifestJSON := manifestStr[start : end+1]
+					var v1 types.SkillManifestV1
+					if err := json.Unmarshal([]byte(manifestJSON), &v1); err == nil {
+						if v1.IO != nil && len(v1.IO.Input.Schema) > 0 {
+							schema = string(v1.IO.Input.Schema)
+						}
+						if v1.Capabilities != nil {
+							if v1.Capabilities.FS != nil {
+								for _, m := range v1.Capabilities.FS.Mounts {
+									permissions = append(permissions, fmt.Sprintf("fs_%s:%s", m.Mode, m.Guest))
+								}
+							}
+							if v1.Capabilities.Network != nil && v1.Capabilities.Network.Mode != "" && v1.Capabilities.Network.Mode != "none" {
+								permissions = append(permissions, "network")
+							}
+						}
+					}
+				}
+			}
+			content = content[:manifestIdx]
+		}
+
 		schemaIdx := strings.Index(content, "[VRAX_SCHEMA]")
-		if schemaIdx != -1 {
+		if schemaIdx != -1 && schema == "" {
 			schema = strings.TrimSpace(content[schemaIdx+len("[VRAX_SCHEMA]"):])
 			content = content[:schemaIdx]
-		} else if strings.Contains(content, "{") && strings.Contains(content, "}") {
+		} else if schema == "" && strings.Contains(content, "{") && strings.Contains(content, "}") {
 			start := strings.Index(content, "{")
 			end := strings.LastIndex(content, "}")
 			if start != -1 && end != -1 && end > start {
@@ -151,7 +180,7 @@ func (s *CodeGenService) GenerateAndCompile(
 		}
 
 		permIdx := strings.Index(content, "[VRAX_PERMISSIONS]")
-		if permIdx != -1 {
+		if permIdx != -1 && len(permissions) == 0 {
 			permStr := strings.TrimSpace(content[permIdx+len("[VRAX_PERMISSIONS]"):])
 			if permStr != "" && strings.ToLower(permStr) != "none" {
 				for _, p := range strings.Split(permStr, ",") {

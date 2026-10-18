@@ -9,27 +9,25 @@
 package custom
 
 import (
-	"strings"
-
 	"github.com/vraxter/vraxter/internal/llm/openai"
 	"github.com/vraxter/vraxter/internal/llm/registry"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 )
 
 func init() {
-	// 1. Generic custom provider for self-hosted OpenAI-compatible endpoints (vLLM, LM Studio, etc.)
+	// 1. Generic custom provider for self-hosted OpenAI-compatible endpoints (vLLM, LM Studio, Ollama, etc.)
 	registry.Register("custom", func(apiKey, baseURL string) interfaces.LLMProvider {
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
+		}
 		return openai.NewAdapter(apiKey, baseURL)
 	})
 
-	// 2. Ollama legacy alias: Routes to Ollama's native OpenAI-compatible endpoint
+	// 2. Ollama alias: Routes to Ollama's native OpenAI-compatible endpoint without requiring an API key
 	registry.Register("ollama", func(apiKey, baseURL string) interfaces.LLMProvider {
 		if baseURL == "" {
-			baseURL = "http://localhost:11434/v1"
+			baseURL = "http://localhost:11434"
 		}
-		if !strings.HasSuffix(baseURL, "/v1") && !strings.Contains(baseURL, "/v1/") {
-			baseURL = strings.TrimSuffix(baseURL, "/") + "/v1"
-		}
-		return openai.NewAdapter("ollama", baseURL)
+		return openai.NewAdapter(apiKey, baseURL)
 	})
 }

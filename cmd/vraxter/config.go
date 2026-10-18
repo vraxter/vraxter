@@ -39,18 +39,27 @@ var configListCmd = &cobra.Command{
 			return
 		}
 
+		lockStr := "dynamic"
+		if res.IsAirgapLocked {
+			lockStr = "locked (immutable)"
+		}
+
 		fmt.Println("\n⚙️ VRAXTER GLOBAL CONFIGURATION")
 		fmt.Println("--------------------------------------------------")
+		fmt.Printf("Isolation Mode         : %s (%s)\n", res.IsolationMode, lockStr)
 		fmt.Printf("Privacy Policy         : %s\n", res.PrivacyPolicy)
 		fmt.Printf("Hub URL                : %s\n", res.HubUrl)
 		fmt.Printf("Require Skill Approval : %v\n", res.RequireSkillApproval)
+		if len(res.WhitelistedIps) > 0 {
+			fmt.Printf("Whitelisted IPs        : %v\n", res.WhitelistedIps)
+		}
 		fmt.Println("--------------------------------------------------")
 	},
 }
 
 var configSetCmd = &cobra.Command{
 	Use:   "set <key> <value>",
-	Short: "Set a configuration value (privacy_policy, hub_url)",
+	Short: "Set a configuration value (isolation_mode, privacy_policy, hub_url, require_skill_approval)",
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		key := args[0]
@@ -63,9 +72,11 @@ var configSetCmd = &cobra.Command{
 		}
 		defer gClient.Close()
 
-		var pp, hurl *string
+		var pp, hurl, iso *string
 		var rsa *bool
-		if key == "privacy_policy" {
+		if key == "isolation_mode" {
+			iso = &val
+		} else if key == "privacy_policy" {
 			pp = &val
 		} else if key == "hub_url" {
 			hurl = &val
@@ -73,11 +84,11 @@ var configSetCmd = &cobra.Command{
 			b := val == "true"
 			rsa = &b
 		} else {
-			fmt.Printf("❌ Unknown configuration key '%s'\n", key)
+			fmt.Printf("❌ Unknown configuration key '%s'. Supported: isolation_mode, privacy_policy, hub_url, require_skill_approval\n", key)
 			return
 		}
 
-		_, err = gClient.UpdateConfig(context.Background(), pp, hurl, rsa, nil)
+		_, err = gClient.UpdateConfig(context.Background(), pp, hurl, rsa, nil, iso)
 		if err != nil {
 			fmt.Printf("❌ Error updating config: %v\n", err)
 			return

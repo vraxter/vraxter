@@ -22,7 +22,6 @@ import (
 
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/pkg/interfaces"
-	"github.com/vraxter/vraxter/pkg/types"
 )
 
 type GoToolchain interface {
@@ -119,11 +118,12 @@ func (c *GoCoder) Compile(name, description, paramsSchema, code string, permissi
 	if c.TM.IsReady("tinygo") {
 		tinyGoPath := c.TM.GetTinyGoPath()
 		cmd = exec.Command(tinyGoPath, "build", "-o", wasmPath, "-target=wasi", ".")
+		cmd.Env = append(os.Environ(), "GOPROXY=off", "GOSUMDB=off")
 		isTinyGo = true
 	} else {
 		goPath := c.TM.GetGoPath()
 		cmd = exec.Command(goPath, "build", "-o", wasmPath, ".")
-		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm", "GOPROXY=off", "GOSUMDB=off")
 	}
 
 	cmd.Dir = workDir
@@ -134,7 +134,7 @@ func (c *GoCoder) Compile(name, description, paramsSchema, code string, permissi
 		log.Printf("GoCoder: TinyGo compilation failed, falling back to standard Go compiler. Reason: %v", err)
 		goPath := c.TM.GetGoPath()
 		cmd = exec.Command(goPath, "build", "-o", wasmPath, ".")
-		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm", "GOPROXY=off", "GOSUMDB=off")
 		cmd.Dir = workDir
 		output, err = cmd.CombinedOutput()
 	}
@@ -149,19 +149,7 @@ func (c *GoCoder) Compile(name, description, paramsSchema, code string, permissi
 		checksum = hex.EncodeToString(h[:])
 	}
 
-	manifest := types.SkillManifest{
-		ID:           skillID,
-		Name:         name,
-		Description:  description,
-		ParamsSchema: paramsSchema,
-		Command:      wasmPath,
-		Engine:       "wasm",
-		Language:     "go",
-		Version:      "1.0.0",
-		Tier:         types.Tier2CommunityVerified,
-		Checksum:     checksum,
-		Permissions:  permissions,
-	}
+	manifest := BuildAndSaveV1Manifest(c.SkillsDir, skillID, name, description, wasmPath, checksum, paramsSchema, "go", permissions)
 
 	// 7. Execution Dry-Run Verification (Failsafe)
 	_, err = c.Runner.Execute(context.Background(), manifest, map[string]interface{}{"_vraxter_dry_run": true})

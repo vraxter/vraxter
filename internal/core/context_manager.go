@@ -10,6 +10,8 @@ package core
 
 import (
 	"log/slog"
+	"strings"
+
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/pkg/types"
 )
@@ -45,6 +47,12 @@ func (cm *ContextManager) PruneHistory(conversationID string, contextWindow int)
 	// Iterate backwards (newest to oldest)
 	for i := len(allMsgs) - 1; i >= 0; i-- {
 		msg := allMsgs[i]
+		if strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		if msg.Role != "user" && msg.Role != "assistant" && msg.Role != "model" && msg.Role != "system" {
+			continue
+		}
 		// Rough token estimation: 1 token ~= 4 characters
 		estimatedTokens := len(msg.Content) / 4
 		if estimatedTokens == 0 {

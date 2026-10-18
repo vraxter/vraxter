@@ -11,6 +11,12 @@ Protocol = [
   "SPECIALIZED ROLES: Assign phases to 'supervisor' (default), 'vraxter-coder' (heavy development), or specific Specialist IDs if expertise matches."
 ]
 
+{{if .TargetSpecialist}}
+@System.LeadSpecialist
+LeadSpecialist = "{{.TargetSpecialist}}"
+Directive = "You are architecting this plan specifically on behalf of and led by @{{.TargetSpecialist}}. Assign all relevant implementation phases to '{{.TargetSpecialist}}' rather than 'supervisor'."
+{{end}}
+
 {{if .GitContext}}$Context.Workspace
 {{prefix "| " .GitContext}}
 {{end}}
@@ -33,7 +39,7 @@ $Context.Query
       "title": "Phase name",
       "description": "Specific sub-task details",
       "tasks": ["step 1", "step 2"],
-      "specialist_id": "supervisor"
+      "specialist_id": "{{if .TargetSpecialist}}{{.TargetSpecialist}}{{else}}supervisor{{end}}"
     }
   ],
   "estimations": "Rough estimate"
