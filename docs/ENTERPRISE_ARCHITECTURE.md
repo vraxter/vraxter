@@ -20,8 +20,8 @@ For the modern enterprise, Vraxter provides the ultimate balance between the imm
 ## 2. Core Value Proposition & Potentials
 
 ### 2.1 Absolute Data Sovereignty & Air-Gapped Execution
-The most significant barrier to AI adoption in enterprise, defense, and healthcare sectors is data leakage. Vraxter solves this natively via its **Privacy Policy Engine**. 
-By enforcing a `strict_local` policy, Vraxter algorithmically blocks any outbound connections to public clouds (e.g., OpenAI, Anthropic). It forces all reasoning to happen via local endpoints (like vLLM, LM Studio, or local Ollama deployments). **The result is an Air-Gapped AI workstation where proprietary source code, IP, and internal data never leave the corporate intranet.**
+The most significant barrier to AI adoption in enterprise, defense, and healthcare sectors is data leakage. Vraxter solves this natively via its **Vraxter Shield Isolation Engine**. 
+By enforcing `isolation_mode: "airgap"` (or launching with `--airgap`), Vraxter deterministically cuts off all egress to the public internet/WAN while explicitly preserving internal communication across private local networks (RFC 1918 subnets `192.168.0.0/16`, `10.0.0.0/8`, `172.16.0.0/12`, and local domains like `.local`/`.lan`). It forces all reasoning to happen via local endpoints (such as local Ollama, vLLM, or LM Studio nodes on the machine or within the corporate intranet). **The result is an Air-Gapped AI workstation where proprietary source code, IP, and internal data never reach the public internet.**
 
 ### 2.2 Client-Agnostic Architecture (The "Thin-Client" Paradigm)
 Vraxter is not a UI. It is an engine. It operates as a background daemon exposing a lightning-fast, high-concurrency **gRPC API (over HTTP/2)**.
@@ -86,7 +86,12 @@ Adopting autonomous AI introduces significant risks. **Vraxter Shield** is the c
 
 ### Risk 4: Data Exfiltration via Cloud APIs
 **The Risk:** Sensitive proprietary code is accidentally sent to a public AI provider, breaching NDA or compliance (HIPAA/SOC2/GDPR).
-**Vraxter's Mitigation:** The `strict_local` Privacy Policy operates at the network routing level inside Vraxter. It explicitly hard-blocks any LLM provider whose BaseURL resolves to public cloud endpoints (`api.openai.com`), physically preventing data from leaving the corporate network.
+**Vraxter's Mitigation:** Vraxter Shield enforces deterministic zero-egress protection:
+- **Isolation Modes:** Operators configure `isolation_mode: "airgap"`, `local_lan`, or `hybrid`.
+- **In-Memory DNS Protection:** Intercepts hostname lookups inside the process, instantly dropping public WAN domain queries while allowing private LAN (`.local`, `.lan`) and loopback addresses.
+- **Transport-Level Socket Interceptor:** Low-level custom network dialer (`NewAirgapDialer`) inspects raw IP destinations before SYN packets hit the kernel, blocking non-private WAN addresses with `syscall.EPERM`. Private enterprise subnets (RFC 1918: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) remain fully accessible for connecting to dedicated on-prem Ollama/vLLM compute clusters.
+- **Anti-Downgrade Runtime Lockout:** Launching with `vraxter --airgap` or setting `VRAXTER_AIRGAP=1` permanently locks the session in air-gap mode. Any attempts by prompt injections or unauthorized users to relax isolation to `hybrid` are rejected with `AIRGAP_LOCKED`.
+- **Hermetic Toolchains:** Skills and dependencies execute with `GOPROXY=off` and `GOSUMDB=off`, preventing covert exfiltration via module proxies.
 
 ### Risk 5: Credentials at Rest
 **The Risk:** API keys for AWS, OpenAI, or internal databases are stored in plaintext config files.
@@ -94,7 +99,7 @@ Adopting autonomous AI introduces significant risks. **Vraxter Shield** is the c
 
 ### Risk 6: Unintended Destructive Actions
 **The Risk:** An autonomous agent hallucinates or maliciously decides to execute a destructive command (e.g., `rm -rf`, or dropping a database).
-**Vraxter's Mitigation:** **Human-In-The-Loop (HITL) Execution Gate.** By configuring `require_skill_approval = true`, the Execution Engine halts the gRPC stream and emits a `SKILL_APPROVAL_REQUEST`. The human operator (via Web UI, CLI, or TUI) must explicitly authorize the `tool_payload` before the WASM sandbox allows execution.
+**Vraxter's Mitigation:** **Human-In-The-Loop (HITL) Execution Gate.** By configuring `require_skill_approval = true` (or per skill manifest via `agent.approval: "always"`), the Execution Engine halts the gRPC stream and emits a `SKILL_APPROVAL_REQUEST`. The human operator (via the interactive Decision Bridge in the TUI, Web UI, or CLI) must explicitly authorize the execution payload before the WASM sandbox allows execution.
 
 ---
 
@@ -105,14 +110,14 @@ Vraxter’s combination of high-level reasoning, deterministic sandboxed executi
 ### 5.1 Defense & Military Operations
 **Scenario:** Tactical Edge Intelligence & Rapid Exploitation Analysis
 - **The Challenge:** Deployed military units and tactical operations centers (TOCs) operate in highly contested, DIL (Disconnected, Intermittent, Limited) bandwidth environments where relying on a cloud connection for AI reasoning is a fatal vulnerability.
-- **Vraxter Application:** Vraxter runs locally on hardened edge servers or vehicle-mounted compute nodes. Using a localized `strict_local` policy, it routes reasoning tasks to self-hosted models (e.g., Llama-3-70B running on ruggedized GPUs). 
+- **Vraxter Application:** Vraxter runs locally on hardened edge servers or vehicle-mounted compute nodes. Using `vraxter --airgap`, it routes reasoning tasks to self-hosted models (e.g., Llama-3-70B running on ruggedized private GPU clusters). 
 - **Execution:** When signal intelligence captures an unknown RF protocol or encrypted file, the on-site intelligence officer prompts Vraxter. Vraxter delegates to a *Cryptanalysis Specialist* sub-agent, automatically compiling and executing a WASM tool to decrypt and format the payload. No data ever leaves the tactical perimeter.
 
 ### 5.2 Government & Public Sector
 **Scenario:** Classified Policy Auditing & Automated Compliance
 - **The Challenge:** Government agencies handle top-secret or highly sensitive citizen data (PII/PHI). They cannot legally pass internal policy drafts or intelligence briefings to commercial LLM APIs.
 - **Vraxter Application:** Vraxter is deployed within a SCIF (Sensitive Compartmented Information Facility) or an air-gapped government intranet.
-- **Execution:** A policy analyst asks Vraxter to cross-reference a new 500-page infrastructure bill against existing environmental regulations. Vraxter uses a highly-secure internal RAG (Retrieval-Augmented Generation) Skill, scanning thousands of legacy PDF documents on the internal filesystem, and generates a compliance report. The `vraxter config set privacy_policy strict_local` ensures zero risk of classified data spillage.
+- **Execution:** A policy analyst asks Vraxter to cross-reference a new 500-page infrastructure bill against existing environmental regulations. Vraxter uses a highly-secure internal RAG (Retrieval-Augmented Generation) Skill, scanning thousands of legacy PDF documents on the internal filesystem, and generates a compliance report. The `vraxter --airgap` flag (or `vraxter config set isolation_mode airgap`) ensures zero risk of classified data spillage to the public WAN while allowing access to local private network services.
 
 ### 5.3 Cybersecurity & Threat Hunting
 **Scenario:** Autonomous Incident Response & Zero-Day Mitigation

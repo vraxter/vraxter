@@ -48,7 +48,8 @@ git clone https://github.com/Vraxter/vraxter.git
 cd vraxter
 
 # Build the workstation
-go build -o bin/vraxter ./cmd/vraxter/main.go
+# Build the workstation
+go build -o bin/vraxter ./cmd/vraxter
 ```
 
 ### The Onboarding Wizard
@@ -58,23 +59,28 @@ The first time you run Vraxter, or by typing `/start`, you will enter the **Prem
 3. **Model Registration**: Configuring your reasoning engines and use-case priorities.
 
 ```bash
+# Standard Launch
 ./bin/vraxter
+
+# Or launch locked into 100% Zero-Egress Air-Gap mode
+./bin/vraxter --airgap
+
 # Once inside the TUI, type:
 /start
 ```
 
 ### The Professional TUI Workstation
-Vraxter features a high-fidelity terminal interface. It comes with an interactive `/` command overlay, a `@` specialist autocomplete shelf for swift sub-agent delegation, and a semantic handoff mask to visually conceal internal JSON signals. The workstation uses our "Crimson Sigil" rendering to create a dynamic, professional environment. See the [TUI Workstation Guide](docs/TUI_WORKSTATION.md) for more details.
+Vraxter features a high-fidelity terminal interface styled in an **Anodized Titanium & Burnished Copper** aesthetic. It includes a double-rail command deck with an **Ambient Isolation Capsule** (`[ 🛡️ AIRGAP LOCKED ]`, `[ 🌐 LAN ONLY ]`, `[ ⚡ HYBRID ]`), an interactive `/` command overlay, a `@` specialist autocomplete shelf for instant sub-agent delegation, and a semantic handoff mask that hides internal JSON protocol signals. Human-in-the-loop decisions are handled via an interactive **Decision Bridge**. See the [TUI Workstation Guide](docs/TUI_WORKSTATION.md) for more details.
 
 ## Technical Stack
 
 | Component | Technology | Rationale |
 | :--- | :--- | :--- |
 | **Language** | Go (1.21+) | High-speed concurrency and single-binary portability. |
-| **Sandbox** | Wazero (WASM) | Hardened, sandboxed tool execution without local dependencies. |
+| **Sandbox** | Wazero (WASI V1) | Hardened, capabilities-based WebAssembly sandbox without local dependencies. |
 | **Persistence** | SQLite | Local-first, relational storage for memory and configuration with WAL mode optimized for Go concurrency. |
-| **TUI Interface** | Bubble Tea | Premium, fluid terminal ecosystem for professional engineers. |
-| **Internal Comms** | Connect RPC (HTTP/2) | Client-agnostic, high-speed API layer using Protocol Buffers. |
+| **TUI Interface** | Bubble Tea & Lip Gloss | Anodized Titanium & Burnished Copper terminal interface with double-rail command deck. |
+| **Internal Comms** | Connect RPC & gRPC (HTTP/2) | Client-agnostic, high-speed API layer using Protocol Buffers. |
 
 ## Command Reference
 
@@ -82,21 +88,35 @@ Vraxter features a sophisticated "Slash Command" system for workstation manageme
 
 | Command | Description |
 | :--- | :--- |
-| `/start` | Launches the unified onboarding/setup wizard. |
-| `/help` | Displays the interactive command documentation. |
-| `/plan <query>` | Forces Vraxter to generate a structured implementation strategy. |
-| `/specialists` | Manages the roster of domain-specific sub-agents. |
-| `/providers` | Adds or modifies LLM provider configurations. |
-| `/models` | Registers and prioritizes specific reasoning models. |
-| `/clear` | Resets the current session context while maintaining memory. |
+| `/start` | Launches the unified onboarding/setup wizard (Profile ➔ Providers ➔ Models). |
+| `/help` | Displays the interactive command documentation and keyboard shortcuts. |
+| `/airgap`, `/isolation` | Displays live telemetry on network perimeter defense, socket dialer, and zero-egress status. |
+| `/plan <query>` | Forces Vraxter to generate a structured implementation strategy using multi-phase `.vrx` planning. |
+| `/specialists` | Manages the roster of domain-specific sub-agents (or delegate via `@<name>`). |
+| `/skills` | Manages and synthesizes WASM capabilities (`/skills add <name> <spec>`). |
+| `/providers` | Adds or modifies LLM provider configurations (`/providers setup` for wizard). |
+| `/models` | Registers and prioritizes specific reasoning models (`/models setup` for wizard). |
+| `/activate <id>` | Manually switches and locks the active model for the current session. |
+| `/restore`, `/auto` | Restores automatic use-case driven model routing. |
+| `/jobs` | Lists all background daemon jobs currently executing. |
+| `/history` | Browses past conversation sessions in the local vault. |
+| `/load <#>` | Replays a past conversation by its index number from `/history`. |
+| `/session <id>` | Switches context to a specific topic or conversation ID. |
+| `/clear` | Resets the current chat viewport while preserving memory. |
+| `/factory-reset` | Restores Vraxter completely to factory defaults with automatic backup. |
 
+### CLI Management Commands
+
+- `vraxter --airgap`: Launch workstation or server locked into deterministic zero-egress airgap mode.
+- `vraxter config list`: Inspect global settings, active isolation mode (`airgap`, `local_lan`, `hybrid`), and perimeter lock status.
+- `vraxter config set isolation_mode <airgap|local_lan|hybrid>`: Configure network isolation boundary.
+- `vraxter config set require_skill_approval true`: Enforce Human-In-The-Loop (HITL) manual skill approvals for strict execution governance.
 - `vraxter providers <id> discover`: Discover available models for a specific provider.
 - `vraxter providers setup`: Interactive wizard to set up a new provider.
 - `vraxter providers add <name> --type <type>`: Add a provider non-interactively.
-- `vraxter skills <list/info/install/download/inject/inspect/delete/trust>`: Manage WASM binaries and skills.
-- `vraxter tokens <create/ls/revoke>`: Manage granular scoped-access for external clients.
-- `vraxter config set privacy_policy strict_local`: Enforce Air-Gapped execution policies.
-- `vraxter config set require_skill_approval true`: Enforce Human-In-The-Loop (HITL) manual skill approvals for strict execution governance.
+- `vraxter skills inject <path.wasm|skill_dir|manifest.json>`: Inject local skill binaries or Manifest V1 packages.
+- `vraxter skills inspect <id>`: Verify cryptographic SHA-256 hash of a skill binary against the vault.
+- `vraxter tokens create <name> --scopes="chat:write,skills:read"`: Generate scoped API tokens for external clients.
 
 ## Full Documentation
 
@@ -116,13 +136,15 @@ For deep dives into Vraxter's internals, development guides, and security model,
 ## 🛡️ Vraxter Shield (Security Architecture)
 
 Vraxter implements a **Secure-by-Design** philosophy for Enterprise environments:
-- **Sandbox Isolation**: The WASM runtime restricts tool access to specific file paths using strict capabilities-based security.
-- **Strict Privacy Policies**: Built-in network routing guards. Setting `strict_local` blocks all outbound cloud APIs and Hub integrations, allowing only local IP subnets (`vLLM`, `127.0.0.1`).
-- **Human-In-The-Loop (HITL) Approvals**: Enabling `require_skill_approval` halts execution over the Connect RPC stream and emits a `SKILL_APPROVAL_REQUEST`, requiring explicit client authorization before any dynamic code or WASM payload executes.
+- **Deterministic Zero-Egress Air-Gap**: Operates on a pure socket- and resolver-level isolation model without external ping checks. In-memory IP inspection blocks public domains before emitting any DNS queries, preventing data exfiltration via DNS tunneling and TOCTOU DNS rebinding.
+- **Internal Private LAN Supported**: The air-gap perimeter isolates Vraxter from the public WAN while permitting trusted communication within your private corporate intranet or home lab (RFC 1918: `192.168.x.x`, `10.x.x.x`, `172.16.x.x`, and `.local` mDNS). Operators can seamlessly connect to dedicated GPU clusters running Ollama, vLLM, or llama.cpp on the local network.
+- **Anti-Downgrade & Perimeter Lockout**: When executed with `--airgap` or `VRAXTER_AIRGAP=true`, the isolation perimeter becomes immutable. Any runtime attempts to downgrade security to hybrid mode over the API are rejected, requiring an administrative daemon restart.
+- **WASM Manifest V1 Capabilities Sandbox**: Tools run strictly inside Wazero using the official `skill-manifest/1` specification. Storage pools (`workspace`, `input`, `output`, `skill_data`, `ephemeral`) enforce virtualized read-only or read-write filesystem limits.
+- **Hermetic Offline Toolchains**: Skill compilation enforces `GOPROXY=off` and `GOSUMDB=off`, while the Toolchain Manager prevents unauthorized background SDK downloads when running air-gapped.
+- **Human-In-The-Loop (HITL) Approvals**: Enabling `require_skill_approval` halts execution over the Connect RPC stream and emits a `SKILL_APPROVAL_REQUEST`, rendered in the TUI's interactive Decision Bridge before any dynamic code or WASM payload executes.
 - **Daemon Authentication & Scoped Tokens**: Local IPC endpoints use an auto-generated master key (`~/.vraxter/daemon.key`), while external dashboards and IoT clients use granular, dynamically generated API Tokens (e.g. `skills:read` scopes) to eliminate lateral privilege escalation.
-- **Cryptographic Verification**: `vraxter skills inspect` validates SHA-256 hashes of downloaded WASM binaries against database checksums before execution.
+- **Cryptographic Verification**: `vraxter skills inspect` validates SHA-256 hashes of WASM binaries against database checksums before execution.
 - **Dry-Run Validation Pipeline**: Every skill undergoes a sandboxed dry-run execution verification before being signed and persisted to prevent corrupted or malicious binaries from entering the local filesystem.
-- **Checksum Verification**: Every Skill binary is hashed (SHA-256) to prevent local tampering or hijacking.
 - **Local Sovereignty**: All API keys are encrypted at rest using AES-256-GCM.
 
 ## 📜 License & Commercial Use
