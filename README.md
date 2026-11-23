@@ -15,8 +15,8 @@ Vraxter is a **Sovereign Autonomous AI Engine** designed to bridge the gap betwe
 
 Vraxter is built on the **Sovereign-Agent Model**, ensuring that your proprietary data, logic, and execution stay strictly within your infrastructure. It is built to run anywhere, serving as the localized brain for complex physical and digital ecosystems.
 
-### 1. Client-Agnostic Connect RPC Interface
-Vraxter operates as a completely headless backend daemon exposing a robust Connect RPC (HTTP/2) API. It is entirely uncoupled from any specific UI framework, allowing you to connect Thin CLI interfaces, Web Dashboards, IoT hardware, or SCADA systems natively.
+### 1. Client-Agnostic gRPC Interface
+Vraxter operates as a completely headless backend daemon exposing a **gRPC (HTTP/2)** API on `127.0.0.1:50051` (plus an experimental Connect RPC HTTP endpoint on `127.0.0.1:8080` currently serving the `EnvService` skeleton). It is uncoupled from any specific UI framework, allowing you to connect Thin CLI interfaces, Web Dashboards, IoT hardware, or SCADA systems.
 
 ### 2. Spatial Context Engine & Zone-Based Concurrency
 Vraxter natively understands physical and digital spaces. It supports **Spatial Isolation**: whether deployed in a multi-room smart home, partitioned corporate office, or distinct industrial facility zones, Vraxter isolates concurrent conversation histories and side-effects based on physical location, allowing dynamic, concurrent orchestration across a wide network of users and sensors.
@@ -76,11 +76,11 @@ Vraxter features a high-fidelity terminal interface styled in an **Anodized Tita
 
 | Component | Technology | Rationale |
 | :--- | :--- | :--- |
-| **Language** | Go (1.21+) | High-speed concurrency and single-binary portability. |
+| **Language** | Go (1.24+) | High-speed concurrency, `os.OpenRoot` confinement, and single-binary portability. |
 | **Sandbox** | Wazero (WASI V1) | Hardened, capabilities-based WebAssembly sandbox without local dependencies. |
-| **Persistence** | SQLite | Local-first, relational storage for memory and configuration with WAL mode optimized for Go concurrency. |
+| **Persistence** | SQLite | Local-first relational storage in WAL mode with `synchronous=FULL`, `foreign_keys=ON`, `busy_timeout=5000`, and `VACUUM INTO` backups. |
 | **TUI Interface** | Bubble Tea & Lip Gloss | Anodized Titanium & Burnished Copper terminal interface with double-rail command deck. |
-| **Internal Comms** | Connect RPC & gRPC (HTTP/2) | Client-agnostic, high-speed API layer using Protocol Buffers. |
+| **Internal Comms** | gRPC (HTTP/2) + Connect RPC (Env skeleton) | Client-agnostic API layer using Protocol Buffers (`127.0.0.1:50051` gRPC primary, `127.0.0.1:8080` HTTP env service). |
 
 ## Command Reference
 
@@ -108,15 +108,17 @@ Vraxter features a sophisticated "Slash Command" system for workstation manageme
 ### CLI Management Commands
 
 - `vraxter --airgap`: Launch workstation or server locked into deterministic zero-egress airgap mode.
+- `vraxter --enable-host-exec`: Explicitly enable guarded local host command execution (`$`) backed by `~/.config/vraxter/host_commands.json` (disabled by default; never toggleable over RPC).
 - `vraxter config list`: Inspect global settings, active isolation mode (`airgap`, `local_lan`, `hybrid`), and perimeter lock status.
 - `vraxter config set isolation_mode <airgap|local_lan|hybrid>`: Configure network isolation boundary.
 - `vraxter config set require_skill_approval true`: Enforce Human-In-The-Loop (HITL) manual skill approvals for strict execution governance.
+- `vraxter user <profile|setup|update>`: View or configure your local operator profile.
 - `vraxter providers <id> discover`: Discover available models for a specific provider.
 - `vraxter providers setup`: Interactive wizard to set up a new provider.
 - `vraxter providers add <name> --type <type>`: Add a provider non-interactively.
 - `vraxter skills inject <path.wasm|skill_dir|manifest.json>`: Inject local skill binaries or Manifest V1 packages.
 - `vraxter skills inspect <id>`: Verify cryptographic SHA-256 hash of a skill binary against the vault.
-- `vraxter tokens create <name> --scopes="chat:write,skills:read"`: Generate scoped API tokens for external clients.
+- `vraxter tokens create <name> --scopes="chat:write,skills:read"`: Generate scoped API tokens for external clients (add `host:exec` only when explicitly granting `$` access).
 
 ## Full Documentation
 
@@ -135,17 +137,24 @@ For deep dives into Vraxter's internals, development guides, and security model,
 
 ## 🛡️ Vraxter Shield (Security Architecture)
 
-Vraxter implements a **Secure-by-Design** philosophy for Enterprise environments:
-- **Deterministic Zero-Egress Air-Gap**: Operates on a pure socket- and resolver-level isolation model without external ping checks. In-memory IP inspection blocks public domains before emitting any DNS queries, preventing data exfiltration via DNS tunneling and TOCTOU DNS rebinding.
+Vraxter implements a **Secure-by-Design** philosophy for Enterprise and DDIL environments:
+- **Deterministic Zero-Egress Air-Gap & IMDS Blocking**: Operates on a pure socket- and resolver-level isolation model without external ping checks. In-memory IP inspection blocks public domains before emitting DNS queries, blocks cloud metadata / link-local endpoints (`169.254.0.0/16`, `fe80::/10`) by default in restricted modes, supports CIDR prefixes in `whitelisted_ips`, and applies strict DDIL HTTP transport timeouts.
 - **Internal Private LAN Supported**: The air-gap perimeter isolates Vraxter from the public WAN while permitting trusted communication within your private corporate intranet or home lab (RFC 1918: `192.168.x.x`, `10.x.x.x`, `172.16.x.x`, and `.local` mDNS). Operators can seamlessly connect to dedicated GPU clusters running Ollama, vLLM, or llama.cpp on the local network.
 - **Anti-Downgrade & Perimeter Lockout**: When executed with `--airgap` or `VRAXTER_AIRGAP=true`, the isolation perimeter becomes immutable. Any runtime attempts to downgrade security to hybrid mode over the API are rejected, requiring an administrative daemon restart.
-- **WASM Manifest V1 Capabilities Sandbox**: Tools run strictly inside Wazero using the official `skill-manifest/1` specification. Storage pools (`workspace`, `input`, `output`, `skill_data`, `ephemeral`) enforce virtualized read-only or read-write filesystem limits.
-- **Hermetic Offline Toolchains**: Skill compilation enforces `GOPROXY=off` and `GOSUMDB=off`, while the Toolchain Manager prevents unauthorized background SDK downloads when running air-gapped.
-- **Human-In-The-Loop (HITL) Approvals**: Enabling `require_skill_approval` halts execution over the Connect RPC stream and emits a `SKILL_APPROVAL_REQUEST`, rendered in the TUI's interactive Decision Bridge before any dynamic code or WASM payload executes.
-- **Daemon Authentication & Scoped Tokens**: Local IPC endpoints use an auto-generated master key (`~/.vraxter/daemon.key`), while external dashboards and IoT clients use granular, dynamically generated API Tokens (e.g. `skills:read` scopes) to eliminate lateral privilege escalation.
-- **Cryptographic Verification**: `vraxter skills inspect` validates SHA-256 hashes of WASM binaries against database checksums before execution.
-- **Dry-Run Validation Pipeline**: Every skill undergoes a sandboxed dry-run execution verification before being signed and persisted to prevent corrupted or malicious binaries from entering the local filesystem.
-- **Local Sovereignty**: All API keys are encrypted at rest using AES-256-GCM.
+- **Guarded Host Exec (`HostExecGuard`)**: Direct host command execution (`$`) is **disabled by default** and can only be enabled locally via `--enable-host-exec` or local config (never over RPC). Execution requires the explicit `host:exec` token scope, an absolute-path allowlist + on-disk `SHA-256` verification in `~/.config/vraxter/host_commands.json`, total blocking of shells and shell metacharacters, sanitized environment variables, a 2 MB output cap, network destination checks against the active isolation perimeter, and mandatory HITL approval for `elevated` or LLM-originated commands.
+- **Fail-Closed WASM Manifest V1 Sandbox**: Tools run inside Wazero using the `skill-manifest/1` specification. External and synthesized skills default to `Tier3Unverified`, `source: "host"` mounts are disabled by default (and forbidden in `airgap`), path traversal and ZipSlip/TarSlip are blocked, `.wasm` binaries are capped at 50 MB and cached by SHA-256, `stdout`/`stderr`/`http_get` payloads are capped at 2 MB with redirect re-validation, and native workspace IO skills (`vraxter-read-file`, `vraxter-list-dir`, `vraxter-patch-code`) are confined via `os.OpenRoot`.
+- **Hermetic Offline Toolchains**: Skill compilation uses randomized temporary build directories (`0700`), enforces `GOPROXY=off` and `GOSUMDB=off`, and blocks background SDK auto-downloads when running air-gapped.
+- **Human-In-The-Loop (HITL) Approvals**: Enabling `require_skill_approval` (or running `elevated` host commands) halts execution over the gRPC stream and emits a `SKILL_APPROVAL_REQUEST`, rendered in the TUI's interactive Decision Bridge before execution proceeds.
+- **Daemon Authentication & Scoped Tokens**: Local IPC endpoints use an auto-generated master key (`~/.vraxter/daemon.key`, `0600`), while external clients use granular scoped API tokens enforced across both unary and streaming RPCs.
+- **Cryptographic Verification & Dry-Run Pipeline**: Every skill undergoes a zero-capability sandboxed dry-run before its SHA-256 checksum is persisted, and `vraxter skills inspect` / `Runner.Execute` verify on-disk SHA-256 integrity prior to instantiation.
+- **Encryption at Rest & File Permissions**: Provider API keys (`providers.api_key`) are encrypted at rest in SQLite using AES-256-GCM; sensitive runtime artifacts (`daemon.key`, `vraxter.log`, `.wasm`, `.manifest.json`) use `0600` permissions. *(Full database encryption / SQLCipher and Ed25519 skill signatures are planned for the next hardening phase.)*
+
+> [!NOTE]
+> **Implementation Status & Experimental Stubs**: The core gRPC daemon (`:50051`), WASM runner, offline `vraxter skills inject`, air-gap/DDIL network shield, `HostExecGuard`, HITL gates, and TUI workstation are implemented and tested. The following components are currently experimental or placeholder stubs:
+> - **HTTP `:8080` Connect RPC endpoint**: Currently exposes only the `EnvService` skeleton; full agent streaming and management run over gRPC (`:50051`).
+> - **Remote Skill Hub (`vraxter skills install` / `download`)**: Placeholder stubs; use `vraxter skills inject` for offline/local `.wasm` and Manifest V1 packages.
+> - **Google Home (`SpatialService`)**: Returns mock rooms/devices when enabled; local `spatial.json` mapping is active.
+> - **World Feature Modules (`internal/features/*`)**: Build-tag scaffolding hooks; security policies are enforced directly by the core daemon and configuration flags.
 
 ## 📜 License & Commercial Use
 

@@ -194,6 +194,10 @@ func (r *Router) GetOrderedProvidersForUseCase(useCase string) []struct {
 
 	ucLower := strings.ToLower(useCase)
 
+	r.mu.RLock()
+	overrideID := r.routingOverrides[ucLower]
+	r.mu.RUnlock()
+
 	// Sort the array based on the configured priority for this specific use case
 	// If a model doesn't have an explicit priority for this use case, it falls back to its global priority.
 	// But we add a heavy penalty (+100) so that models specifically configured for this use case always float to the top.
@@ -202,9 +206,9 @@ func (r *Router) GetOrderedProvidersForUseCase(useCase string) []struct {
 		cfgJ := all[j].Config
 
 		getEffectivePriority := func(cfg types.ModelConfig) int {
-			// Explicit overrides always win (Priority 0)
-			if overrideID, ok := r.routingOverrides[ucLower]; ok && cfg.ID == overrideID {
-				return -1 
+			// Explicit overrides always win (Priority -1)
+			if overrideID != "" && cfg.ID == overrideID {
+				return -1
 			}
 			
 			if cfg.UseCasePriorities != nil {
@@ -298,8 +302,16 @@ func ClassifyUseCase(query string) string {
 		"math":     score(mathKW),
 	}
 
+	// Deterministic tie-breaking: iterate keys in strictly sorted lexical order
+	tags := make([]string, 0, len(scores))
+	for tag := range scores {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+
 	best, bestScore := "general", 0
-	for tag, s := range scores {
+	for _, tag := range tags {
+		s := scores[tag]
 		if s > bestScore {
 			bestScore = s
 			best = tag

@@ -18,6 +18,13 @@ type SkillCoder interface {
 	Language() string
 }
 
+// ManifestAwareSkillCoder is an optional extension implemented by coders capable of
+// preserving a synthesized SkillManifestV1 template through compilation and persistence.
+type ManifestAwareSkillCoder interface {
+	SkillCoder
+	CompileWithManifest(name, description, paramsSchema, code string, permissions []string, manifestV1 *types.SkillManifestV1) error
+}
+
 type SkillRunner interface {
 	Execute(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}) (*types.ExecutionResult, error)
 }

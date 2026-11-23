@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/google/uuid"
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/spf13/cobra"
 )
@@ -54,8 +55,9 @@ var userUpdateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update your profile information",
 	Run: func(cmd *cobra.Command, args []string) {
+		ctx := context.Background()
 		repo := db.NewUserRepository(appStore)
-		user, err := repo.GetDefaultUser(context.Background())
+		user, err := repo.GetDefaultUser(ctx)
 		if err != nil {
 			fmt.Printf("❌ Error: %v\n", err)
 			return
@@ -65,6 +67,28 @@ var userUpdateCmd = &cobra.Command{
 		expertise, _ := cmd.Flags().GetString("expertise")
 		interests, _ := cmd.Flags().GetString("interests")
 		bio, _ := cmd.Flags().GetString("bio")
+
+		if user == nil {
+			if name == "" {
+				fmt.Println("❌ No user profile found. Pass --name or run 'vraxter user setup' first.")
+				return
+			}
+			user = &db.UserProfile{
+				ID:              uuid.New().String(),
+				Name:            name,
+				Language:        "en",
+				ThemePreference: "system",
+				Expertise:       expertise,
+				Interests:       interests,
+				Bio:             bio,
+			}
+			if err := repo.CreateUser(ctx, user); err != nil {
+				fmt.Printf("❌ Failed to create profile: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("✅ Profile created successfully!")
+			return
+		}
 
 		if name != "" {
 			user.Name = name
@@ -79,7 +103,7 @@ var userUpdateCmd = &cobra.Command{
 			user.Bio = bio
 		}
 
-		if err := repo.UpdateUser(context.Background(), user); err != nil {
+		if err := repo.UpdateUser(ctx, user); err != nil {
 			fmt.Printf("❌ Failed to update profile: %v\n", err)
 			os.Exit(1)
 		}
@@ -114,21 +138,38 @@ var userSetupCmd = &cobra.Command{
 			return
 		}
 
+		ctx := context.Background()
 		repo := db.NewUserRepository(appStore)
-		user, err := repo.GetDefaultUser(context.Background())
+		user, err := repo.GetDefaultUser(ctx)
 		if err != nil {
 			fmt.Printf("❌ Error: %v\n", err)
 			return
 		}
 
-		user.Name = name
-		user.Expertise = expertise
-		user.Interests = interests
-		user.Bio = bio
+		if user == nil {
+			user = &db.UserProfile{
+				ID:              uuid.New().String(),
+				Name:            name,
+				Language:        "en",
+				ThemePreference: "system",
+				Expertise:       expertise,
+				Interests:       interests,
+				Bio:             bio,
+			}
+			if err := repo.CreateUser(ctx, user); err != nil {
+				fmt.Printf("❌ Failed to save profile: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			user.Name = name
+			user.Expertise = expertise
+			user.Interests = interests
+			user.Bio = bio
 
-		if err := repo.UpdateUser(context.Background(), user); err != nil {
-			fmt.Printf("❌ Failed to save profile: %v\n", err)
-			os.Exit(1)
+			if err := repo.UpdateUser(ctx, user); err != nil {
+				fmt.Printf("❌ Failed to save profile: %v\n", err)
+				os.Exit(1)
+			}
 		}
 
 		fmt.Println("\n✨ Profile saved! Vraxter is now personalized to your needs.")
@@ -144,4 +185,6 @@ func init() {
 	userUpdateCmd.Flags().String("expertise", "", "Your technical expertise (coding styles, languages)")
 	userUpdateCmd.Flags().String("interests", "", "Topics you are interested in")
 	userUpdateCmd.Flags().String("bio", "", "A short biography for context injection")
+
+	rootCmd.AddCommand(userCmd)
 }

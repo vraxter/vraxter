@@ -8,19 +8,23 @@ Vraxter is designed for high-stakes engineering environments where code executio
 ├─────────────────┬───────────────────────────────────────────────────────────┤
 │ Layer           │ Defensive Mechanisms                                      │
 ├─────────────────┼───────────────────────────────────────────────────────────┤
-│ 1. Network      │ Deterministic Zero-Egress Air-Gap, in-memory DNS filters,  │
-│    Perimeter    │ transport-level socket interceptor (syscall.EPERM).       │
+│ 1. Network      │ Deterministic Zero-Egress Air-Gap, in-memory DNS filters, │
+│    Perimeter    │ IMDS link-local block, CIDR whitelist, DDIL HTTP timeouts.│
 ├─────────────────┼───────────────────────────────────────────────────────────┤
 │ 2. Runtime      │ Anti-downgrade lockout (--airgap flag, immutable env),    │
 │    Lockout      │ dynamic security downgrade rejection.                     │
 ├─────────────────┼───────────────────────────────────────────────────────────┤
-│ 3. WASM Sandbox │ Wazero WASI V1 isolation, storage pools, virtualized FS.  │
+│ 3. WASM Sandbox │ Wazero WASI V1, Tier3Unverified fail-closed default,      │
+│    & Host Exec  │ 50MB binary / 2MB IO caps, os.OpenRoot, HostExecGuard ($).│
 ├─────────────────┼───────────────────────────────────────────────────────────┤
-│ 4. Toolchains   │ Hermetic offline builds (GOPROXY=off), SDK download block.│
+│ 4. Toolchains   │ Hermetic offline builds (GOPROXY=off), randomized tmpdirs,│
+│                 │ ZipSlip/TarSlip guards, SDK download block in air-gap.    │
 ├─────────────────┼───────────────────────────────────────────────────────────┤
-│ 5. Governance   │ Human-In-The-Loop (HITL) Decision Bridge approval gates.  │
+│ 5. Governance   │ Human-In-The-Loop (HITL) Decision Bridge approval gates   │
+│                 │ for skills, plans, and elevated/LLM host commands.        │
 ├─────────────────┼───────────────────────────────────────────────────────────┤
-│ 6. Cryptography │ SHA-256 binary checksums, AES-256-GCM credential vault.   │
+│ 6. Auth, Crypto │ Unary+streaming scoped tokens, SHA-256 binary integrity,  │
+│    & Durability │ AES-256-GCM API key vault, SQLite FULL sync + VACUUM INTO.│
 └─────────────────┴───────────────────────────────────────────────────────────┘
 ```
 
@@ -41,15 +45,17 @@ Vraxter enforces network boundaries through **`isolation_mode`**. Unlike convent
 > [!NOTE]
 > **Internal Private LAN Connectivity in Air-Gap**: An air-gap perimeter isolates Vraxter from the public WAN/Internet, but does **not** prevent communication within your trusted private intranet. Operators can connect to dedicated GPU clusters running Ollama, vLLM, or llama.cpp on the local network (e.g. `http://192.168.1.50:11434` or `http://gpu-box.local:11434`).
 
-### In-Memory DNS & Exfiltration Defense
-In `airgap` mode, Vraxter never resolves external domains through public DNS servers:
-- **IP Literals**: Parsed in-memory (`net.ParseIP`). Private and loopback IPs pass immediately without DNS calls. Public IPs are rejected instantly.
+### In-Memory DNS, IMDS & Exfiltration Defense
+In `airgap` and `local_lan` modes, Vraxter never resolves external domains through public DNS servers:
+- **IP Literals**: Parsed in-memory (`net.ParseIP`). Private (RFC 1918) and loopback IPs pass immediately without DNS calls. Public WAN IPs are rejected instantly (unless explicitly permitted via `whitelisted_ips`, which supports exact IPs and CIDR prefixes via `net.ParseCIDR`).
+- **Cloud Metadata (IMDS) Protection**: Link-local unicast ranges (`169.254.0.0/16` and `fe80::/10` — AWS/GCP/Azure IMDS) are **blocked by default** in restricted modes unless explicitly whitelisted.
 - **Local Domains**: Single-label hosts (e.g., `ollama-rig`) and `.local`/`.lan` domains resolve through local mDNS or LAN DNS.
-- **External WAN Domains**: Public FQDNs (e.g., `api.openai.com`, `attacker.com`) are blocked **in memory** before any lookup occurs. This completely prevents data exfiltration via DNS tunneling and eliminates Time-of-Check to Time-of-Use (TOCTOU) DNS rebinding attacks.
+- **External WAN Domains**: Public FQDNs (e.g., `api.openai.com`, `attacker.com`) are blocked **in memory** before any lookup occurs. This prevents data exfiltration via DNS tunneling and eliminates Time-of-Check to Time-of-Use (TOCTOU) DNS rebinding attacks.
 
-### Transport-Level Socket Interceptor
-Vraxter injects a custom `AirgapDialer` into `http.DefaultTransport`:
-- Any socket dial attempting to reach a public WAN IP or external domain is intercepted before packet transmission and fails immediately with `syscall.EPERM` (`operation not permitted`).
+### Transport-Level Socket Interceptor & DDIL Timeouts
+Vraxter injects a custom `AirgapDialer` and DDIL-hardened transport into `http.DefaultTransport` and all LLM/downloader clients:
+- Any socket dial attempting to reach a public WAN IP or external domain in restricted modes is intercepted before packet transmission and fails immediately with `syscall.EPERM` (`operation not permitted`).
+- All HTTP clients enforce strict DDIL timeouts (`10s` connect/TLS handshake, `30s` response header, `90s` idle connection), and the local HTTP server (`:8080`) enforces `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout`.
 
 ---
 
@@ -69,50 +75,64 @@ vraxter config list
 
 ---
 
-## 3. WASM Sandbox & Skill Manifest V1
+## 3. WASM Sandbox, Containment & Skill Manifest V1
 
-Vraxter executes all compiled tools inside the **Wazero** WebAssembly runtime, implementing a capabilities-based zero-trust architecture:
+Vraxter executes all compiled tools inside the **Wazero** WebAssembly runtime, implementing a capabilities-based, fail-closed architecture:
 
-- **No OS Syscalls**: The WASM binary operates in user space and cannot invoke host system calls.
-- **Resource Constraints**: Hardened limits (default 32MB–128MB RAM, 10–60 second CPU timeout) prevent Denial-of-Service and run-away loops.
-- **Skill Manifest V1 (`skill-manifest/1`)**: All skills must declare explicit storage pools in `capabilities.fs.mounts`:
+- **Fail-Closed Trust Tier**: All externally injected or dynamically synthesized skills default to `Tier3Unverified`. Any privileged capability (filesystem mounts, network, env) is blocked until explicitly trusted (`vraxter skills trust <id>`).
+- **No OS Syscalls & Bounded Resources**: WASM binaries operate in user space with a 128 MB Wazero memory limit, 50 MB maximum `.wasm` binary load/hash cap, configurable execution timeouts (10–60s), and 2 MB hard caps on `stdout`, `stderr`, file outputs, and `http_get` responses (with redirect destination re-validation).
+- **SHA-256 Module Cache**: Compiled WASM modules are indexed by SHA-256 digest of the bytes read from disk; modified binaries automatically evict and close stale compiled entries.
+- **Skill Manifest V1 (`skill-manifest/1`)**: Skills declare explicit virtualized storage pools in `capabilities.fs.mounts`:
   - `workspace`: Mounted root of the current project directory (read-only or read-write).
-  - `input`: Read-only pool for incoming user attachments (e.g., restricted to `.txt`, `.md`).
+  - `input`: Read-only pool for incoming user attachments.
   - `output`: Sandboxed destination for generated reports or artifacts.
   - `skill_data`: Persistent storage private to that specific skill.
-  - `ephemeral`: In-memory temporary directory purged after execution.
-- **Deterministic Clocks & Entropy**: Skills can declare monotonic-only clocks and deterministic random sources to prevent side-channel timing attacks.
+  - `ephemeral`: Temporary directory purged after execution.
+  - `host`: **Disabled by default** and **strictly forbidden in `airgap` mode**.
+- **Path Traversal & Native Tool Confinement**: Mount `subpath`, guest paths, and `io.output.path` are statically validated against `..`, symlinks, and null bytes; `io.output.path` reads and native workspace IO skills (`vraxter-read-file`, `vraxter-list-dir`, `vraxter-patch-code`) are confined using Go's `os.OpenRoot`. Archive extraction (`ExtractTarGz`/`ExtractZip`) blocks ZipSlip/TarSlip traversal and symlink escapes.
+- **Deterministic Clocks & Entropy**: Skills can declare monotonic-only clocks and optional random sources (`crypto/rand` disabled unless declared).
 
 ---
 
 ## 4. Hermetic Offline Toolchains
 
 When synthesizing new skills autonomously (`vraxter-coder`):
-- **Go Compilation**: The compiler runs with `GOPROXY=off` and `GOSUMDB=off` to guarantee that no dependencies are fetched over the network.
-- **Toolchain Manager Guard**: Background SDK auto-downloads (`SetupSDK`) are blocked when airgap is active, requiring SDKs to be pre-populated offline in `~/.vraxter/sdk`.
-- **Dry-Run Verification Pipeline**: Every generated binary undergoes a sandboxed dry-run test execution before being signed and persisted to prevent corrupted binaries from entering the vault.
+- **Go Compilation**: The compiler runs with `GOPROXY=off` and `GOSUMDB=off` inside randomized `0700` temporary build directories (`os.MkdirTemp`) to prevent temp-dir collisions and dependency fetches over the network.
+- **Toolchain Manager Guard**: Background SDK auto-downloads (`SetupSDK`) are blocked when airgap is active, requiring SDKs to be pre-populated offline in `~/.vraxter/sdk`. Downloads use atomic temp-file replacement and DDIL HTTP timeouts.
+- **Dry-Run Verification Pipeline**: Every generated binary undergoes a zero-capability sandboxed dry-run test execution before its SHA-256 checksum is persisted. Failed binaries and manifests are immediately purged.
 
 ---
 
-## 5. Human-In-The-Loop (HITL) Execution Gates
+## 5. Human-In-The-Loop (HITL) Gates & Guarded Host Exec (`$`)
 
+### HITL Skill & Plan Approvals
 For strict operational governance:
 - Setting `require_skill_approval: true` halts execution whenever a tool invocation is planned.
-- The daemon emits a `SKILL_APPROVAL_REQUEST` event over the Connect RPC stream.
-- In the TUI, the **Decision Bridge** renders an approval card showing the skill ID, sandbox perimeter (`PERIMETER: 🛡️ AIRGAP`), and invocation payload.
+- The daemon emits a `SKILL_APPROVAL_REQUEST` event over the gRPC stream.
+- In the TUI, the **Decision Bridge** renders an approval card showing the skill ID, active sandbox perimeter, and invocation payload.
 - Execution cannot proceed without explicit operator confirmation (`[Enter]` to Accept, `[Esc]` to Deny).
 
 ```bash
 vraxter config set require_skill_approval true
 ```
 
+### Guarded Host Command Execution (`HostExecGuard`)
+Direct local host command execution (`$ <cmd> [args...]`) is hardened under Zero-Trust rules:
+- **Disabled by Default**: `host_exec.enabled` defaults to `false` and can only be enabled via local CLI flag (`vraxter --enable-host-exec`) or local config — never modifiable over RPC.
+- **Explicit Scope**: Requires the `host:exec` scope on both unary and streaming RPC tokens.
+- **SHA-256 Binary Allowlist**: Only commands explicitly listed with absolute paths and matching on-disk `SHA-256` digests in `~/.config/vraxter/host_commands.json` can execute.
+- **No Shell / No Injection**: Shell binaries (`sh`, `bash`, `cmd`, `powershell`, etc.) and shell metacharacters (`;`, `|`, `&`, `` ` ``, `$()`, redirections) are unconditionally rejected. Commands run via direct `exec.CommandContext` with a minimal sanitized environment, strict timeouts, and a 2 MB `stdout`/`stderr` cap.
+- **Risk Classification & HITL**: Each allowlisted entry is classified as `read_only` or `elevated`. Commands marked `elevated` — or **any** host command suggested by an LLM/specialist — always require explicit HITL approval (`!APPROVE_HOST_CMD`).
+- **Network Destination Validation**: Arguments targeting IPs or hostnames in network commands are checked against `utils.IsAllowedNetworkWithMode` to enforce `--airgap` and `local_lan` boundaries.
+
 ---
 
-## 6. Authentication, Scoped Tokens & Cryptography
+## 6. Authentication, Scoped Tokens, Durability & Cryptography
 
-- **Dual-Tier Authentication**:
+- **Dual-Tier Authentication & Streaming Scopes**:
   - **Workstation Root Access**: Local IPC endpoints authenticate using an auto-generated master key (`~/.vraxter/daemon.key`) with restricted `0600` POSIX permissions.
-  - **Scoped External Tokens**: External clients (dashboards, SCADA, IoT) use granular tokens created with `vraxter tokens create <name> --scopes="chat:write,skills:read"` to eliminate lateral privilege escalation.
-- **Cryptographic Verification**: Every skill binary is hashed with **SHA-256**. `vraxter skills inspect <id>` verifies the on-disk binary against the database hash prior to execution.
-- **Encryption at Rest**: Provider API keys, credentials, and master configurations are encrypted using **AES-256-GCM** inside the local SQLite database.
-- **Data Sovereignty**: Chat history, memory embeddings, and specialist logs remain 100% on-premises. Zero telemetry or analytics are ever collected.
+  - **Scoped External Tokens**: External clients use granular tokens created with `vraxter tokens create <name> --scopes="chat:write,skills:read"` (and `host:exec` only if explicitly required). Scopes are enforced on both unary and streaming RPCs via `wrappedServerStream`.
+- **Cryptographic Verification**: Every skill binary is hashed with **SHA-256**. Both `vraxter skills inspect <id>` and `Runner.Execute` verify the on-disk binary against the recorded hash prior to execution. *(Ed25519 asymmetric manifest signing is planned for a future hardening phase.)*
+- **Encryption at Rest (Current Scope)**: Provider API keys (`providers.api_key`) are encrypted at rest using **AES-256-GCM** with a `0600` master key. Runtime logs (`vraxter.log`), `.wasm` binaries, and `.manifest.json` files use `0600` permissions. *(Full SQLite database encryption via SQLCipher and UDS/mTLS transport hardening are planned for the next phase.)*
+- **SQLite Durability & Crash Resilience**: SQLite runs in WAL mode with `PRAGMA synchronous=FULL`, `PRAGMA foreign_keys=ON`, `PRAGMA busy_timeout=5000`, and transactional `VACUUM INTO` backups.
+- **Data Sovereignty**: Chat history, memory, and specialist logs remain 100% on-premises. Zero telemetry or analytics are collected.

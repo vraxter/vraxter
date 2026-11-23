@@ -119,6 +119,7 @@ func (s *CodeGenService) GenerateAndCompile(
 
 		// Parse Manifest, Schema, Permissions, and Code blocks
 		var permissions []string
+		var parsedV1 *types.SkillManifestV1
 		schema := ""
 		code := ""
 		
@@ -148,6 +149,7 @@ func (s *CodeGenService) GenerateAndCompile(
 					manifestJSON := manifestStr[start : end+1]
 					var v1 types.SkillManifestV1
 					if err := json.Unmarshal([]byte(manifestJSON), &v1); err == nil {
+						parsedV1 = &v1
 						if v1.IO != nil && len(v1.IO.Input.Schema) > 0 {
 							schema = string(v1.IO.Input.Schema)
 						}
@@ -200,7 +202,7 @@ func (s *CodeGenService) GenerateAndCompile(
 		s.emit(ctx, out, llm.EventTypeStatus, "🔨 Compiling and verifying skill...")
 		s.emit(ctx, out, llm.EventTypeToken, "🔨 Compiling and verifying skill...\n")
 
-		compileErr := s.Coder.CreateSkill(lang, name, description, schema, code, permissions)
+		compileErr := s.Coder.CreateSkillWithManifest(lang, name, description, schema, code, permissions, parsedV1)
 		if compileErr != nil {
 			lastErr = compileErr
 			if s.Verbose {

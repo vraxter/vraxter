@@ -8,7 +8,7 @@
 ### 1. Creation & Registration
 Specialists can be registered through two methods:
 - **Interactive TUI Wizard (`/specialists add`)**: Launches the `◈ SPECIALIST ARCHITECTURE WIZARD`, stepping the operator through archetype selection (`SRE / Systems Architect`, `Frontend / UI Specialist`, `Custom Domain Specialist`), identifier assignment, custom capability tags, and model binding.
-- **Autonomous Tool (`vraxter-create-specialist`)**: When prompted in natural language, Vraxter generates the identifier, structured expertise scope, and specialized system prompt, persisting it to SQLite with AES-256 encryption.
+- **Autonomous Tool (`vraxter-create-specialist`)**: When prompted in natural language, Vraxter generates the identifier, structured expertise scope, and specialized system prompt, persisting it to the local SQLite database.
 
 ### 2. Delegation Modes
 

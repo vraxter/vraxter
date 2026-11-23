@@ -50,6 +50,17 @@ type StreamEvent struct {
 	SkillID       string // Used for tool calls or approvals
 }
 
+// SendStreamEvent sends evt to ch without blocking indefinitely if ctx is canceled.
+// Returns true if the event was delivered, or false if ctx finished first.
+func SendStreamEvent(ctx context.Context, ch chan<- StreamEvent, evt StreamEvent) bool {
+	select {
+	case ch <- evt:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // CompletionResponse encapsulates what an LLM responds
 type CompletionResponse struct {
 	Content string

@@ -27,6 +27,7 @@ import (
 	"github.com/vraxter/vraxter/internal/services"
 	"github.com/vraxter/vraxter/internal/skills"
 	"github.com/vraxter/vraxter/internal/utils"
+	"github.com/vraxter/vraxter/pkg/interfaces"
 	"github.com/vraxter/vraxter/pkg/types"
 )
 
@@ -35,6 +36,50 @@ const (
 	markerTool = "[VRAX_TOOL]"
 	markerCode = "[VRAX_CODE]"
 )
+
+func sendEvent(ctx context.Context, ch chan<- llm.StreamEvent, evt llm.StreamEvent) bool {
+	return interfaces.SendStreamEvent(ctx, ch, evt)
+}
+
+func isInternalControlCommand(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "!APPROVE_SKILL") ||
+		strings.HasPrefix(trimmed, "!REJECT_SKILL") ||
+		strings.HasPrefix(trimmed, "!EXECUTE_PLAN") ||
+		strings.HasPrefix(trimmed, "!RUN_SKILL") ||
+		strings.HasPrefix(trimmed, "!APPROVE_HOST_CMD") ||
+		trimmed == "!CONTINUE_REASONING"
+}
+
+// FilterAllowedModels enforces the active isolation perimeter (airgap / strict_local / local_lan)
+// uniformly across startup, cache refresh, and failover model sync.
+func FilterAllowedModels(models []types.ModelConfig, isolationMode string, whitelistedIPs []string) []types.ModelConfig {
+	mode := strings.ToLower(strings.TrimSpace(isolationMode))
+	isRestricted := mode == "airgap" || mode == "strict_local" || mode == "local_lan"
+	if !isRestricted {
+		out := make([]types.ModelConfig, len(models))
+		copy(out, models)
+		return out
+	}
+
+	var allowedModels []types.ModelConfig
+	for _, m := range models {
+		pType := strings.ToLower(strings.TrimSpace(m.Provider))
+		isCloud := pType == "openai" || pType == "anthropic" || pType == "google"
+		if isCloud {
+			slog.Info("Isolation Shield active: skipping cloud model", "mode", mode, "model_id", m.ID, "provider", m.Provider)
+			continue
+		}
+		if (pType == "custom" || pType == "ollama") && strings.TrimSpace(m.BaseURL) != "" {
+			allowed, err := utils.IsAllowedNetworkWithMode(m.BaseURL, mode, whitelistedIPs)
+			if err != nil || !allowed {
+				slog.Warn("Isolation Shield active: skipping model with unapproved endpoint", "mode", mode, "model_id", m.ID, "url", m.BaseURL, "err", err)
+				continue
+			}
+		}
+		allowedModels = append(allowedModels, m)
+	}
+	return allowedModels
+}
 
 // Orchestrator is the primary coordinator of Vraxter's request lifecycle.
 // It owns the high-level flow: resolve intent → execute fast-path or delegate to LLM.
@@ -99,25 +144,7 @@ func NewOrchestrator(
 		return nil, fmt.Errorf("failed fetching models from local DB: %w", err)
 	}
 
-	isAirgap := isolationMode == "airgap" || isolationMode == "strict_local"
-	var allowedModels []types.ModelConfig
-	for _, m := range models {
-		if isAirgap {
-			isCloud := m.Provider == "openai" || m.Provider == "anthropic" || m.Provider == "google"
-			if isCloud {
-				slog.Info("Airgap Shield active: skipping cloud model", "model_id", m.ID, "provider", m.Provider)
-				continue
-			}
-			if (m.Provider == "custom" || m.Provider == "ollama") && m.BaseURL != "" {
-				allowed, err := utils.IsAllowedNetwork(m.BaseURL, whitelistedIPs)
-				if err != nil || !allowed {
-					slog.Warn("Airgap Shield active: skipping model with unapproved endpoint", "model_id", m.ID, "url", m.BaseURL)
-					continue
-				}
-			}
-		}
-		allowedModels = append(allowedModels, m)
-	}
+	allowedModels := FilterAllowedModels(models, isolationMode, whitelistedIPs)
 
 	router := llm.NewRouter(allowedModels)
 	bootedProviders := make(map[string]bool)
@@ -168,6 +195,11 @@ func NewOrchestrator(
 	}
 
 	o.ExecEngine.GetActiveModelConfigDelegate = o.GetActiveModelConfig
+	o.ExecEngine.HostExecGuard = security.NewHostExecGuard(security.HostExecOptions{
+		Enabled:        false,
+		IsolationMode:  isolationMode,
+		WhitelistedIPs: whitelistedIPs,
+	})
 	o.Swarm = NewSwarmDispatcher(o.ExecEngine, jobMgr, o.Resolver)
 
 	// Register System Skills for Semantic Matching/Fast Path
@@ -263,10 +295,15 @@ func (o *Orchestrator) refreshCache() error {
 		return nil
 	}
 
-	models, err := o.ModelsRepo.GetAllModelsPublic()
+	isoMode := o.IsolationMode
+	wlCopy := append([]string(nil), o.WhitelistedIPs...)
+
+	rawModels, err := o.ModelsRepo.GetAllModelsPublic()
 	if err != nil {
 		return err
 	}
+	models := FilterAllowedModels(rawModels, isoMode, wlCopy)
+
 	specs, err := o.SpecialistRepo.GetAllSpecialists()
 	if err != nil {
 		return err
@@ -276,7 +313,8 @@ func (o *Orchestrator) refreshCache() error {
 	o.cachedSpecialists = specs
 
 	if activeModels, err := o.ModelsRepo.GetActiveModels(); err == nil && len(activeModels) > 0 && o.StreamCoord != nil && o.StreamCoord.Router != nil {
-		o.StreamCoord.Router.SyncActiveModels(activeModels)
+		allowedActive := FilterAllowedModels(activeModels, isoMode, wlCopy)
+		o.StreamCoord.Router.SyncActiveModels(allowedActive)
 	}
 
 	// Rebuild model/spec context strings
@@ -313,6 +351,9 @@ func (o *Orchestrator) IdentifyIntent(ctx context.Context, text string) (types.I
 	if len(text) == 0 {
 		return types.IntentMatch{}, nil
 	}
+	if isInternalControlCommand(strings.TrimSpace(text)) {
+		return types.IntentMatch{}, nil
+	}
 	prefix := string(text[0])
 	rawPayload := text[1:]
 
@@ -337,6 +378,9 @@ func (o *Orchestrator) IdentifyIntent(ctx context.Context, text string) (types.I
 		}, nil
 
 	case types.CommandExecutionPrefix:
+		if security.ContainsShellMetacharacters(rawPayload) {
+			return types.IntentMatch{}, fmt.Errorf("%w", security.ErrInjectionDetected)
+		}
 		args, err := shlex.Split(rawPayload)
 		if err != nil || len(args) == 0 {
 			return types.IntentMatch{}, fmt.Errorf("failed to parse command: %v", err)
@@ -347,7 +391,9 @@ func (o *Orchestrator) IdentifyIntent(ctx context.Context, text string) (types.I
 			ID:         args[0],
 			Args:       args[1:],
 			Confidence: 1.0,
-			Params:     map[string]interface{}{},
+			Params: map[string]interface{}{
+				"_raw_payload": rawPayload,
+			},
 		}, nil
 	}
 
@@ -523,8 +569,15 @@ func (o *Orchestrator) GetActiveModelID(sessionID string) string {
 	ordered := o.StreamCoord.Router.GetOrderedProviders()
 	if len(ordered) == 0 && o.ModelsRepo != nil {
 		if activeModels, err := o.ModelsRepo.GetActiveModels(); err == nil && len(activeModels) > 0 {
-			o.StreamCoord.Router.SyncActiveModels(activeModels)
-			ordered = o.StreamCoord.Router.GetOrderedProviders()
+			o.mu.RLock()
+			isoMode := o.IsolationMode
+			wlCopy := append([]string(nil), o.WhitelistedIPs...)
+			o.mu.RUnlock()
+			allowedActive := FilterAllowedModels(activeModels, isoMode, wlCopy)
+			if len(allowedActive) > 0 {
+				o.StreamCoord.Router.SyncActiveModels(allowedActive)
+				ordered = o.StreamCoord.Router.GetOrderedProviders()
+			}
 		}
 	}
 	if len(ordered) > 0 {
@@ -541,8 +594,15 @@ func (o *Orchestrator) GetFailoverModelID(sessionID string) string {
 	ordered := o.StreamCoord.Router.GetOrderedProviders()
 	if len(ordered) == 0 && o.ModelsRepo != nil {
 		if activeModels, err := o.ModelsRepo.GetActiveModels(); err == nil && len(activeModels) > 0 {
-			o.StreamCoord.Router.SyncActiveModels(activeModels)
-			ordered = o.StreamCoord.Router.GetOrderedProviders()
+			o.mu.RLock()
+			isoMode := o.IsolationMode
+			wlCopy := append([]string(nil), o.WhitelistedIPs...)
+			o.mu.RUnlock()
+			allowedActive := FilterAllowedModels(activeModels, isoMode, wlCopy)
+			if len(allowedActive) > 0 {
+				o.StreamCoord.Router.SyncActiveModels(allowedActive)
+				ordered = o.StreamCoord.Router.GetOrderedProviders()
+			}
 		}
 	}
 
@@ -715,178 +775,119 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 
 		trimmedText := strings.TrimSpace(text)
 
-		// FAST PATH -1: Architecture Planning & Amendments (/plan, AMEND PLAN:)
-		// Evaluated before mention delegation so that `/plan @spec` and `@spec /plan` build plans rather than bare chat.
-		if isPlan, planQuery, leadSpec := o.detectPlanIntent(trimmedText, specialistID); isPlan {
-			o.ChatRepo.SaveMessage(&types.Message{
-				ID: intentID, ConversationID: conversationID,
-				Role: "user", Content: text, Timestamp: time.Now(),
-			})
+		// CONTROL COMMANDS (HITL / Plan / Direct Run):
+		// Handled BEFORE @mention, /plan, and IdentifyIntent ("!") so they are never hijacked
+		// as ordinary skills or specialist mentions, and never hold o.mu across execution.
+		isControlContinuation := false
 
-			if planQuery == "" {
-				out <- llm.StreamEvent{
-					Type:    llm.EventTypeToken,
-					Content: "\n⚠️ Please provide the task details to generate a plan. Usage: `/plan [@specialist] <task>`\n",
-				}
+		if strings.HasPrefix(trimmedText, "!RUN_SKILL") {
+			skillID := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!RUN_SKILL"))
+			if !sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n▶️ **Running skill:** %s\n", skillID)}) {
 				return
 			}
-
-			// Focus specialist in UI if designated
-			if leadSpec != nil {
-				if overrideModelID == "" && leadSpec.ModelID != "" {
-					overrideModelID = leadSpec.ModelID
-				}
-				out <- llm.StreamEvent{
-					Type:    llm.EventTypeSpecialistResult,
-					Content: fmt.Sprintf("%s|%s|", leadSpec.ID, leadSpec.Name),
-				}
-			}
-
-			if err := o.refreshCache(); err != nil {
-				slog.Warn("Metadata cache refresh encountered issues", "error", err)
-			}
-
-			o.mu.RLock()
-			specsCtxStr := o.cachedSpecsCtx
-			o.mu.RUnlock()
-
-			daemonTitle := "Architecture Planner"
-			spawnMsg := "\n⚡ Spawned Architecture Planner Daemon (Job ID: %s). You will be notified when the plan is ready.\n"
-			targetSpecName := ""
-			if leadSpec != nil {
-				targetSpecName = leadSpec.Name
-				daemonTitle = fmt.Sprintf("Architecture Planner (@%s)", leadSpec.Name)
-				spawnMsg = fmt.Sprintf("\n⚡ Spawned Architecture Planner Daemon led by @%s (Job ID: %%s). You will be notified when the plan is ready.\n", leadSpec.Name)
-			}
-
-			jobID := o.JobManager.SpawnDaemon(daemonTitle, func() (string, error) {
-				planCtx := context.Background()
-				plan, err := o.Planner.BuildPlan(planCtx, planQuery, specsCtxStr, overrideModelID, targetSpecName)
-				if err != nil {
-					return "", err
-				}
-				planJSON, _ := json.Marshal(plan)
-
-				go func() {
-					time.Sleep(50 * time.Millisecond)
-					o.JobManager.Broadcast(SystemEvent{
-						Type:      EventPlanProposed,
-						JobID:     "plan-" + uuid.New().String(),
-						Title:     "Plan Proposed",
-						Payload:   string(planJSON),
-						Timestamp: time.Now(),
-					})
-				}()
-
-				return "", nil
-			})
-
-			out <- llm.StreamEvent{
-				Type:    llm.EventTypeToken,
-				Content: fmt.Sprintf(spawnMsg, jobID),
-			}
+			result := o.ExecEngine.HandleStandardSkill(ctx, out, types.ToolCall{SkillID: skillID}, skillID)
+			sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ **Result:**\n%s\n", result)})
 			return
 		}
 
-		// FAST PATH 0: Structural @mention pre-processor (language-agnostic, always runs)
-		// This is evaluated BEFORE IdentifyIntent and the resolver, regardless of specialistID.
-		if mentionMatch, remainingTask := o.resolveMention(trimmedText); mentionMatch.Confidence >= 1.0 {
-			o.ChatRepo.SaveMessage(&types.Message{
-				ID: intentID, ConversationID: conversationID,
-				Role: "user", Content: text, Timestamp: time.Now(),
-			})
-
-			if mentionMatch.Type == types.IntentTypeReturnControl {
-				o.ChatRepo.SaveMessage(&types.Message{
-					ID: uuid.New().String(), ConversationID: conversationID,
-					Role: "system", Content: "CONTROL RETURNED. The specialist sub-agent has exited the conversation. SYSTEM DIRECTIVE: YOU ARE NOW 'VRAXTER' (The primary Orchestrator). STOP ACTING LIKE THE SPECIALIST. Abandon all sub-agent personas. You MUST now answer the user's latest query using your full capabilities as Vraxter.",
-					Timestamp: time.Now(),
-				})
-				// Signal TUI to clear specialist banner and notify user
-				out <- llm.StreamEvent{Type: llm.EventTypeSpecialistResult, Content: "||"}
-
-				if remainingTask != "" {
-					// Re-route the remaining text through the supervisor pipeline
-					subStream, err := o.ProcessRawIntent(ctx, conversationID, remainingTask, "", overrideModelID, sourceZone, sourceUser)
-					if err == nil {
-						for e := range subStream {
-							if e.Type != llm.EventTypeDone {
-								out <- e
-							}
+		if strings.HasPrefix(trimmedText, "!APPROVE_HOST_CMD") {
+			payloadStr := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!APPROVE_HOST_CMD"))
+			var req struct {
+				Command string                 `json:"command"`
+				Args    []string               `json:"args"`
+				Params  map[string]interface{} `json:"params"`
+			}
+			if err := json.Unmarshal([]byte(payloadStr), &req); err != nil {
+				sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: Invalid payload for host command approval.\n"})
+				return
+			}
+			cmdName := req.Command
+			cmdArgs := req.Args
+			if cmdName == "" && req.Params != nil {
+				cmdName, _ = req.Params["command"].(string)
+				if rawArgs, ok := req.Params["args"].([]interface{}); ok {
+					for _, a := range rawArgs {
+						if s, ok := a.(string); ok {
+							cmdArgs = append(cmdArgs, s)
 						}
 					}
 				}
-				return
 			}
-
-			// @SpecialistName delegation
-			o.ExecEngine.RunFastPath(ctx, out, mentionMatch, conversationID)
+			o.ExecEngine.RunFastPath(ctx, out, types.IntentMatch{
+				Type:       types.IntentTypeCommand,
+				ID:         cmdName,
+				Args:       cmdArgs,
+				Confidence: 1.0,
+				Params:     map[string]interface{}{"_hitl_approved": true},
+			}, conversationID)
 			return
 		}
 
-		// FAST PATH 1: Exact Command Match
-		explicitMatch, _ := o.IdentifyIntent(ctx, trimmedText)
-		if explicitMatch.Confidence == 1.0 {
-			o.ChatRepo.SaveMessage(&types.Message{
-				ID: intentID, ConversationID: conversationID,
-				Role: "user", Content: text, Timestamp: time.Now(),
-			})
-			o.ExecEngine.RunFastPath(ctx, out, explicitMatch, conversationID)
-			return
-		}
+		if strings.HasPrefix(trimmedText, "!EXECUTE_PLAN") {
+			planJSON := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!EXECUTE_PLAN"))
+			var plan Plan
+			if err := json.Unmarshal([]byte(planJSON), &plan); err == nil {
+				jobID := o.JobManager.SpawnDaemon("Plan Execution: "+plan.Goal, func() (string, error) {
+					bgCtx := context.Background()
+					var finalOutput strings.Builder
 
-		// FAST PATH 2: Skill-First Execution (Intent Resolver)
-		if specialistID == "" {
-			match := o.Resolver.Resolve(ctx, text)
-			if match.Confidence >= 0.8 {
-				o.ChatRepo.SaveMessage(&types.Message{
-					ID: intentID, ConversationID: conversationID,
-					Role: "user", Content: text, Timestamp: time.Now(),
+					for i, phase := range plan.Phases {
+						// Broadcast progress so TUI sees the phase shifts
+						o.JobManager.Broadcast(SystemEvent{
+							Type:      EventSwarmProgress,
+							Title:     "Executing Plan",
+							Payload:   fmt.Sprintf("Running Phase %d: %s", i+1, phase.Title),
+							Timestamp: time.Now(),
+						})
+
+						// Swallow stream tokens locally and synchronize drain completion via WaitGroup
+						dummyOut := make(chan llm.StreamEvent, 100)
+						var phaseOutput strings.Builder
+						var drainWG sync.WaitGroup
+						drainWG.Add(1)
+						go func() {
+							defer drainWG.Done()
+							for evt := range dummyOut {
+								if evt.Type == llm.EventTypeToken {
+									phaseOutput.WriteString(evt.Content)
+								}
+							}
+						}()
+
+						phaseQuery := fmt.Sprintf("TASK: %s\nDESCRIPTION: %s", phase.Title, phase.Description)
+						specID := phase.Specialist
+						if specID == "supervisor" || specID == "vraxter" {
+							specID = ""
+						}
+						_ = o.executeSubTask(bgCtx, phaseQuery, specID, dummyOut)
+						close(dummyOut)
+						drainWG.Wait()
+
+						finalOutput.WriteString(fmt.Sprintf("=== Phase %d: %s ===\n%s\n\n", i+1, phase.Title, phaseOutput.String()))
+					}
+
+					return finalOutput.String(), nil
 				})
-				o.ExecEngine.RunFastPath(ctx, out, match, conversationID)
-				return
+
+				sendEvent(ctx, out, llm.StreamEvent{
+					Type:    llm.EventTypeToken,
+					Content: fmt.Sprintf("\n⚡ Spawned Plan Execution Daemon (Job ID: %s). The plan is now running in the background.\n", jobID),
+				})
+			} else {
+				sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeError, Err: err})
 			}
-		}
-
-		// Background Index (Zero block)
-		go func() {
-			if embCfg, embProvider, err := o.StreamCoord.Router.GetEmbeddingProvider(); err == nil {
-				vectors, embedErr := embProvider.Embed(context.Background(), embCfg.Model, []string{text})
-				if embedErr == nil && len(vectors) > 0 {
-					_ = o.MemoryRepo.SaveEmbedding(conversationID, text, vectors[0])
-				}
-			}
-		}()
-
-		if err := o.refreshCache(); err != nil {
-			slog.Warn("Metadata cache refresh encountered issues", "error", err)
-		}
-
-		o.mu.RLock()
-		modelsCtxStr := o.cachedModelsCtx
-		specsCtxStr := o.cachedSpecsCtx
-
-		if strings.HasPrefix(trimmedText, "!RUN_SKILL") {
-			o.mu.RUnlock()
-			skillID := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!RUN_SKILL"))
-			out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n▶️ **Running skill:** %s\n", skillID)}
-			
-			// Invoke HandleStandardSkill directly
-			result := o.ExecEngine.HandleStandardSkill(ctx, out, types.ToolCall{SkillID: skillID}, skillID)
-			out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ **Result:**\n%s\n", result)}
 			return
 		}
 
 		if strings.HasPrefix(trimmedText, "!APPROVE_SKILL") {
-			o.mu.RUnlock()
 			payloadStr := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!APPROVE_SKILL"))
 			var call types.ToolCall
 			if err := json.Unmarshal([]byte(payloadStr), &call); err == nil {
-				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ **Skill Execution Approved:** `%s`\n", call.SkillID)}
-				// Force execution directly (bypassing approval loop by turning it off temporarily just for this synchronous call)
-				o.ExecEngine.RequireSkillApproval = false
-				result := o.ExecEngine.HandleStandardSkill(ctx, out, call, call.SkillID)
-				o.ExecEngine.RequireSkillApproval = true // Restore
+				if !sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ **Skill Execution Approved:** `%s`\n", call.SkillID)}) {
+					return
+				}
+				// Execute with per-invocation bypassApproval=true (zero shared mutation)
+				result := o.ExecEngine.HandleStandardSkillWithBypass(ctx, out, call, call.SkillID, true)
 
 				// Save the tool output so the LLM context is updated
 				o.ChatRepo.SaveMessage(&types.Message{
@@ -896,23 +897,25 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 					Content:        fmt.Sprintf("[%s]: %s", call.SkillID, result),
 					Timestamp:      time.Now(),
 				})
-				
-				// Re-prompt the LLM to continue reasoning
-				trimmedText = "!CONTINUE_REASONING" // Will fall through to standard LLM generation
+
+				// Continue reasoning in standard LLM loop without re-entering fast paths
+				trimmedText = "!CONTINUE_REASONING"
+				isControlContinuation = true
 			} else {
-				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: Invalid payload for skill approval.\n"}
+				sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: Invalid payload for skill approval.\n"})
 				return
 			}
 		}
 
-		if strings.HasPrefix(trimmedText, "!REJECT_SKILL") {
-			o.mu.RUnlock()
+		if !isControlContinuation && strings.HasPrefix(trimmedText, "!REJECT_SKILL") {
 			payloadStr := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!REJECT_SKILL"))
 			var call types.ToolCall
 			if err := json.Unmarshal([]byte(payloadStr), &call); err == nil {
-				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n❌ **Skill Execution Rejected:** `%s`\n", call.SkillID)}
-				
-				// Save the tool output as rejected so the LLM context is updated
+				if !sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n❌ **Skill Execution Rejected:** `%s`\n", call.SkillID)}) {
+					return
+				}
+
+				// Save the rejection feedback so the LLM context is updated
 				o.ChatRepo.SaveMessage(&types.Message{
 					ID:             uuid.New().String(),
 					ConversationID: conversationID,
@@ -920,72 +923,188 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 					Content:        fmt.Sprintf("[%s]: SYSTEM ERROR: The execution of this skill was REJECTED by the user due to Security Policies. You MUST try an alternative approach or ask the user for permission.", call.SkillID),
 					Timestamp:      time.Now(),
 				})
-				
-				// Re-prompt the LLM to continue reasoning
-				trimmedText = "!CONTINUE_REASONING" // Will fall through to standard LLM generation
+
+				// Continue reasoning in standard LLM loop without re-entering fast paths
+				trimmedText = "!CONTINUE_REASONING"
+				isControlContinuation = true
 			} else {
-				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: Invalid payload for skill rejection.\n"}
+				sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n❌ Error: Invalid payload for skill rejection.\n"})
 				return
 			}
 		}
 
-		if strings.HasPrefix(trimmedText, "!EXECUTE_PLAN") {
-			o.mu.RUnlock()
-			planJSON := strings.TrimPrefix(trimmedText, "!EXECUTE_PLAN")
-			var plan Plan
-			if err := json.Unmarshal([]byte(planJSON), &plan); err == nil {
-				jobID := o.JobManager.SpawnDaemon("Plan Execution: "+plan.Goal, func() (string, error) {
-					bgCtx := context.Background()
-					var finalOutput string
-					
-					for i, phase := range plan.Phases {
-						// Broadcast progress so TUI sees the phase shifts
+		if !isControlContinuation {
+			// FAST PATH -1: Architecture Planning & Amendments (/plan, AMEND PLAN:)
+			// Evaluated before mention delegation so that `/plan @spec` and `@spec /plan` build plans rather than bare chat.
+			if isPlan, planQuery, leadSpec := o.detectPlanIntent(trimmedText, specialistID); isPlan {
+				o.ChatRepo.SaveMessage(&types.Message{
+					ID: intentID, ConversationID: conversationID,
+					Role: "user", Content: text, Timestamp: time.Now(),
+				})
+
+				if planQuery == "" {
+					sendEvent(ctx, out, llm.StreamEvent{
+						Type:    llm.EventTypeToken,
+						Content: "\n⚠️ Please provide the task details to generate a plan. Usage: `/plan [@specialist] <task>`\n",
+					})
+					return
+				}
+
+				// Focus specialist in UI if designated
+				if leadSpec != nil {
+					if overrideModelID == "" && leadSpec.ModelID != "" {
+						overrideModelID = leadSpec.ModelID
+					}
+					if !sendEvent(ctx, out, llm.StreamEvent{
+						Type:    llm.EventTypeSpecialistResult,
+						Content: fmt.Sprintf("%s|%s|", leadSpec.ID, leadSpec.Name),
+					}) {
+						return
+					}
+				}
+
+				if err := o.refreshCache(); err != nil {
+					slog.Warn("Metadata cache refresh encountered issues", "error", err)
+				}
+
+				o.mu.RLock()
+				specsCtxStr := o.cachedSpecsCtx
+				o.mu.RUnlock()
+
+				daemonTitle := "Architecture Planner"
+				spawnMsg := "\n⚡ Spawned Architecture Planner Daemon (Job ID: %s). You will be notified when the plan is ready.\n"
+				targetSpecName := ""
+				if leadSpec != nil {
+					targetSpecName = leadSpec.Name
+					daemonTitle = fmt.Sprintf("Architecture Planner (@%s)", leadSpec.Name)
+					spawnMsg = fmt.Sprintf("\n⚡ Spawned Architecture Planner Daemon led by @%s (Job ID: %%s). You will be notified when the plan is ready.\n", leadSpec.Name)
+				}
+
+				jobID := o.JobManager.SpawnDaemon(daemonTitle, func() (string, error) {
+					planCtx := context.Background()
+					plan, err := o.Planner.BuildPlan(planCtx, planQuery, specsCtxStr, overrideModelID, targetSpecName)
+					if err != nil {
+						return "", err
+					}
+					planJSON, _ := json.Marshal(plan)
+
+					go func() {
+						time.Sleep(50 * time.Millisecond)
 						o.JobManager.Broadcast(SystemEvent{
-							Type:      EventSwarmProgress,
-							Title:     "Executing Plan",
-							Payload:   fmt.Sprintf("Running Phase %d: %s", i+1, phase.Title),
+							Type:      EventPlanProposed,
+							JobID:     "plan-" + uuid.New().String(),
+							Title:     "Plan Proposed",
+							Payload:   string(planJSON),
 							Timestamp: time.Now(),
 						})
-						
-						// Swallow stream tokens locally to prevent blocking the daemon
-						dummyOut := make(chan llm.StreamEvent, 100)
-						var phaseOutput string
-						
-						go func() {
-							for evt := range dummyOut {
-								if evt.Type == llm.EventTypeToken {
-									phaseOutput += evt.Content
+					}()
+
+					return "", nil
+				})
+
+				sendEvent(ctx, out, llm.StreamEvent{
+					Type:    llm.EventTypeToken,
+					Content: fmt.Sprintf(spawnMsg, jobID),
+				})
+				return
+			}
+
+			// FAST PATH 0: Structural @mention pre-processor (language-agnostic, always runs)
+			// This is evaluated BEFORE IdentifyIntent and the resolver, regardless of specialistID.
+			if mentionMatch, remainingTask := o.resolveMention(trimmedText); mentionMatch.Confidence >= 1.0 {
+				o.ChatRepo.SaveMessage(&types.Message{
+					ID: intentID, ConversationID: conversationID,
+					Role: "user", Content: text, Timestamp: time.Now(),
+				})
+
+				if mentionMatch.Type == types.IntentTypeReturnControl {
+					o.ChatRepo.SaveMessage(&types.Message{
+						ID: uuid.New().String(), ConversationID: conversationID,
+						Role: "system", Content: "CONTROL RETURNED. The specialist sub-agent has exited the conversation. SYSTEM DIRECTIVE: YOU ARE NOW 'VRAXTER' (The primary Orchestrator). STOP ACTING LIKE THE SPECIALIST. Abandon all sub-agent personas. You MUST now answer the user's latest query using your full capabilities as Vraxter.",
+						Timestamp: time.Now(),
+					})
+					// Signal TUI to clear specialist banner and notify user
+					if !sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeSpecialistResult, Content: "||"}) {
+						return
+					}
+
+					if remainingTask != "" {
+						// Re-route the remaining text through the supervisor pipeline
+						subStream, err := o.ProcessRawIntent(ctx, conversationID, remainingTask, "", overrideModelID, sourceZone, sourceUser)
+						if err == nil {
+							for e := range subStream {
+								if e.Type != llm.EventTypeDone {
+									if !sendEvent(ctx, out, e) {
+										return
+									}
 								}
 							}
-						}()
-						
-						phaseQuery := fmt.Sprintf("TASK: %s\nDESCRIPTION: %s", phase.Title, phase.Description)
-						specID := phase.Specialist
-						if specID == "supervisor" || specID == "vraxter" {
-							specID = ""
 						}
-						_ = o.executeSubTask(bgCtx, phaseQuery, specID, dummyOut)
-						close(dummyOut)
-						
-						finalOutput += fmt.Sprintf("=== Phase %d: %s ===\n%s\n\n", i+1, phase.Title, phaseOutput)
 					}
-					
-					return finalOutput, nil
-				})
-				
-				out <- llm.StreamEvent{
-					Type:    llm.EventTypeToken, 
-					Content: fmt.Sprintf("\n⚡ Spawned Plan Execution Daemon (Job ID: %s). The plan is now running in the background.\n", jobID),
+					return
 				}
-			} else {
-				out <- llm.StreamEvent{Type: llm.EventTypeError, Err: err}
+
+				// @SpecialistName delegation
+				o.ExecEngine.RunFastPath(ctx, out, mentionMatch, conversationID)
+				return
 			}
-			return
+
+			// FAST PATH 1: Exact Command Match
+			explicitMatch, intentErr := o.IdentifyIntent(ctx, trimmedText)
+			if intentErr != nil && strings.HasPrefix(trimmedText, types.CommandExecutionPrefix) {
+				sendEvent(ctx, out, llm.StreamEvent{
+					Type:    llm.EventTypeToken,
+					Content: fmt.Sprintf("\n❌ Host command denied: %v", intentErr),
+				})
+				return
+			}
+			if explicitMatch.Confidence == 1.0 {
+				o.ChatRepo.SaveMessage(&types.Message{
+					ID: intentID, ConversationID: conversationID,
+					Role: "user", Content: text, Timestamp: time.Now(),
+				})
+				o.ExecEngine.RunFastPath(ctx, out, explicitMatch, conversationID)
+				return
+			}
+
+			// FAST PATH 2: Skill-First Execution (Intent Resolver)
+			if specialistID == "" {
+				match := o.Resolver.Resolve(ctx, text)
+				if match.Confidence >= 0.8 {
+					o.ChatRepo.SaveMessage(&types.Message{
+						ID: intentID, ConversationID: conversationID,
+						Role: "user", Content: text, Timestamp: time.Now(),
+					})
+					o.ExecEngine.RunFastPath(ctx, out, match, conversationID)
+					return
+				}
+			}
+
+			// Background Index (Zero block)
+			go func() {
+				if embCfg, embProvider, err := o.StreamCoord.Router.GetEmbeddingProvider(); err == nil {
+					embedCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					vectors, embedErr := embProvider.Embed(embedCtx, embCfg.Model, []string{text})
+					if embedErr == nil && len(vectors) > 0 {
+						_ = o.MemoryRepo.SaveEmbedding(conversationID, text, vectors[0])
+					}
+				}
+			}()
 		}
+
+		if err := o.refreshCache(); err != nil {
+			slog.Warn("Metadata cache refresh encountered issues", "error", err)
+		}
+
+		// Copy cached context snapshots under a short read lock — NEVER hold o.mu across gatherPromptContext.
+		o.mu.RLock()
+		modelsCtxStr := o.cachedModelsCtx
+		specsCtxStr := o.cachedSpecsCtx
+		o.mu.RUnlock()
 
 		// 2. Load context in parallel (RAG memory & User Profile)
 		userProfilePool, memoryContextPool := o.gatherPromptContext(ctx, trimmedText, sourceUser)
-		o.mu.RUnlock()
 
 		// If no model override is provided, but we have a targeted specialist, check if it has a fixed model
 		if overrideModelID == "" && specialistID != "" {
@@ -999,13 +1118,17 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 		// LLM EXECUTION: Resolve Model (falls back to use-case intent parsing if no override)
 		modelCfg, err := o.resolveExecutionModel(ctx, trimmedText, conversationID, overrideModelID, out)
 		if err != nil {
-			out <- llm.StreamEvent{Type: llm.EventTypeError, Err: err}
+			sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeError, Err: err})
 			return
 		}
 
+		userMsgContent := text
+		if isControlContinuation {
+			userMsgContent = trimmedText
+		}
 		o.ChatRepo.SaveMessage(&types.Message{
 			ID: intentID, ConversationID: conversationID,
-			Role: "user", Content: text, Timestamp: time.Now(),
+			Role: "user", Content: userMsgContent, Timestamp: time.Now(),
 		})
 
 		maxRetries := 5
@@ -1035,7 +1158,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 			}()
 
 			feedback := o.ExecEngine.ExecutePipeline(ctx, queue, out, conversationID)
-			if feedback == "" {
+			if feedback == "" || feedback == "!YIELD_FOR_APPROVAL" {
 				break
 			}
 
@@ -1050,10 +1173,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 			}
 		}
 
-		select {
-		case out <- llm.StreamEvent{Type: llm.EventTypeDone}:
-		case <-ctx.Done():
-		}
+		sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeDone})
 	}()
 
 	return out, nil
@@ -1224,9 +1344,11 @@ func (o *Orchestrator) DelegateSwarmTask(ctx context.Context, out chan<- llm.Str
 	if spec, err := o.SpecialistRepo.GetSpecialist(specialistID); err == nil && spec != nil {
 		specName = spec.Name
 	}
-	out <- llm.StreamEvent{
+	if !sendEvent(ctx, out, llm.StreamEvent{
 		Type:    llm.EventTypeSpecialistResult,
 		Content: fmt.Sprintf("%s|%s|", specialistID, specName), // Content empty for focus shift
+	}) {
+		return ""
 	}
 
 	// In a swarm architecture, the sub-agent needs a unique session id so its history doesn't inherently corrupt the master thread, but we can link them conceptually.
@@ -1245,8 +1367,11 @@ func (o *Orchestrator) DelegateSwarmTask(ctx context.Context, out chan<- llm.Str
 	for e := range outStream {
 		switch e.Type {
 		case llm.EventTypeToken:
-			// ◈ NATIVE PIPE: Pass token directly to parent stream
-			out <- e
+			// ◈ NATIVE PIPE: Pass token directly to parent stream without blocking on canceled context
+			if !sendEvent(ctx, out, e) {
+				cancel()
+				return strings.TrimSpace(accumulatedResp.String())
+			}
 			accumulatedResp.WriteString(e.Content)
 		case llm.EventTypeError:
 			return fmt.Sprintf("SUB-AGENT ERRORED EARLY: %s. Output before crash: %s", e.Content, accumulatedResp.String())

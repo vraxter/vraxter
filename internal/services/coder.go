@@ -15,6 +15,7 @@ import (
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/skills/coders"
 	"github.com/vraxter/vraxter/pkg/interfaces"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 // CoderService is the heart of autonomous skill generation.
@@ -44,12 +45,20 @@ func (s *CoderService) RegisterCoder(c interfaces.SkillCoder) {
 
 // CreateSkill delegates compilation to the appropriate language coder
 func (s *CoderService) CreateSkill(lang, name, description, paramsSchema, code string, permissions []string) error {
+	return s.CreateSkillWithManifest(lang, name, description, paramsSchema, code, permissions, nil)
+}
+
+// CreateSkillWithManifest delegates compilation while preserving an authored SkillManifestV1 template when supported.
+func (s *CoderService) CreateSkillWithManifest(lang, name, description, paramsSchema, code string, permissions []string, manifestV1 *types.SkillManifestV1) error {
 	s.mu.RLock()
 	coder, ok := s.coders[lang]
 	s.mu.RUnlock()
 
 	if !ok {
 		return fmt.Errorf("no coder registered for language: %s", lang)
+	}
+	if ma, ok := coder.(interfaces.ManifestAwareSkillCoder); ok {
+		return ma.CompileWithManifest(name, description, paramsSchema, code, permissions, manifestV1)
 	}
 	return coder.Compile(name, description, paramsSchema, code, permissions)
 }

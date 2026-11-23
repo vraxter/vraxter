@@ -20,7 +20,11 @@ import (
 
 // BuildServer constructs the gRPC server with the given core Engine, Managers, and Daemon API Key
 func BuildServer(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager, sm *services.SkillService, cfg *config.Config, daemonKey string) *grpc.Server {
+	return BuildServerWithShutdown(engine, pm, mm, sm, cfg, daemonKey, nil)
+}
 
+// BuildServerWithShutdown constructs the gRPC server wired to a graceful shutdown notification channel.
+func BuildServerWithShutdown(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager, sm *services.SkillService, cfg *config.Config, daemonKey string, shutdownCh chan<- struct{}) *grpc.Server {
 	s := grpc.NewServer(
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             2 * time.Second, // extremely permissive for local dev
@@ -37,6 +41,9 @@ func BuildServer(engine *core.Engine, pm *services.ProviderManager, mm *services
 
 	// Register the Core Agent Service
 	handler := NewAgentHandler(engine, pm, mm, sm, cfg)
+	if shutdownCh != nil {
+		handler.SetShutdownChannel(shutdownCh)
+	}
 	v1.RegisterAgentServiceServer(s, handler)
 
 	return s

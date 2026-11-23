@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/vraxter/vraxter/internal/llm/registry"
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 )
 
@@ -78,7 +79,7 @@ func NewAdapter(apiKey, host string) *Adapter {
 		apiKey:       apiKey,
 		baseURL:      host,
 		isCustomHost: isCustomHost,
-		httpClient:   &http.Client{},
+		httpClient:   utils.NewDDILHTTPClient(),
 	}
 }
 
@@ -243,23 +244,26 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 		defer close(ch)
 		resp, err := a.httpClient.Do(httpReq)
 		if err != nil {
-			ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err}
+			interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err})
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(resp.Body)
-			ch <- interfaces.StreamEvent{
+			interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{
 				Type: interfaces.EventTypeError,
 				Err:  fmt.Errorf("openai stream error %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))),
-			}
+			})
 			return
 		}
 
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
+			if ctx.Err() != nil {
+				return
+			}
 			line := strings.TrimSpace(scanner.Text())
 			if line == "" || strings.HasPrefix(line, ":") {
 				continue
@@ -276,7 +280,9 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 						token = chunk.Choices[0].Message.Content
 					}
 					if token != "" {
-						ch <- interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: token}
+						if !interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: token}) {
+							return
+						}
 					}
 				}
 			} else if strings.HasPrefix(line, "{") {
@@ -288,18 +294,20 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 						token = single.Choices[0].Delta.Content
 					}
 					if token != "" {
-						ch <- interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: token}
+						if !interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: token}) {
+							return
+						}
 					}
 				}
 			}
 		}
 
 		if err := scanner.Err(); err != nil && ctx.Err() == nil {
-			ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err}
+			interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err})
 			return
 		}
 
-		ch <- interfaces.StreamEvent{Type: interfaces.EventTypeDone}
+		interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeDone})
 	}()
 	return ch, nil
 }

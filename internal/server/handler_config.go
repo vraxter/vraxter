@@ -19,17 +19,37 @@ import (
 )
 
 func (h *AgentHandler) GetConfig(ctx context.Context, req *v1.GetConfigRequest) (*v1.ConfigResponse, error) {
+	if err := EnforceScope(ctx, "config:read"); err != nil {
+		return nil, err
+	}
+
+	h.cfgMu.RLock()
+	defer h.cfgMu.RUnlock()
+
+	wl := make([]string, len(h.config.WhitelistedIPs))
+	copy(wl, h.config.WhitelistedIPs)
+
 	return &v1.ConfigResponse{
 		PrivacyPolicy:        h.config.PrivacyPolicy,
 		HubUrl:               h.config.HubURL,
 		RequireSkillApproval: h.config.RequireSkillApproval,
-		WhitelistedIps:       h.config.WhitelistedIPs,
+		WhitelistedIps:       wl,
 		IsolationMode:        h.config.IsolationMode,
 		IsAirgapLocked:       h.config.IsAirgapLocked,
 	}, nil
 }
 
 func (h *AgentHandler) UpdateConfig(ctx context.Context, req *v1.UpdateConfigRequest) (*v1.ConfigResponse, error) {
+	if err := EnforceScope(ctx, "config:write"); err != nil {
+		return nil, err
+	}
+
+	h.cfgMu.Lock()
+	defer h.cfgMu.Unlock()
+
+	// Note: h.config.HostExec is strictly local-only (--enable-host-exec / local settings.json)
+	// and is intentionally never exposed or modifiable via RPC.
+
 	// 1. Anti-downgrade check: If airgap is locked (via CLI flag --airgap or VRAXTER_AIRGAP env), reject changes
 	if h.config.IsAirgapLocked {
 		if req.IsolationMode != nil && *req.IsolationMode != "airgap" {
@@ -95,12 +115,21 @@ func (h *AgentHandler) UpdateConfig(ctx context.Context, req *v1.UpdateConfigReq
 	if err := h.config.SaveSettings(); err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
 	}
+	if h.engine != nil {
+		h.engine.UpdateNetworkPolicy(h.config.IsolationMode, h.config.WhitelistedIPs)
+	}
+	if h.providerManager != nil {
+		h.providerManager.UpdatePolicy(h.config.IsolationMode, h.config.PrivacyPolicy, h.config.WhitelistedIPs)
+	}
+
+	wl := make([]string, len(h.config.WhitelistedIPs))
+	copy(wl, h.config.WhitelistedIPs)
 
 	return &v1.ConfigResponse{
 		PrivacyPolicy:        h.config.PrivacyPolicy,
 		HubUrl:               h.config.HubURL,
 		RequireSkillApproval: h.config.RequireSkillApproval,
-		WhitelistedIps:       h.config.WhitelistedIPs,
+		WhitelistedIps:       wl,
 		IsolationMode:        h.config.IsolationMode,
 		IsAirgapLocked:       h.config.IsAirgapLocked,
 	}, nil

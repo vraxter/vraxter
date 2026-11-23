@@ -55,6 +55,7 @@ var (
 	sessionFlag        string
 	modelFlag          string
 	airgapFlag         bool
+	enableHostExecFlag bool
 	newFlag            bool
 	verboseFlag        bool
 	daemonKey          string
@@ -70,12 +71,15 @@ func bootstrap() {
 			appConfig.IsAirgapLocked = true
 			appConfig.PrivacyPolicy = "strict_local"
 		}
+		if enableHostExecFlag {
+			appConfig.HostExec.Enabled = true
+		}
 
 		// Enforce zero-egress network perimeter on all HTTP dials
 		utils.InstallAirgapPerimeter(appConfig.IsolationMode, appConfig.WhitelistedIPs)
 		
-		// Setup logging: Redirect all background service logs to a file
-		logFile, err := os.OpenFile(filepath.Join(appConfig.AppDir, "vraxter.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		// Setup logging: Redirect all background service logs to a file with restricted permissions (0600)
+		logFile, err := os.OpenFile(filepath.Join(appConfig.AppDir, "vraxter.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err == nil {
 			log.SetOutput(logFile)
 			log.Println("--- Vraxter Engine Started ---")
@@ -103,6 +107,7 @@ func bootstrap() {
 
 		registry := skills.NewRegistry()
 		runner := skills.NewRunner()
+		runner.SetNetworkPolicy(appConfig.IsolationMode, appConfig.WhitelistedIPs)
 
 		skillRepo := db.NewSkillRepository(appStore)
 		appSkillService = services.NewSkillService(skillRepo, appConfig.SkillsDir)
@@ -119,6 +124,13 @@ func bootstrap() {
 			fmt.Printf("Fatal: Core Engine initialization failed: %v\n", err)
 			os.Exit(1)
 		}
+		appEngine.SetHostExecGuard(security.NewHostExecGuard(security.HostExecOptions{
+			Enabled:        appConfig.HostExec.Enabled,
+			CommandsFile:   appConfig.HostExec.CommandsFile,
+			DefaultTimeout: time.Duration(appConfig.HostExec.DefaultTimeoutSec) * time.Second,
+			IsolationMode:  appConfig.IsolationMode,
+			WhitelistedIPs: appConfig.WhitelistedIPs,
+		}))
 
 		providerRepo := db.NewProviderRepository(appStore, appCrypto)
 		modelRepo := db.NewModelRepository(appStore, appCrypto)
@@ -163,6 +175,7 @@ func main() {
 	rootCmd.PersistentFlags().BoolVarP(&verboseFlag, "verbose", "v", false, "Enable detailed logging")
 	rootCmd.PersistentFlags().StringVarP(&modelFlag, "model", "m", "", "Force use of a specific LLM model ID/alias")
 	rootCmd.PersistentFlags().BoolVar(&airgapFlag, "airgap", false, "Enforce strict zero-egress airgap perimeter")
+	rootCmd.PersistentFlags().BoolVar(&enableHostExecFlag, "enable-host-exec", false, "Enable guarded local host command execution ($) via host_commands.json")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -228,7 +241,9 @@ var rootCmd = &cobra.Command{
 			defer gClient.Close()
 			app := tui.NewModel(ctx, gClient, appStore, appCrypto, sessionID, "", userName)
 			app.IsolationMode = appConfig.IsolationMode
+			app.PrivacyPolicy = appConfig.PrivacyPolicy
 			app.IsAirgapLocked = appConfig.IsAirgapLocked
+			app.WhitelistedIPs = append([]string(nil), appConfig.WhitelistedIPs...)
 			p := tea.NewProgram(app)
 			if _, err := p.Run(); err != nil {
 				fmt.Printf("❌ Failed to start UI: %v\n", err)
@@ -244,7 +259,12 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			fmt.Println(" [SPAWNING BACKGROUND DAEMON]")
 			spawnEphemeralDaemon()
-			gClient, _ = client.NewGRPCClient("127.0.0.1:50051", daemonKey) // Connect to newly spawned daemon
+			time.Sleep(100 * time.Millisecond)
+			gClient, err = client.NewGRPCClient("127.0.0.1:50051", daemonKey) // Connect to newly spawned daemon
+			if err != nil {
+				fmt.Printf("❌ Failed to connect to Vraxter Daemon after spawn: %v\n", err)
+				return
+			}
 		} else {
 			fmt.Println(" [CONNECTED]")
 		}
@@ -309,6 +329,12 @@ func processStream(stream <-chan llm.StreamEvent) {
 			}
 			fmt.Printf("\n⚙️  Running tool: [%s]...\n", event.Content)
 			lastWasToken = false
+		case llm.EventTypeSkillApprovalRequest:
+			if lastWasToken {
+				fmt.Println()
+			}
+			fmt.Printf("\n🛡️  HITL Approval Required [%s]: %s\n", event.SkillID, event.Content)
+			lastWasToken = false
 		case llm.EventTypePlanProposal:
 			if lastWasToken {
 				fmt.Println()
@@ -338,12 +364,20 @@ func spawnEphemeralDaemon() {
 		os.Exit(1)
 	}
 
-	srv := server.BuildServer(appEngine, appProviderManager, appModelManager, appSkillService, &appConfig, daemonKey)
+	shutdownCh := make(chan struct{}, 1)
+	srv := server.BuildServerWithShutdown(appEngine, appProviderManager, appModelManager, appSkillService, &appConfig, daemonKey, shutdownCh)
 	ready := make(chan bool)
 	go func() {
 		ready <- true
 		if err := srv.Serve(lis); err != nil {
 			fmt.Printf("Fatal: ephemeral gRPC server error: %v\n", err)
+		}
+	}()
+	go func() {
+		<-shutdownCh
+		srv.GracefulStop()
+		if appStore != nil {
+			_ = appStore.Close()
 		}
 	}()
 	<-ready
@@ -361,7 +395,8 @@ var serverCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		grpcServer := server.BuildServer(appEngine, appProviderManager, appModelManager, appSkillService, &appConfig, daemonKey)
+		shutdownCh := make(chan struct{}, 1)
+		grpcServer := server.BuildServerWithShutdown(appEngine, appProviderManager, appModelManager, appSkillService, &appConfig, daemonKey, shutdownCh)
 
 		go func() {
 			if err := grpcServer.Serve(lis); err != nil {
@@ -371,13 +406,17 @@ var serverCmd = &cobra.Command{
 
 		fmt.Println("🚀 Vraxter Engine (gRPC) is Online on 127.0.0.1:50051")
 
-		// Start Connect RPC Server
+		// Start Connect RPC Server with hardened DDIL HTTP timeouts
 		mux := http.NewServeMux()
 		server.RegisterEnvService(mux, appStateManager, appPipeline)
 
 		httpServer := &http.Server{
-			Addr:    "127.0.0.1:8080",
-			Handler: server.HTTPAuthMiddleware(daemonKey, mux),
+			Addr:              "127.0.0.1:8080",
+			Handler:           server.HTTPAuthMiddleware(daemonKey, mux),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
 		}
 
 		fmt.Println("🌍 Connect RPC API listening on 127.0.0.1:8080 (HTTP)")
@@ -387,10 +426,13 @@ var serverCmd = &cobra.Command{
 			}
 		}()
 
-		// Graceful Shutdown Trapping
+		// Graceful Shutdown Trapping (OS signal OR authenticated SYSTEM_SHUTDOWN RPC)
 		stop := make(chan os.Signal, 1)
 		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-		<-stop
+		select {
+		case <-stop:
+		case <-shutdownCh:
+		}
 
 		fmt.Println("\n🛑 Shutting down Vraxter Daemon gracefully...")
 

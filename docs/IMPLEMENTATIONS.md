@@ -1,5 +1,8 @@
 # Powers & Implementations
 
+> [!NOTE]
+> **Implementation Status**: World feature modules under `internal/features/*` are currently architectural scaffolding hooks compiled via Go build tags. Core security enforcement (`isolation_mode`, `--airgap`, `require_skill_approval`, `--enable-host-exec`, and the WASM sandbox) is enforced directly by the core daemon and `settings.json` regardless of build tag.
+
 Vraxter activates different powers based on your operational implementation and environment.
 You can configure your active world during the setup wizard, via CLI commands, or manually via `~/.config/vraxter/settings.json` (or `~/.vraxter/settings.json`).
 

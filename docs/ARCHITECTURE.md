@@ -5,22 +5,23 @@ Vraxter is engineered as a **distributed, headless autonomous engine** consistin
 
 ## System Overview
 
-The system follows a headless Client-Server architecture over **Connect RPC (HTTP/2)**, ensuring that the "brain" (state, memory, execution) remains completely decoupled from any specific frontend (TUI, Svelte web dashboard, or Smart Speaker).
+The system follows a headless Client-Server architecture over **gRPC (HTTP/2)** on `127.0.0.1:50051` (with an experimental Connect RPC HTTP endpoint on `127.0.0.1:8080` currently serving the `EnvService` skeleton), ensuring that the "brain" (state, memory, execution) remains decoupled from any specific frontend (TUI, web dashboard, or external client).
 
-### 1. The Daemon (`vraxterd`)
+### 1. The Daemon (`vraxter server`)
 The daemon is the primary source of truth. It manages:
-- **Persistence**: SQLite-backed history, specialists, and model configurations with AES-256-GCM encryption at rest.
+- **Persistence**: SQLite-backed history, specialists, and model configurations in WAL mode (`synchronous=FULL`, `foreign_keys=ON`, `VACUUM INTO` backups) with AES-256-GCM encryption for `providers.api_key`.
 - **Environmental Context Engine**: A thread-safe `StateManager` that manages dynamic `ModeConfig` templates (e.g. ambient lighting, music).
-- **Orchestration**: The request lifecycle from intent resolution to multi-phase execution.
-- **Skill Runner**: The Wazero-powered WASM sandbox supporting Go, Rust, and Zig, strictly bounded by Skill Manifest V1 capability declarations and scoped storage pools (`workspace`, `input`, `output`, `skill_data`, `ephemeral`).
-- **Intelligence**: Model routing and multi-provider coordination.
-- **Perimeter & Isolation (Vraxter Shield)**: Real-time network boundary enforcement (`airgap`, `local_lan`, `hybrid`), in-memory DNS inspection, transport-level socket blocking (`NewAirgapDialer`), and anti-downgrade runtime locking.
-- **Auth Pipeline**: Scoped-token enforcement and master key dual-authentication (`daemon.key`).
+- **Orchestration**: The request lifecycle from intent resolution to multi-phase execution and graceful shutdown (`SYSTEM_SHUTDOWN` / OS signals).
+- **Skill Runner & HostExecGuard**: The Wazero-powered WASM sandbox supporting Go, Rust, and Zig, strictly bounded by Skill Manifest V1 capability declarations, `Tier3Unverified` fail-closed defaults, scoped storage pools (`workspace`, `input`, `output`, `skill_data`, `ephemeral`), `os.OpenRoot` confinement, and optional allowlisted host command execution (`--enable-host-exec`).
+- **Intelligence**: Model routing and multi-provider coordination with DDIL HTTP timeouts.
+- **Perimeter & Isolation (Vraxter Shield)**: Real-time network boundary enforcement (`airgap`, `local_lan`, `hybrid`), in-memory DNS inspection, IMDS link-local blocking, CIDR whitelist support, transport-level socket blocking (`NewAirgapDialer`), and anti-downgrade runtime locking.
+- **Auth Pipeline**: Unary and streaming scoped-token enforcement (`wrappedServerStream`) and master key dual-authentication (`daemon.key`).
 
-### 2. The Connect RPC Layer
+### 2. The gRPC & Connect RPC Layer
 - **Protobuf-Defined**: Every interaction is type-safe and defined in `api/v1`.
-- **Client-Agnostic HTTP/2**: Vraxter uses Connect RPC, allowing terminal clients, modern browsers, or headless agents to interact seamlessly without proxying.
-- **Streaming**: Supports bidirectional streaming for real-time LLM token delivery, tool progress, and interactive human-in-the-loop approvals.
+- **Primary gRPC (HTTP/2 on `:50051`)**: Serves `AgentService`, `ProviderService`, `ModelService`, `SkillService`, `ConfigService`, and `AuthService` for the TUI, CLI, and external thin clients.
+- **Experimental Connect RPC (`:8080`)**: Currently serves the `EnvService` HTTP skeleton with `HTTPAuthMiddleware` and hardened HTTP timeouts.
+- **Streaming**: Supports server streaming for real-time LLM token delivery, tool progress, and interactive human-in-the-loop approvals.
 
 ### 3. The Global Event Bus
 Vraxter implements a centralized, asynchronous event streaming pipeline. The Event Bus emits standardized events (`SKILL_APPROVAL_REQUEST`, `TOOL_CALL`, `SPECIALIST_RESULT`, system statuses) ensuring all connected clients react in real-time without polling.
@@ -28,7 +29,7 @@ Vraxter implements a centralized, asynchronous event streaming pipeline. The Eve
 ### 4. Spatial & Identity Concurrency
 The engine natively supports serving multiple physical rooms simultaneously.
 - **Spatial Isolation**: Requests containing a `source_zone` (e.g. "living_room") instantiate separate conversation memory streams.
-- **Unified Device Mapping**: The `SpatialService` merges internal `spatial.json` mapping with Google Home SDK data so the AI knows exactly which speakers (`[Nest Audio, TV]`) exist in which rooms.
+- **Unified Device Mapping**: The `SpatialService` loads internal `spatial.json` room-to-device mappings. *(Google Home API integration is currently a mock stub when `enable_google_home` is toggled.)*
 - **Voice Recognition**: Requests can pass a `source_user`. The Orchestrator automatically fetches that exact User Profile from the database, instantly hot-swapping the AI's identity context even during concurrent multi-user conversations.
 
 ### 5. Terminal Workstation (TUI)
@@ -69,12 +70,12 @@ Before outbound network calls are made:
 ```mermaid
 graph TD
     User([User Input]) --> Client[TUI / Web UI / Thin Client]
-    Client --> ConnectRPC[Connect RPC HTTP/2]
-    ConnectRPC --> Daemon[vraxterd]
+    Client --> ConnectRPC["gRPC :50051 / Connect Env :8080"]
+    ConnectRPC --> Daemon["vraxter server"]
     Daemon --> Orchestrator{Orchestrator}
     Orchestrator --> StateMgr[State Manager]
     Orchestrator --> SpatialSvc[Spatial Service]
-    Orchestrator --> SQL[(SQLite DB / AES-256)]
+    Orchestrator --> SQL["SQLite WAL + AES-256 Keys"]
     Orchestrator --> Runner[WASM Skill Runner]
     Orchestrator --> Router[LLM Multi-Router]
     
