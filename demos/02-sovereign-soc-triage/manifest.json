@@ -1,0 +1,50 @@
+{
+  "$schema": "https://vraxter.io/schemas/skill-manifest.v1.json",
+  "manifest_version": "skill-manifest/1",
+  "id": "vrx-soc-triage",
+  "name": "Sovereign SOC Incident Triage & Containment Proposer",
+  "version": "1.0.0",
+  "description": "Offline WASI incident triage engine extracting lateral-movement IOCs and drafting HITL-gated nftables and YARA containment rules.",
+  "agent": {
+    "risk": "high",
+    "approval": "always"
+  },
+  "module": {
+    "file": "vrx-soc-triage.wasm",
+    "abi": "wasip1"
+  },
+  "routing": {
+    "keywords": ["soc", "triage", "incident", "ioc", "nftables", "yara", "lateral"],
+    "tags": ["security", "soc", "local_lan", "hitl"]
+  },
+  "io": {
+    "input": {
+      "via": "stdin",
+      "format": "json"
+    },
+    "output": {
+      "via": "stdout",
+      "format": "json"
+    }
+  },
+  "capabilities": {
+    "fs": {
+      "mounts": [
+        {
+          "guest": "/input",
+          "source": "input",
+          "mode": "ro",
+          "allow_extensions": [".jsonl", ".json"]
+        }
+      ]
+    },
+    "network": {
+      "mode": "none"
+    }
+  },
+  "limits": {
+    "memory_mb": 64,
+    "max_runtime_ms": 5000,
+    "max_cpu_fuel": 25000000
+  }
+}
