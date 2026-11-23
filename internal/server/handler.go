@@ -232,7 +232,10 @@ func (h *AgentHandler) GetInfo(ctx context.Context, req *v1.GetInfoRequest) (*v1
 	if err := EnforceAnyScope(ctx, "chat:read", "chat:write", "system:read"); err != nil {
 		return nil, err
 	}
-	modelID := h.engine.GetActiveModelID("")
+	modelID := ""
+	if h.engine != nil {
+		modelID = h.engine.GetActiveModelID("")
+	}
 	return &v1.GetInfoResponse{
 		ModelId: modelID,
 		Version: "v1.0.0",

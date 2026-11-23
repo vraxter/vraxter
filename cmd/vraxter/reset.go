@@ -87,7 +87,7 @@ Examples:
 
 			// 1. Attempt to stop running daemon gracefully
 			fmt.Print("🛑 Shutting down any running background daemon... ")
-			gClient, err := client.NewGRPCClient("127.0.0.1:50051", daemonKey)
+			gClient, err := client.NewGRPCClient(client.DefaultEndpoint(), daemonKey)
 			if err == nil {
 				_, _ = gClient.ExecuteStream(context.Background(), "SYSTEM_SHUTDOWN", "internal-mgmt", "", "")
 				gClient.Close()

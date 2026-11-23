@@ -22,6 +22,7 @@ import (
 
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/types"
 )
 
@@ -113,7 +114,9 @@ func (s *SkillService) InstallSkill(m types.SkillManifest) error {
 
 	manifestDest := filepath.Join(s.skillsDir, m.ID+".manifest.json")
 	if manifestData, err := json.MarshalIndent(m.ManifestV1, "", "  "); err == nil {
-		_ = os.WriteFile(manifestDest, manifestData, 0600)
+		if err := utils.AtomicWriteFile(manifestDest, manifestData, 0600); err != nil {
+			return fmt.Errorf("failed to persist skill manifest: %w", err)
+		}
 	}
 
 	return s.repo.UpsertSkill(m)
@@ -147,42 +150,8 @@ func (s *SkillService) CalculateHash(path string) (string, error) {
 }
 
 func copyFile(src, dst string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sourceFile.Close()
-
-	fi, err := sourceFile.Stat()
-	if err != nil {
-		return err
-	}
-	if fi.Size() > skills.MaxWASMBinaryBytes {
-		return fmt.Errorf("skill binary %s exceeds maximum allowed size (%d > %d bytes)", src, fi.Size(), skills.MaxWASMBinaryBytes)
-	}
-
-	destFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-
-	n, err := io.Copy(destFile, io.LimitReader(sourceFile, skills.MaxWASMBinaryBytes+1))
-	if err != nil {
-		_ = destFile.Close()
-		_ = os.Remove(dst)
-		return err
-	}
-	if n > skills.MaxWASMBinaryBytes {
-		_ = destFile.Close()
-		_ = os.Remove(dst)
-		return fmt.Errorf("skill binary %s exceeds maximum allowed size (%d bytes)", src, skills.MaxWASMBinaryBytes)
-	}
-	if err := destFile.Close(); err != nil {
-		return err
-	}
-
-	// WASM bytecode is executed by Wazero, never directly by the OS; restrict to owner-only 0600.
-	return os.Chmod(dst, 0600)
+	// WASM bytecode is executed by Wazero, never directly by the OS; copy atomically with 0600 permissions.
+	return utils.AtomicCopyFileBounded(src, dst, skills.MaxWASMBinaryBytes, 0600)
 }
 
 

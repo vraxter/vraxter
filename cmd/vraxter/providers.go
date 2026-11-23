@@ -58,7 +58,7 @@ func executeDiscovery(providerID string) {
 
 	// 1. Try gRPC (Bypass for internal TUI sessions to preserve rich metadata)
 	if os.Getenv("VRAXTER_INTERNAL_SESSION") != "true" {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err == nil {
 			defer gClient.Close()
 			models, err := gClient.DiscoverModels(ctx, providerID)
@@ -125,7 +125,7 @@ var providersSupportedCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// 1. Try gRPC
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err == nil {
 			defer gClient.Close()
 			list, err := gClient.GetSupportedProviders(ctx)
@@ -174,7 +174,7 @@ var providersAddCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// 1. Try gRPC
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err == nil {
 			defer gClient.Close()
 			id, err := gClient.ConfigureProvider(ctx, name, pType, key, url)

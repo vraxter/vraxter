@@ -22,6 +22,7 @@ import (
 
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 	"github.com/vraxter/vraxter/pkg/types"
 )
@@ -93,6 +94,7 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	defer os.RemoveAll(workDir)
 
 	srcPath := filepath.Join(workDir, "main.go")
+	tmpWasmPath := filepath.Join(workDir, skillID+".wasm")
 	wasmPath := filepath.Join(c.SkillsDir, skillID+".wasm")
 
 	code = strings.TrimSpace(code)
@@ -157,12 +159,12 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	var isTinyGo bool
 	if c.TM.IsReady("tinygo") {
 		tinyGoPath := c.TM.GetTinyGoPath()
-		cmd = exec.Command(tinyGoPath, "build", "-o", wasmPath, "-target=wasi", ".")
+		cmd = exec.Command(tinyGoPath, "build", "-o", tmpWasmPath, "-target=wasi", ".")
 		cmd.Env = append(os.Environ(), "GOPROXY=off", "GOSUMDB=off")
 		isTinyGo = true
 	} else {
 		goPath := c.TM.GetGoPath()
-		cmd = exec.Command(goPath, "build", "-o", wasmPath, ".")
+		cmd = exec.Command(goPath, "build", "-o", tmpWasmPath, ".")
 		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm", "GOPROXY=off", "GOSUMDB=off")
 	}
 
@@ -173,7 +175,7 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	if err != nil && isTinyGo {
 		log.Printf("GoCoder: TinyGo compilation failed, falling back to standard Go compiler. Reason: %v", err)
 		goPath := c.TM.GetGoPath()
-		cmd = exec.Command(goPath, "build", "-o", wasmPath, ".")
+		cmd = exec.Command(goPath, "build", "-o", tmpWasmPath, ".")
 		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm", "GOPROXY=off", "GOSUMDB=off")
 		cmd.Dir = workDir
 		output, err = cmd.CombinedOutput()
@@ -183,7 +185,11 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 		return fmt.Errorf("build failed: %v | log: %s", err, string(output))
 	}
 
-	_ = os.Chmod(wasmPath, 0600)
+	if _, statErr := os.Stat(tmpWasmPath); statErr == nil {
+		if err := utils.AtomicCopyFileBounded(tmpWasmPath, wasmPath, skills.MaxWASMBinaryBytes, 0600); err != nil {
+			return fmt.Errorf("failed atomically installing compiled WASM binary: %w", err)
+		}
+	}
 
 	checksum := ""
 	if data, err := os.ReadFile(wasmPath); err == nil {

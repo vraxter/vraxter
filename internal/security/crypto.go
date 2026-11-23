@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 // The size of AES-256 keys in bytes
@@ -38,8 +40,8 @@ func NewCryptoService(keyPath string) (*CryptoService, error) {
 			return nil, fmt.Errorf("failed generating random crypto key: %w", err)
 		}
 
-		// Save it strictly with 0600 permissions
-		if err := os.WriteFile(keyPath, masterKey, 0600); err != nil {
+		// Save it atomically with 0600 permissions
+		if err := utils.AtomicWriteFile(keyPath, masterKey, 0600); err != nil {
 			return nil, fmt.Errorf("failed to save .masterkey securely: %w", err)
 		}
 	} else {

@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 // StateManager orchestrates the current active environmental state across concurrent sessions
@@ -86,7 +88,7 @@ func (sm *StateManager) SaveModeConfig(config ModeConfig) error {
 		return fmt.Errorf("failed to marshal mode config: %w", err)
 	}
 
-	return os.WriteFile(path, data, 0644)
+	return utils.AtomicWriteFile(path, data, 0600)
 }
 
 // LoadModeConfig dynamically loads a JSON configuration and applies its BaseState.

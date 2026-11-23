@@ -12,6 +12,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
+
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 // HostExecConfig controls local guarded host command execution ($).
@@ -23,11 +27,24 @@ type HostExecConfig struct {
 	DefaultTimeoutSec int    `json:"default_timeout_sec,omitempty"`
 }
 
+// TLSConfig holds mTLS 1.3 certificate and key paths for network TCP transport.
+type TLSConfig struct {
+	Enabled    bool   `json:"enabled,omitempty"`
+	AutoGenPKI bool   `json:"auto_gen_pki,omitempty"`
+	CAPath     string `json:"ca_path,omitempty"`
+	CertPath   string `json:"cert_path,omitempty"`
+	KeyPath    string `json:"key_path,omitempty"`
+	ClientCert string `json:"client_cert,omitempty"`
+	ClientKey  string `json:"client_key,omitempty"`
+}
+
 // Config holds global daemon data.
 type Config struct {
 	AppDir               string
 	DBPath               string
 	KeyPath              string
+	SocketPath           string
+	ListenAddr           string
 	SkillsDir            string
 	SDKDir               string
 	EnableGoogleHome     bool
@@ -40,6 +57,7 @@ type Config struct {
 	RequireSkillApproval bool
 	WhitelistedIPs       []string
 	HostExec             HostExecConfig
+	TLS                  TLSConfig
 }
 
 type Settings struct {
@@ -50,6 +68,8 @@ type Settings struct {
 	RequireSkillApproval bool           `json:"require_skill_approval"`
 	WhitelistedIPs       []string       `json:"whitelisted_ips"`
 	HostExec             HostExecConfig `json:"host_exec"`
+	ListenAddr           string         `json:"listen_addr,omitempty"`
+	TLS                  TLSConfig      `json:"tls,omitempty"`
 }
 
 // DefaultHubURL can be overridden at build time using -ldflags "-X github.com/vraxter/vraxter/internal/config.DefaultHubURL=..."
@@ -88,6 +108,8 @@ func Load() Config {
 	var hub = DefaultHubURL
 	var requireSkillApproval = false
 	var whitelistedIPs []string
+	var listenAddr string
+	var tlsCfg TLSConfig
 	hostExec := HostExecConfig{
 		Enabled:           false,
 		CommandsFile:      filepath.Join(appDir, "host_commands.json"),
@@ -124,6 +146,10 @@ func Load() Config {
 			if s.HostExec.DefaultTimeoutSec > 0 {
 				hostExec.DefaultTimeoutSec = s.HostExec.DefaultTimeoutSec
 			}
+			if strings.TrimSpace(s.ListenAddr) != "" {
+				listenAddr = strings.TrimSpace(s.ListenAddr)
+			}
+			tlsCfg = s.TLS
 		}
 	}
 	
@@ -156,11 +182,21 @@ func Load() Config {
 	if envReqApp := os.Getenv("VRAXTER_REQUIRE_SKILL_APPROVAL"); envReqApp == "true" {
 		requireSkillApproval = true
 	}
+	if envAddr := strings.TrimSpace(os.Getenv("VRAXTER_GRPC_ADDR")); envAddr != "" {
+		listenAddr = envAddr
+	}
+
+	socketPath := filepath.Join(appDir, "vraxter.sock")
+	if envSock := strings.TrimSpace(os.Getenv("VRAXTER_SOCKET_PATH")); envSock != "" {
+		socketPath = envSock
+	}
 
 	return Config{
 		AppDir:               appDir,
 		DBPath:               filepath.Join(appDir, "vraxter.db"),
 		KeyPath:              filepath.Join(appDir, ".masterkey"),
+		SocketPath:           socketPath,
+		ListenAddr:           listenAddr,
 		SkillsDir:            skillsDir,
 		SDKDir:               sdkDir,
 		EnableGoogleHome:     os.Getenv("VRAXTER_GOOGLE_HOME") == "true",
@@ -173,10 +209,28 @@ func Load() Config {
 		RequireSkillApproval: requireSkillApproval,
 		WhitelistedIPs:       whitelistedIPs,
 		HostExec:             hostExec,
+		TLS:                  tlsCfg,
 	}
 }
 
-// SaveSettings writes minimal settings back to the filesystem
+// DefaultLocalEndpoint returns the default gRPC endpoint for local IPC:
+//   - Unix/POSIX: "unix://<AppDir>/vraxter.sock"
+//   - Windows: "tcp://127.0.0.1:50051" (unless ListenAddr or explicit unix:// is configured)
+func (c *Config) DefaultLocalEndpoint() string {
+	if addr := strings.TrimSpace(c.ListenAddr); addr != "" {
+		return addr
+	}
+	if runtime.GOOS == "windows" {
+		return "tcp://127.0.0.1:50051"
+	}
+	sock := strings.TrimSpace(c.SocketPath)
+	if sock == "" {
+		sock = filepath.Join(c.AppDir, "vraxter.sock")
+	}
+	return "unix://" + sock
+}
+
+// SaveSettings writes minimal settings back to the filesystem atomically.
 func (c *Config) SaveSettings() error {
 	s := Settings{
 		Implementation:       c.Implementation,
@@ -186,9 +240,14 @@ func (c *Config) SaveSettings() error {
 		RequireSkillApproval: c.RequireSkillApproval,
 		WhitelistedIPs:       c.WhitelistedIPs,
 		HostExec:             c.HostExec,
+		ListenAddr:           c.ListenAddr,
+		TLS:                  c.TLS,
 	}
-	data, _ := json.MarshalIndent(s, "", "  ")
-	return os.WriteFile(filepath.Join(c.AppDir, "settings.json"), data, 0600)
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	return utils.AtomicWriteFile(filepath.Join(c.AppDir, "settings.json"), data, 0600)
 }
 
 // IsAirgap returns true if Vraxter is strictly running in zero-egress airgap mode

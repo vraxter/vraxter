@@ -11,10 +11,7 @@ package utils
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -50,39 +47,5 @@ func DownloadFileWithContext(ctx context.Context, destPath string, rawURL string
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	destDir := filepath.Dir(destPath)
-	if err := os.MkdirAll(destDir, 0700); err != nil {
-		return fmt.Errorf("failed to prepare download directory: %w", err)
-	}
-
-	tmpFile, err := os.CreateTemp(destDir, ".vraxter-dl-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary download file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		_ = tmpFile.Close()
-		return fmt.Errorf("failed writing downloaded data: %w", err)
-	}
-	if err := tmpFile.Sync(); err != nil {
-		_ = tmpFile.Close()
-		return fmt.Errorf("failed flushing downloaded file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("failed closing downloaded file: %w", err)
-	}
-	_ = os.Chmod(tmpPath, 0600)
-
-	if err := os.Rename(tmpPath, destPath); err != nil {
-		return fmt.Errorf("failed moving downloaded file into place: %w", err)
-	}
-	cleanup = false
-	return nil
+	return AtomicWriteFromReader(destPath, resp.Body, 0, 0600)
 }

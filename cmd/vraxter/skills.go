@@ -41,7 +41,7 @@ var listSkillsCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all installed skills with their Vraxter Shield trust status",
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -92,7 +92,7 @@ var infoSkillCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		id := args[0]
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -135,7 +135,7 @@ var installSkillCmd = &cobra.Command{
 	Short: "Install a skill from the Vraxter Hub",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -161,7 +161,7 @@ var downloadSkillCmd = &cobra.Command{
 	Short: "Download a skill without installing it",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -191,7 +191,7 @@ var injectSkillCmd = &cobra.Command{
 	Short: "Locally inject an offline .wasm skill file into the engine",
 	Args:  cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -231,7 +231,7 @@ var inspectSkillCmd = &cobra.Command{
 	Short: "Verify the cryptographic hash of an installed skill",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -258,7 +258,7 @@ var deleteSkillCmd = &cobra.Command{
 	Short: "Delete an installed skill",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -284,7 +284,7 @@ var trustSkillCmd = &cobra.Command{
 	Short: "Manually elevate a skill's tier to Community Verified",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)

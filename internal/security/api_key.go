@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 // GetOrCreateDaemonKey retrieves the existing daemon API key or creates a new one with strict 0600 permissions.
@@ -37,8 +39,8 @@ func GetOrCreateDaemonKey(appDir string) (string, error) {
 	}
 	key := "vrx_" + hex.EncodeToString(bytes)
 
-	// Save to disk with 0600 permissions (read/write for owner only)
-	if err := os.WriteFile(keyPath, []byte(key), 0600); err != nil {
+	// Save to disk atomically with 0600 permissions (read/write for owner only)
+	if err := utils.AtomicWriteFile(keyPath, []byte(key), 0600); err != nil {
 		return "", fmt.Errorf("failed to write daemon key to %s: %w", keyPath, err)
 	}
 

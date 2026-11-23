@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 // KeyManager handles the local identity of Vraxter for skill signing
@@ -59,7 +61,7 @@ func (m *KeyManager) GenerateKeys() (*ecdsa.PrivateKey, error) {
 	})
 
 	privPath := filepath.Join(m.keysDir, "vraxter_id")
-	if err := os.WriteFile(privPath, privPEM, 0600); err != nil {
+	if err := utils.AtomicWriteFile(privPath, privPEM, 0600); err != nil {
 		return nil, err
 	}
 
@@ -75,7 +77,7 @@ func (m *KeyManager) GenerateKeys() (*ecdsa.PrivateKey, error) {
 	})
 
 	pubPath := filepath.Join(m.keysDir, "vraxter_id.pub")
-	if err := os.WriteFile(pubPath, pubPEM, 0644); err != nil {
+	if err := utils.AtomicWriteFile(pubPath, pubPEM, 0600); err != nil {
 		return nil, err
 	}
 

@@ -19,13 +19,13 @@ import (
 )
 
 // BuildServer constructs the gRPC server with the given core Engine, Managers, and Daemon API Key
-func BuildServer(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager, sm *services.SkillService, cfg *config.Config, daemonKey string) *grpc.Server {
-	return BuildServerWithShutdown(engine, pm, mm, sm, cfg, daemonKey, nil)
+func BuildServer(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager, sm *services.SkillService, cfg *config.Config, daemonKey string, extraOpts ...grpc.ServerOption) *grpc.Server {
+	return BuildServerWithShutdown(engine, pm, mm, sm, cfg, daemonKey, nil, extraOpts...)
 }
 
 // BuildServerWithShutdown constructs the gRPC server wired to a graceful shutdown notification channel.
-func BuildServerWithShutdown(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager, sm *services.SkillService, cfg *config.Config, daemonKey string, shutdownCh chan<- struct{}) *grpc.Server {
-	s := grpc.NewServer(
+func BuildServerWithShutdown(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager, sm *services.SkillService, cfg *config.Config, daemonKey string, shutdownCh chan<- struct{}, extraOpts ...grpc.ServerOption) *grpc.Server {
+	opts := []grpc.ServerOption{
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             2 * time.Second, // extremely permissive for local dev
 			PermitWithoutStream: true,            // allow pings even on idle connections
@@ -37,7 +37,13 @@ func BuildServerWithShutdown(engine *core.Engine, pm *services.ProviderManager, 
 		}),
 		grpc.UnaryInterceptor(UnaryAuthInterceptor(daemonKey)),
 		grpc.StreamInterceptor(StreamAuthInterceptor(daemonKey)),
-	)
+	}
+	for _, opt := range extraOpts {
+		if opt != nil {
+			opts = append(opts, opt)
+		}
+	}
+	s := grpc.NewServer(opts...)
 
 	// Register the Core Agent Service
 	handler := NewAgentHandler(engine, pm, mm, sm, cfg)

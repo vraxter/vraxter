@@ -20,6 +20,7 @@ import (
 
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 	"github.com/vraxter/vraxter/pkg/types"
 )
@@ -59,20 +60,25 @@ func (c *RustCoder) CompileWithManifest(name, description, paramsSchema, code st
 	defer os.RemoveAll(workDir)
 
 	srcPath := filepath.Join(workDir, "main.rs")
+	tmpWasmPath := filepath.Join(workDir, skillID+".wasm")
 	wasmPath := filepath.Join(c.SkillsDir, skillID+".wasm")
 
 	if err := os.WriteFile(srcPath, []byte(code), 0600); err != nil {
 		return err
 	}
 	rustcPath := c.TM.GetRustcPath()
-	cmd := exec.Command(rustcPath, "--target", "wasm32-wasip1", "-o", wasmPath, srcPath)
+	cmd := exec.Command(rustcPath, "--target", "wasm32-wasip1", "-o", tmpWasmPath, srcPath)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("rustc failed: %v | log: %s", err, string(output))
 	}
 
-	_ = os.Chmod(wasmPath, 0600)
+	if _, statErr := os.Stat(tmpWasmPath); statErr == nil {
+		if err := utils.AtomicCopyFileBounded(tmpWasmPath, wasmPath, skills.MaxWASMBinaryBytes, 0600); err != nil {
+			return fmt.Errorf("failed atomically installing compiled WASM binary: %w", err)
+		}
+	}
 
 	checksum := ""
 	if data, err := os.ReadFile(wasmPath); err == nil {

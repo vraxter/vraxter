@@ -26,7 +26,7 @@ var configListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all active configuration values",
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -65,7 +65,7 @@ var configSetCmd = &cobra.Command{
 		key := args[0]
 		val := args[1]
 
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
