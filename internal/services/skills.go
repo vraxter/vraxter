@@ -9,6 +9,7 @@
 package services
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -45,6 +46,13 @@ func (s *SkillService) InstallSkill(m types.SkillManifest) error {
 	srcPath := m.Command
 	filename := m.ID + filepath.Ext(srcPath)
 	destPath := filepath.Join(s.skillsDir, filename)
+
+	// 2b. Static WASM bytecode import verification (Zero Over-Privilege) before installation
+	if strings.ToLower(filepath.Ext(srcPath)) == ".wasm" && (m.Engine == "" || m.Engine == "wasm") {
+		if err := skills.VerifyWASMFile(context.Background(), srcPath, m); err != nil {
+			return fmt.Errorf("static WASM capability verification failed: %w", err)
+		}
+	}
 
 	// 3. Copy if needed
 	if srcPath != destPath {

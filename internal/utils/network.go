@@ -236,8 +236,270 @@ func IsAllowedNetwork(urlStr string, whitelist []string) (bool, error) {
 	return IsAllowedNetworkWithMode(urlStr, "airgap", whitelist)
 }
 
+// LookupIPFunc resolves a hostname into IP addresses with context support.
+type LookupIPFunc func(ctx context.Context, host string) ([]net.IP, error)
+
+// DefaultLookupIP resolves host using Go's net.DefaultResolver.
+func DefaultLookupIP(ctx context.Context, host string) ([]net.IP, error) {
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ips := make([]net.IP, 0, len(addrs))
+	for _, a := range addrs {
+		if a.IP != nil {
+			ips = append(ips, a.IP)
+		}
+	}
+	return ips, nil
+}
+
+// multiLabelPublicSuffixes lists common two-label public suffixes that must never be
+// accepted as wildcard bases (e.g., "*.co.uk" or "*.com.ar").
+var multiLabelPublicSuffixes = map[string]bool{
+	"co.uk":  true,
+	"org.uk": true,
+	"gov.uk": true,
+	"ac.uk":  true,
+	"me.uk":  true,
+	"net.uk": true,
+	"com.ar": true,
+	"org.ar": true,
+	"gov.ar": true,
+	"gob.ar": true,
+	"edu.ar": true,
+	"com.br": true,
+	"org.br": true,
+	"gov.br": true,
+	"com.au": true,
+	"org.au": true,
+	"gov.au": true,
+	"co.jp":  true,
+	"or.jp":  true,
+	"go.jp":  true,
+	"com.mx": true,
+	"org.mx": true,
+	"gob.mx": true,
+	"com.cn": true,
+	"com.es": true,
+	"co.in":  true,
+	"co.nz":  true,
+	"co.za":  true,
+	"co.kr":  true,
+	"co.il":  true,
+}
+
+// ValidateAllowedHostPattern checks that an allowed_hosts entry is structurally safe.
+// It rejects global wildcards ("*"), TLD/public-suffix wildcards ("*.com", "*.co.uk"),
+// multi-wildcard patterns ("*.*.example.com"), and wildcarded IP addresses.
+func ValidateAllowedHostPattern(pattern string) error {
+	p := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
+	if p == "" {
+		return fmt.Errorf("empty host pattern")
+	}
+	if strings.Contains(p, "*") {
+		if p == "*" || !strings.HasPrefix(p, "*.") {
+			return fmt.Errorf("unsafe wildcard pattern %q: only single leading subdomain wildcard '*.domain.tld' is allowed", pattern)
+		}
+		base := p[2:]
+		if base == "" || strings.Contains(base, "*") || strings.Contains(base, "..") || strings.HasPrefix(base, ".") || strings.HasSuffix(base, ".") {
+			return fmt.Errorf("malformed wildcard pattern %q", pattern)
+		}
+		if net.ParseIP(base) != nil {
+			return fmt.Errorf("wildcard pattern %q cannot target an IP address", pattern)
+		}
+		labels := strings.Split(base, ".")
+		if len(labels) < 2 {
+			return fmt.Errorf("unsafe wildcard pattern %q: cannot wildcard a top-level domain", pattern)
+		}
+		if multiLabelPublicSuffixes[base] {
+			return fmt.Errorf("unsafe wildcard pattern %q: cannot wildcard public suffix %q", pattern, base)
+		}
+		for _, lbl := range labels {
+			if lbl == "" {
+				return fmt.Errorf("malformed wildcard pattern %q: empty label", pattern)
+			}
+		}
+	}
+	return nil
+}
+
+// MatchAllowedHostPattern matches a host and its resolved IPs against a single allowed_hosts
+// pattern supporting exact hostnames/IPs, CIDR ranges (net.ParseCIDR), and safe subdomain
+// wildcards ("*.example.com"). Returns an error if the pattern itself is unsafe.
+func MatchAllowedHostPattern(pattern, host string, resolvedIPs []net.IP) (bool, error) {
+	if err := ValidateAllowedHostPattern(pattern); err != nil {
+		return false, err
+	}
+	p := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
+	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	h = strings.TrimPrefix(strings.TrimSuffix(h, "]"), "[")
+
+	// 1. CIDR block check (matches literal host IP or any resolved IP)
+	if strings.Contains(p, "/") {
+		_, cidrNet, err := net.ParseCIDR(p)
+		if err != nil {
+			return false, fmt.Errorf("invalid CIDR pattern %q: %w", pattern, err)
+		}
+		if literalIP := net.ParseIP(h); literalIP != nil {
+			return cidrNet.Contains(literalIP), nil
+		}
+		if len(resolvedIPs) == 0 {
+			return false, nil
+		}
+		for _, ip := range resolvedIPs {
+			if !cidrNet.Contains(ip) {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+
+	// 2. Safe subdomain wildcard check ("*.example.com")
+	if strings.HasPrefix(p, "*.") {
+		base := p[2:]
+		suffix := "." + base
+		if !strings.HasSuffix(h, suffix) {
+			return false, nil
+		}
+		prefix := strings.TrimSuffix(h, suffix)
+		if prefix == "" || strings.HasPrefix(prefix, ".") || strings.HasSuffix(prefix, ".") || strings.Contains(prefix, "..") {
+			return false, nil
+		}
+		return true, nil
+	}
+
+	// 3. Exact hostname or IP literal match
+	if h == p {
+		return true, nil
+	}
+	if pIP := net.ParseIP(p); pIP != nil {
+		if hIP := net.ParseIP(h); hIP != nil && pIP.Equal(hIP) {
+			return true, nil
+		}
+		if len(resolvedIPs) > 0 {
+			for _, ip := range resolvedIPs {
+				if !pIP.Equal(ip) {
+					return false, nil
+				}
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ResolveAndValidateHost resolves rawHost at most once using lookupFn (defaulting to
+// DefaultLookupIP), enforces the active isolation mode without emitting external DNS
+// queries in airgap/local_lan modes, and returns the validated IP addresses for pinning.
+func ResolveAndValidateHost(ctx context.Context, rawHost, mode string, whitelist []string, lookupFn LookupIPFunc) ([]net.IP, error) {
+	if lookupFn == nil {
+		lookupFn = DefaultLookupIP
+	}
+
+	host := strings.TrimSpace(rawHost)
+	if host == "" {
+		return nil, fmt.Errorf("empty host")
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	host = strings.TrimSuffix(host, ".")
+
+	parsedIP := net.ParseIP(host)
+	normMode := strings.ToLower(strings.TrimSpace(mode))
+
+	// 1. Literal IP path (zero DNS)
+	if parsedIP != nil {
+		if isWhitelistedHostOrIP(host, parsedIP, whitelist) {
+			return []net.IP{parsedIP}, nil
+		}
+		if IsLinkLocalIP(parsedIP) {
+			return nil, fmt.Errorf("link-local / IMDS IP %s is blocked under %s perimeter", parsedIP.String(), normMode)
+		}
+		if parsedIP.IsUnspecified() {
+			return nil, fmt.Errorf("unspecified IP %s is blocked", parsedIP.String())
+		}
+		switch normMode {
+		case "airgap", "strict_local", "local_lan":
+			if IsPublicIP(parsedIP) {
+				return nil, fmt.Errorf("public IP %s is blocked under %s isolation perimeter (zero-egress to WAN)", parsedIP.String(), normMode)
+			}
+			if parsedIP.IsLoopback() || parsedIP.IsPrivate() {
+				return []net.IP{parsedIP}, nil
+			}
+			return nil, fmt.Errorf("IP %s blocked in %s mode", parsedIP.String(), normMode)
+		default:
+			return []net.IP{parsedIP}, nil
+		}
+	}
+
+	// 2. Localhost fast path (zero DNS)
+	if strings.EqualFold(host, "localhost") || strings.EqualFold(host, "localhost.localdomain") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}, nil
+	}
+
+	// 3. Explicit hostname whitelist (still requires single resolution to pin IP)
+	explicitlyWhitelistedHost := isWhitelistedHostOrIP(host, nil, whitelist)
+
+	// 4. Non-IP hostname / FQDN under active isolation mode
+	switch normMode {
+	case "airgap", "strict_local", "local_lan":
+		lower := strings.ToLower(host)
+		isLocalName := strings.HasSuffix(lower, ".local") || strings.HasSuffix(lower, ".lan") || !strings.Contains(host, ".")
+		if !isLocalName && !explicitlyWhitelistedHost {
+			// Deterministic zero-egress: never emit DNS queries for external WAN domains.
+			return nil, fmt.Errorf("DNS resolution blocked: %s perimeter forbids external domain '%s' (zero-egress to WAN)", normMode, host)
+		}
+		ips, err := lookupFn(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("local resolution failed for '%s': %w", host, err)
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("DNS resolution returned no addresses for '%s'", host)
+		}
+		for _, ip := range ips {
+			if isWhitelistedHostOrIP(ip.String(), ip, whitelist) {
+				continue
+			}
+			if IsLinkLocalIP(ip) {
+				return nil, fmt.Errorf("host '%s' resolved to link-local / IMDS IP %s (blocked in %s)", host, ip.String(), normMode)
+			}
+			if ip.IsUnspecified() {
+				return nil, fmt.Errorf("host '%s' resolved to unspecified IP %s (blocked)", host, ip.String())
+			}
+			if !explicitlyWhitelistedHost && IsPublicIP(ip) {
+				return nil, fmt.Errorf("host '%s' resolved to public IP %s (blocked in %s)", host, ip.String(), normMode)
+			}
+		}
+		return ips, nil
+
+	default: // "hybrid"
+		ips, err := lookupFn(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("DNS resolution failed for '%s': %w", host, err)
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("DNS resolution returned no addresses for '%s'", host)
+		}
+		for _, ip := range ips {
+			if isWhitelistedHostOrIP(ip.String(), ip, whitelist) {
+				continue
+			}
+			if IsLinkLocalIP(ip) {
+				return nil, fmt.Errorf("host '%s' resolved to link-local / IMDS IP %s (blocked)", host, ip.String())
+			}
+			if ip.IsUnspecified() {
+				return nil, fmt.Errorf("host '%s' resolved to unspecified IP %s (blocked)", host, ip.String())
+			}
+		}
+		return ips, nil
+	}
+}
+
 // NewAirgapDialer constructs a net.DialContext function that enforces zero-egress perimeter
-// rules at the socket level with strict DDIL connect/keepalive timeouts.
+// rules at the socket level with single-lookup IP pinning (anti-TOCTOU) and strict DDIL timeouts.
 // Disallowed dials fail immediately with syscall.EPERM.
 func NewAirgapDialer(mode string, whitelist []string) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	d := &net.Dialer{
@@ -247,13 +509,17 @@ func NewAirgapDialer(mode string, whitelist []string) func(ctx context.Context, 
 	wlCopy := append([]string(nil), whitelist...)
 
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
+		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
-			host = addr
+			return nil, &net.OpError{
+				Op:  "dial",
+				Net: network,
+				Err: syscall.EPERM,
+			}
 		}
 
-		allowed, err := IsAllowedHost(host, mode, wlCopy)
-		if !allowed || err != nil {
+		ips, err := ResolveAndValidateHost(ctx, host, mode, wlCopy, nil)
+		if err != nil || len(ips) == 0 {
 			return nil, &net.OpError{
 				Op:     "dial",
 				Net:    network,
@@ -263,7 +529,16 @@ func NewAirgapDialer(mode string, whitelist []string) func(ctx context.Context, 
 			}
 		}
 
-		return d.DialContext(ctx, network, addr)
+		// Dial the validated IP directly so net.Dialer never performs a second DNS lookup (anti-TOCTOU).
+		var lastErr error
+		for _, ip := range ips {
+			conn, dialErr := d.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastErr = dialErr
+		}
+		return nil, lastErr
 	}
 }
 

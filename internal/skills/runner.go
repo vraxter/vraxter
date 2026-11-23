@@ -18,8 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -28,9 +26,8 @@ import (
 	"time"
 
 	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/experimental/sysfs"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
-	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/types"
 )
 
@@ -43,6 +40,13 @@ const (
 	MaxHTTPGetBytes = 2 * 1024 * 1024
 	// maxHTTPRedirects caps redirect chains in httpGetFn.
 	maxHTTPRedirects = 3
+
+	// DefaultMemoryLimitPages is the default per-instance WASM memory ceiling (128 MB = 2048 * 64KB pages).
+	DefaultMemoryLimitPages uint32 = 2048
+	// MinMemoryLimitPages is the minimum configurable per-instance WASM memory limit (1 MB = 16 * 64KB pages).
+	MinMemoryLimitPages uint32 = 16
+	// DefaultMaxConcurrentExecs bounds simultaneous WASM module instantiations to prevent host OOM/CPU spikes.
+	DefaultMaxConcurrentExecs = 6
 )
 
 // limitedBuffer captures up to limit bytes in memory without erroring or OOMing on overflow.
@@ -79,8 +83,14 @@ func (b *limitedBuffer) Bytes() []byte   { return b.buf.Bytes() }
 func (b *limitedBuffer) String() string  { return b.buf.String() }
 func (b *limitedBuffer) Truncated() bool { return b.truncated }
 
+type moduleCacheKey struct {
+	sha256      string
+	memoryPages uint32
+}
+
 type cachedModule struct {
-	sha256   string
+	key      moduleCacheKey
+	runtime  wazero.Runtime
 	compiled wazero.CompiledModule
 	refs     int
 	evicted  bool
@@ -92,15 +102,18 @@ type networkPolicy struct {
 }
 
 type Runner struct {
-	Timeout         time.Duration
-	MaxBinaryBytes  int64
-	runtime         wazero.Runtime
-	cache           map[string]*cachedModule // indexed by SHA-256 hex of .wasm bytes
-	pathHash        map[string]string        // maps normalized .wasm path -> latest SHA-256 hex
-	mu              sync.RWMutex
-	isolationMode   string
-	whitelistedIPs  []string
-	allowHostMounts bool
+	Timeout          time.Duration
+	MaxBinaryBytes   int64
+	MaxMemoryPages   uint32
+	compilationCache wazero.CompilationCache
+	runtimes         map[uint32]wazero.Runtime       // keyed by memoryLimitPages
+	cache            map[moduleCacheKey]*cachedModule // indexed by (SHA-256, memoryLimitPages)
+	pathHash         map[string]string                // maps normalized .wasm path -> latest SHA-256 hex
+	execSem          chan struct{}                    // bounded execution concurrency semaphore
+	mu               sync.RWMutex
+	isolationMode    string
+	whitelistedIPs   []string
+	allowHostMounts  bool
 }
 
 func (rn *Runner) maxBinaryBytes() int64 {
@@ -113,31 +126,111 @@ func (rn *Runner) maxBinaryBytes() int64 {
 	return limit
 }
 
-func NewRunner() *Runner {
-	ctx := context.Background()
-
-	// Hardening: 128MB Memory Limit (2048 pages * 64KB) and strict context cancellation bounds.
-	config := wazero.NewRuntimeConfig().
-		WithMemoryLimitPages(2048).
-		WithCloseOnContextDone(true)
-
-	r := wazero.NewRuntimeWithConfig(ctx, config)
-
-	wasi_snapshot_preview1.MustInstantiate(ctx, r)
-	if err := createHostBuilder(r, ctx); err != nil {
-		fmt.Printf("Warning: Failed to initialize Vraxter V1 host functions: %v\n", err)
+func (rn *Runner) effectiveMemoryLimitPages(manifest types.SkillManifest) uint32 {
+	rn.mu.RLock()
+	maxCeiling := rn.MaxMemoryPages
+	rn.mu.RUnlock()
+	if maxCeiling == 0 {
+		maxCeiling = DefaultMemoryLimitPages
 	}
 
+	pages := manifest.GetMemoryLimitPages(maxCeiling)
+	if pages < MinMemoryLimitPages {
+		pages = MinMemoryLimitPages
+	}
+	if pages > maxCeiling {
+		pages = maxCeiling
+	}
+	return pages
+}
+
+func NewRunner() *Runner {
 	rn := &Runner{
-		Timeout:         60 * time.Second,
-		MaxBinaryBytes:  MaxWASMBinaryBytes,
-		runtime:         r,
-		cache:           make(map[string]*cachedModule),
-		pathHash:        make(map[string]string),
-		isolationMode:   "airgap",
-		allowHostMounts: false,
+		Timeout:          60 * time.Second,
+		MaxBinaryBytes:   MaxWASMBinaryBytes,
+		MaxMemoryPages:   DefaultMemoryLimitPages,
+		compilationCache: wazero.NewCompilationCache(),
+		runtimes:         make(map[uint32]wazero.Runtime),
+		cache:            make(map[moduleCacheKey]*cachedModule),
+		pathHash:         make(map[string]string),
+		execSem:          make(chan struct{}, DefaultMaxConcurrentExecs),
+		isolationMode:    "airgap",
+		allowHostMounts:  false,
+	}
+
+	// Pre-initialize the default 128 MB runtime eagerly.
+	if _, err := rn.getRuntimeForPages(DefaultMemoryLimitPages); err != nil {
+		fmt.Printf("Warning: Failed to initialize default Wazero runtime: %v\n", err)
 	}
 	return rn
+}
+
+func (rn *Runner) getRuntimeForPages(pages uint32) (wazero.Runtime, error) {
+	rn.mu.RLock()
+	rt, ok := rn.runtimes[pages]
+	rn.mu.RUnlock()
+	if ok {
+		return rt, nil
+	}
+
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	if rt, ok := rn.runtimes[pages]; ok {
+		return rt, nil
+	}
+
+	ctx := context.Background()
+	cfg := wazero.NewRuntimeConfig().
+		WithMemoryLimitPages(pages).
+		WithCloseOnContextDone(true).
+		WithCompilationCache(rn.compilationCache)
+
+	newRT := wazero.NewRuntimeWithConfig(ctx, cfg)
+	if _, err := wasi_snapshot_preview1.Instantiate(ctx, newRT); err != nil {
+		_ = newRT.Close(ctx)
+		return nil, fmt.Errorf("failed to instantiate WASI preview1: %w", err)
+	}
+	if err := createHostBuilder(newRT, ctx); err != nil {
+		_ = newRT.Close(ctx)
+		return nil, fmt.Errorf("failed to instantiate Vraxter host module: %w", err)
+	}
+
+	rn.runtimes[pages] = newRT
+	return newRT, nil
+}
+
+// SetMaxConcurrentExecs configures the maximum number of simultaneous WASM executions.
+// Values <= 0 reset to DefaultMaxConcurrentExecs.
+func (rn *Runner) SetMaxConcurrentExecs(limit int) {
+	if limit <= 0 {
+		limit = DefaultMaxConcurrentExecs
+	}
+	rn.mu.Lock()
+	rn.execSem = make(chan struct{}, limit)
+	rn.mu.Unlock()
+}
+
+// MaxConcurrentExecs returns the configured concurrency capacity of the execution semaphore.
+func (rn *Runner) MaxConcurrentExecs() int {
+	rn.mu.RLock()
+	defer rn.mu.RUnlock()
+	return cap(rn.execSem)
+}
+
+func (rn *Runner) acquireExecSlot(ctx context.Context) (func(), error) {
+	rn.mu.RLock()
+	sem := rn.execSem
+	rn.mu.RUnlock()
+	if sem == nil {
+		return func() {}, nil
+	}
+
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("VRAXTER SHIELD: WASM execution concurrency limit (%d) reached: %w", cap(sem), ctx.Err())
+	}
 }
 
 // SetNetworkPolicy updates the isolation mode and IP whitelist enforced by the WASM runner and http_get hostcall.
@@ -163,8 +256,12 @@ func (rn *Runner) SetAllowHostMounts(allow bool) {
 func (rn *Runner) HasCachedHash(sha256Hex string) bool {
 	rn.mu.RLock()
 	defer rn.mu.RUnlock()
-	_, ok := rn.cache[sha256Hex]
-	return ok
+	for k := range rn.cache {
+		if k.sha256 == sha256Hex {
+			return true
+		}
+	}
+	return false
 }
 
 // CacheSize returns the number of compiled modules currently held in the runner cache.
@@ -174,28 +271,37 @@ func (rn *Runner) CacheSize() int {
 	return len(rn.cache)
 }
 
+func (rn *Runner) evictHashLocked(hash string) []wazero.CompiledModule {
+	var toClose []wazero.CompiledModule
+	for k, entry := range rn.cache {
+		if k.sha256 != hash {
+			continue
+		}
+		delete(rn.cache, k)
+		entry.evicted = true
+		if entry.refs == 0 {
+			toClose = append(toClose, entry.compiled)
+		}
+	}
+	return toClose
+}
+
 // InvalidatePath evicts any cached compiled module associated with the given .wasm path.
 func (rn *Runner) InvalidatePath(wasmPath string) {
 	normPath := filepath.Clean(wasmPath)
-	var toClose wazero.CompiledModule
+	var toClose []wazero.CompiledModule
 
 	rn.mu.Lock()
 	if oldHash, ok := rn.pathHash[normPath]; ok {
 		delete(rn.pathHash, normPath)
 		if !rn.isHashReferencedLocked(oldHash) {
-			if oldEntry, exists := rn.cache[oldHash]; exists {
-				delete(rn.cache, oldHash)
-				oldEntry.evicted = true
-				if oldEntry.refs == 0 {
-					toClose = oldEntry.compiled
-				}
-			}
+			toClose = rn.evictHashLocked(oldHash)
 		}
 	}
 	rn.mu.Unlock()
 
-	if toClose != nil {
-		_ = toClose.Close(context.Background())
+	for _, c := range toClose {
+		_ = c.Close(context.Background())
 	}
 }
 
@@ -232,156 +338,6 @@ const (
 	networkPolicyKey ctxKey = "vrax_net_policy"
 )
 
-func validateHTTPGetTarget(rawURL string, manifest types.SkillManifest, policy networkPolicy) error {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme == "" || u.Hostname() == "" {
-		return fmt.Errorf("invalid URL %q", rawURL)
-	}
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return fmt.Errorf("disallowed URL scheme %q", u.Scheme)
-	}
-
-	// Enforce V1 manifest network constraints if declared
-	if manifest.ManifestV1 != nil && manifest.ManifestV1.Capabilities != nil && manifest.ManifestV1.Capabilities.Network != nil {
-		netCap := manifest.ManifestV1.Capabilities.Network
-		if len(netCap.AllowedSchemes) > 0 {
-			schemeOK := false
-			for _, allowedScheme := range netCap.AllowedSchemes {
-				if strings.EqualFold(strings.TrimSpace(allowedScheme), scheme) {
-					schemeOK = true
-					break
-				}
-			}
-			if !schemeOK {
-				return fmt.Errorf("scheme %q not in manifest allowed_schemes", scheme)
-			}
-		}
-		if len(netCap.AllowedHosts) > 0 {
-			hostOK := false
-			host := strings.ToLower(u.Hostname())
-			for _, allowedHost := range netCap.AllowedHosts {
-				ah := strings.ToLower(strings.TrimSpace(allowedHost))
-				if host == ah {
-					hostOK = true
-					break
-				}
-			}
-			if !hostOK {
-				return fmt.Errorf("host %q not in manifest allowed_hosts", u.Hostname())
-			}
-		}
-	}
-
-	// Enforce Vraxter network isolation perimeter (airgap / local_lan / hybrid)
-	allowed, err := utils.IsAllowedNetworkWithMode(rawURL, policy.isolationMode, policy.whitelistedIPs)
-	if err != nil || !allowed {
-		return fmt.Errorf("blocked by %s network shield: %v", policy.isolationMode, err)
-	}
-	return nil
-}
-
-func httpGetFn(ctx context.Context, mod api.Module, urlPtr, urlLen, outPtr, outMax uint32) uint32 {
-	// Retrieve the manifest from the context to verify capabilities
-	manifestVal := ctx.Value(manifestKey)
-	if manifestVal == nil {
-		// Secure by default: Abort if manifest is not propagated
-		return 0
-	}
-	manifest, ok := manifestVal.(types.SkillManifest)
-	if !ok {
-		return 0
-	}
-
-	// Verify the "network" capability exists in V1 capabilities or legacy permissions
-	hasNetwork := false
-	if manifest.ManifestV1 != nil && manifest.ManifestV1.Capabilities != nil && manifest.ManifestV1.Capabilities.Network != nil {
-		netCap := manifest.ManifestV1.Capabilities.Network
-		if netCap.Mode != "" && strings.ToLower(netCap.Mode) != "none" {
-			hasNetwork = true
-		}
-	}
-
-	if !hasNetwork {
-		for _, perm := range manifest.Permissions {
-			p := strings.ToLower(strings.TrimSpace(perm))
-			if p == "network" || strings.HasPrefix(p, "network:") || strings.HasPrefix(p, "net:") {
-				hasNetwork = true
-				break
-			}
-		}
-	}
-
-	if !hasNetwork {
-		fmt.Printf("\n[SHIELD SECURITY ALERT] Skill '%s' tried to make an outbound HTTP request but lacks the 'network' permission capability. Blocked.\n", manifest.ID)
-		return 0
-	}
-
-	if outMax == 0 {
-		return 0
-	}
-
-	urlBytes, ok := mod.Memory().Read(urlPtr, urlLen)
-	if !ok {
-		return 0
-	}
-	rawURL := string(urlBytes)
-
-	policy := networkPolicy{isolationMode: "airgap"}
-	if pv, ok := ctx.Value(networkPolicyKey).(networkPolicy); ok && pv.isolationMode != "" {
-		policy = pv
-	}
-
-	// Enforce Airgap / Isolation Network Shield BEFORE issuing request (zero DNS leaks)
-	if err := validateHTTPGetTarget(rawURL, manifest, policy); err != nil {
-		fmt.Printf("\n[SHIELD SECURITY ALERT] Skill '%s' outbound HTTP request to '%s' blocked: %v\n", manifest.ID, rawURL, err)
-		return 0
-	}
-
-	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: utils.NewAirgapTransport(policy.isolationMode, policy.whitelistedIPs),
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxHTTPRedirects {
-				return fmt.Errorf("too many redirects (max %d)", maxHTTPRedirects)
-			}
-			// Re-validate every redirect destination against the network shield and manifest allowlist
-			if err := validateHTTPGetTarget(req.URL.String(), manifest, policy); err != nil {
-				fmt.Printf("\n[SHIELD SECURITY ALERT] Skill '%s' HTTP redirect to '%s' blocked: %v\n", manifest.ID, req.URL.String(), err)
-				return err
-			}
-			return nil
-		},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return 0
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0
-	}
-	defer resp.Body.Close()
-
-	// Bound body read strictly with io.LimitReader (min of caller outMax and 2 MB hard cap)
-	readLimit := int64(outMax)
-	if readLimit > MaxHTTPGetBytes {
-		readLimit = MaxHTTPGetBytes
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, readLimit))
-	if err != nil {
-		return 0
-	}
-	if uint32(len(body)) > outMax {
-		body = body[:outMax]
-	}
-	if !mod.Memory().Write(outPtr, body) {
-		return 0
-	}
-	return uint32(len(body))
-}
-
 func createHostBuilder(rt wazero.Runtime, ctx context.Context) error {
 	_, err := rt.NewHostModuleBuilder("vrax_sandbox").
 		NewFunctionBuilder().
@@ -393,14 +349,45 @@ func createHostBuilder(rt wazero.Runtime, ctx context.Context) error {
 }
 
 func (rn *Runner) Close(ctx context.Context) error {
-	return rn.runtime.Close(ctx)
+	rn.mu.Lock()
+	rts := make([]wazero.Runtime, 0, len(rn.runtimes))
+	for _, rt := range rn.runtimes {
+		rts = append(rts, rt)
+	}
+	rn.runtimes = make(map[uint32]wazero.Runtime)
+	rn.cache = make(map[moduleCacheKey]*cachedModule)
+	rn.pathHash = make(map[string]string)
+	cc := rn.compilationCache
+	rn.mu.Unlock()
+
+	var firstErr error
+	for _, rt := range rts {
+		if err := rt.Close(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if cc != nil {
+		if err := cc.Close(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (rn *Runner) Execute(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}) (*types.ExecutionResult, error) {
 	if manifest.Engine != "wasm" && manifest.Engine != "" {
 		return nil, fmt.Errorf("skill engine '%s' is not supported (only wasm is allowed)", manifest.Engine)
 	}
-	return rn.executeWasm(ctx, manifest, params)
+	return rn.executeWasmInternal(ctx, manifest, params, false)
+}
+
+// ExecuteDryRun validates a freshly compiled skill's WASM imports against its real manifest
+// and smoke-tests it inside a zero-mount, zero-network sandbox with "_vraxter_dry_run": true.
+func (rn *Runner) ExecuteDryRun(ctx context.Context, manifest types.SkillManifest) (*types.ExecutionResult, error) {
+	if manifest.Engine != "wasm" && manifest.Engine != "" {
+		return nil, fmt.Errorf("skill engine '%s' is not supported (only wasm is allowed)", manifest.Engine)
+	}
+	return rn.executeWasmInternal(ctx, manifest, map[string]interface{}{"_vraxter_dry_run": true}, true)
 }
 
 func hasPrivilegedCapabilities(v1 *types.SkillManifestV1) bool {
@@ -479,12 +466,13 @@ func validateGuestPath(guestPath string) error {
 	return nil
 }
 
-func (rn *Runner) getOrCompileModule(ctx context.Context, wasmPath, expectedHash string) (*cachedModule, error) {
+func (rn *Runner) getOrCompileModule(ctx context.Context, wasmPath, expectedHash string, memPages uint32) (*cachedModule, error) {
 	normPath := filepath.Clean(wasmPath)
+	key := moduleCacheKey{sha256: expectedHash, memoryPages: memPages}
 
-	// Fast path: check SHA-256 index in cache
+	// Fast path: check (SHA-256, memoryPages) index in cache
 	rn.mu.Lock()
-	if entry, ok := rn.cache[expectedHash]; ok && !entry.evicted {
+	if entry, ok := rn.cache[key]; ok && !entry.evicted {
 		entry.refs++
 		rn.pathHash[normPath] = expectedHash
 		rn.mu.Unlock()
@@ -492,8 +480,13 @@ func (rn *Runner) getOrCompileModule(ctx context.Context, wasmPath, expectedHash
 	}
 	rn.mu.Unlock()
 
+	rt, err := rn.getRuntimeForPages(memPages)
+	if err != nil {
+		return nil, err
+	}
+
 	// Cache miss: enforce binary size limit before loading bytes into memory,
-	// and verify SHA-256 directly over the read slice (eliminates hash/compile TOCTOU)
+	// and verify SHA-256 directly over the read slice (eliminates hash/compile TOCTOU).
 	maxBytes := rn.maxBinaryBytes()
 	f, err := os.Open(wasmPath)
 	if err != nil {
@@ -522,40 +515,36 @@ func (rn *Runner) getOrCompileModule(ctx context.Context, wasmPath, expectedHash
 		return nil, fmt.Errorf("WASM binary changed concurrently on disk (expected %s, got %s)", expectedHash, actualHash)
 	}
 
-	compiled, err := rn.runtime.CompileModule(ctx, wasmBytes)
+	compiled, err := rt.CompileModule(ctx, wasmBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile WASM module: %w", err)
 	}
 
-	var toCloseOld wazero.CompiledModule
+	var toCloseOld []wazero.CompiledModule
 	var toCloseDup wazero.CompiledModule
 
 	rn.mu.Lock()
 	var entry *cachedModule
-	if existing, exists := rn.cache[actualHash]; exists && !existing.evicted {
+	actualKey := moduleCacheKey{sha256: actualHash, memoryPages: memPages}
+	if existing, exists := rn.cache[actualKey]; exists && !existing.evicted {
 		existing.refs++
 		entry = existing
 		toCloseDup = compiled
 	} else {
 		entry = &cachedModule{
-			sha256:   actualHash,
+			key:      actualKey,
+			runtime:  rt,
 			compiled: compiled,
 			refs:     1,
 		}
-		rn.cache[actualHash] = entry
+		rn.cache[actualKey] = entry
 	}
 
-	// Evict obsolete compiled module previously bound to this file path
+	// Evict obsolete compiled modules previously bound to this file path
 	if oldHash, hadOld := rn.pathHash[normPath]; hadOld && oldHash != actualHash {
 		rn.pathHash[normPath] = actualHash
 		if !rn.isHashReferencedLocked(oldHash) {
-			if oldEntry, exists := rn.cache[oldHash]; exists {
-				delete(rn.cache, oldHash)
-				oldEntry.evicted = true
-				if oldEntry.refs == 0 {
-					toCloseOld = oldEntry.compiled
-				}
-			}
+			toCloseOld = rn.evictHashLocked(oldHash)
 		}
 	} else {
 		rn.pathHash[normPath] = actualHash
@@ -565,14 +554,14 @@ func (rn *Runner) getOrCompileModule(ctx context.Context, wasmPath, expectedHash
 	if toCloseDup != nil {
 		_ = toCloseDup.Close(context.Background())
 	}
-	if toCloseOld != nil {
-		_ = toCloseOld.Close(context.Background())
+	for _, old := range toCloseOld {
+		_ = old.Close(context.Background())
 	}
 
 	return entry, nil
 }
 
-func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}) (*types.ExecutionResult, error) {
+func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}, isDryRun bool) (*types.ExecutionResult, error) {
 	reqPayload := types.SkillRequest{
 		JSONRPC: "2.0",
 		Method:  "execute",
@@ -602,6 +591,16 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 		isolationMode:  isoMode,
 		whitelistedIPs: wlCopy,
 	})
+	if isDryRun {
+		execCtx = context.WithValue(execCtx, dryRunCtxKey, true)
+	}
+
+	// Acquire bounded execution slot (context-aware semaphore prevents concurrent OOM/CPU floods).
+	releaseSlot, err := rn.acquireExecSlot(execCtx)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseSlot()
 
 	currentHash, err := rn.calculateHash(manifest.Command)
 	if err != nil {
@@ -617,26 +616,29 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 		)
 	}
 
-	isOfficial := manifest.IsOfficial
-	hasHighReputation := manifest.Score >= 4.0 && manifest.Downloads > 100
-	isSandboxSafe := len(manifest.Permissions) == 0 && !hasPrivilegedCapabilities(manifest.ManifestV1)
+	if !isDryRun {
+		isOfficial := manifest.IsOfficial
+		hasHighReputation := manifest.Score >= 4.0 && manifest.Downloads > 100
+		isSandboxSafe := len(manifest.Permissions) == 0 && !hasPrivilegedCapabilities(manifest.ManifestV1)
 
-	isAuthorized := isOfficial || hasHighReputation || isSandboxSafe
+		isAuthorized := isOfficial || hasHighReputation || isSandboxSafe
 
-	// Fail-closed: unset Tier (0) or Tier3Unverified require explicit trust for any privileged skill
-	if !isAuthorized && (manifest.Tier == 0 || manifest.Tier >= types.Tier3Unverified) {
-		return nil, fmt.Errorf(
-			"VRAXTER SHIELD: Skill '%s' requires specialized permissions and lacks community trust. "+
-				"To allow this skill, run 'vraxter skills trust %s'", manifest.ID, manifest.ID)
+		// Fail-closed: unset Tier (0) or Tier3Unverified require explicit trust for any privileged skill.
+		if !isAuthorized && (manifest.Tier == 0 || manifest.Tier >= types.Tier3Unverified) {
+			return nil, fmt.Errorf(
+				"VRAXTER SHIELD: Skill '%s' requires specialized permissions and lacks community trust. "+
+					"To allow this skill, run 'vraxter skills trust %s'", manifest.ID, manifest.ID)
+		}
 	}
 
-	// Validate mount policy and path containment BEFORE compiling/instantiating
+	// Validate mount policy, path containment, and wrap every mount with quotaFS BEFORE instantiating.
 	type activeMount struct {
 		guest string
 		host  string
 		mode  string
 	}
 	var activeMounts []activeMount
+	var quotaMounts []*quotaFS
 
 	runTempDir, err := os.MkdirTemp("", "vraxter-run-"+manifest.ID+"-*")
 	if err != nil {
@@ -646,111 +648,140 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 
 	fsConfig := wazero.NewFSConfig()
 
-	if manifest.ManifestV1 != nil && manifest.ManifestV1.Capabilities != nil && manifest.ManifestV1.Capabilities.FS != nil && len(manifest.ManifestV1.Capabilities.FS.Mounts) > 0 {
-		for _, mount := range manifest.ManifestV1.Capabilities.FS.Mounts {
-			if err := validateGuestPath(mount.Guest); err != nil {
-				return nil, fmt.Errorf("shield: invalid mount guest path: %w", err)
-			}
+	if !isDryRun {
+		if manifest.ManifestV1 != nil && manifest.ManifestV1.Capabilities != nil && manifest.ManifestV1.Capabilities.FS != nil && len(manifest.ManifestV1.Capabilities.FS.Mounts) > 0 {
+			for _, mount := range manifest.ManifestV1.Capabilities.FS.Mounts {
+				if err := validateGuestPath(mount.Guest); err != nil {
+					return nil, fmt.Errorf("shield: invalid mount guest path: %w", err)
+				}
 
-			var hostBase string
-			switch strings.ToLower(mount.Source) {
-			case "workspace":
-				hostBase, err = GetWorkspaceRoot()
-				if err != nil || hostBase == "" {
-					hostBase, _ = os.Getwd()
-				}
-			case "input":
-				if inDir, ok := params["_input_dir"].(string); ok && inDir != "" {
-					hostBase = inDir
-				} else if inDir, ok := params["input_dir"].(string); ok && inDir != "" {
-					hostBase = inDir
-				} else {
-					hostBase = filepath.Join(runTempDir, "input")
-				}
-			case "output":
-				userHome, _ := os.UserHomeDir()
-				hostBase = filepath.Join(userHome, ".vraxter", "artifacts", "skills", manifest.ID)
-			case "skill_data":
-				userHome, _ := os.UserHomeDir()
-				hostBase = filepath.Join(userHome, ".vraxter", "skills", "data", manifest.ID)
-			case "ephemeral":
-				safeGuest := strings.ReplaceAll(mount.Guest, "/", "_")
-				hostBase = filepath.Join(runTempDir, "ephemeral"+safeGuest)
-			case "host":
-				if isAirgap {
-					return nil, fmt.Errorf("VRAXTER SHIELD: mount source 'host' is strictly forbidden in %s mode", isoMode)
-				}
-				if !allowHostMounts {
-					return nil, fmt.Errorf("VRAXTER SHIELD: mount source 'host' is disabled by default security policy")
-				}
-				hostBase = ResolveMountPath(mount.HostPath)
-			default:
-				return nil, fmt.Errorf("VRAXTER SHIELD: unknown mount source '%s'", mount.Source)
-			}
-
-			hostDir, err := containSubpath(hostBase, mount.Subpath)
-			if err != nil {
-				return nil, fmt.Errorf("VRAXTER SHIELD: %w", err)
-			}
-			if err := os.MkdirAll(hostDir, 0700); err != nil {
-				return nil, fmt.Errorf("failed to prepare mount directory: %w", err)
-			}
-
-			if strings.ToLower(mount.Mode) == "ro" {
-				fsConfig = fsConfig.WithReadOnlyDirMount(hostDir, mount.Guest)
-			} else {
-				fsConfig = fsConfig.WithDirMount(hostDir, mount.Guest)
-			}
-
-			activeMounts = append(activeMounts, activeMount{
-				guest: path.Clean(mount.Guest),
-				host:  hostDir,
-				mode:  mount.Mode,
-			})
-		}
-	} else {
-		// Fallback for legacy permission strings (blocked in airgap and by default)
-		for _, perm := range manifest.Permissions {
-			p := strings.TrimSpace(perm)
-			low := strings.ToLower(p)
-			isRead := strings.HasPrefix(low, "fs_read:") || strings.HasPrefix(low, "fs:read:") || strings.HasPrefix(low, "filesystem:read:")
-			isWrite := strings.HasPrefix(low, "fs_write:") || strings.HasPrefix(low, "fs:write:") || strings.HasPrefix(low, "filesystem:write:")
-			if isRead || isWrite {
-				if isAirgap || !allowHostMounts {
-					return nil, fmt.Errorf("VRAXTER SHIELD: legacy host filesystem permission '%s' is blocked by default / in airgap mode", p)
-				}
-				idx := strings.Index(p, ":")
-				if strings.HasPrefix(low, "fs:read:") || strings.HasPrefix(low, "filesystem:read:") || strings.HasPrefix(low, "fs:write:") || strings.HasPrefix(low, "filesystem:write:") {
-					idx = strings.LastIndex(p, ":")
-				}
-				dir := strings.TrimSpace(p[idx+1:])
-				resolvedDir := ResolveMountPath(dir)
-				if resolvedDir != "" {
-					if isRead {
-						fsConfig = fsConfig.WithReadOnlyDirMount(resolvedDir, resolvedDir)
-						activeMounts = append(activeMounts, activeMount{guest: resolvedDir, host: resolvedDir, mode: "ro"})
+				var hostBase string
+				switch strings.ToLower(mount.Source) {
+				case "workspace":
+					hostBase, err = GetWorkspaceRoot()
+					if err != nil || hostBase == "" {
+						hostBase, _ = os.Getwd()
+					}
+				case "input":
+					if inDir, ok := params["_input_dir"].(string); ok && inDir != "" {
+						hostBase = inDir
+					} else if inDir, ok := params["input_dir"].(string); ok && inDir != "" {
+						hostBase = inDir
 					} else {
-						fsConfig = fsConfig.WithDirMount(resolvedDir, resolvedDir)
-						activeMounts = append(activeMounts, activeMount{guest: resolvedDir, host: resolvedDir, mode: "rw"})
+						hostBase = filepath.Join(runTempDir, "input")
+					}
+				case "output":
+					if outDir, ok := params["_output_dir"].(string); ok && outDir != "" {
+						hostBase = outDir
+					} else {
+						userHome, _ := os.UserHomeDir()
+						hostBase = filepath.Join(userHome, ".vraxter", "artifacts", "skills", manifest.ID)
+					}
+				case "skill_data":
+					userHome, _ := os.UserHomeDir()
+					hostBase = filepath.Join(userHome, ".vraxter", "skills", "data", manifest.ID)
+				case "ephemeral":
+					safeGuest := strings.ReplaceAll(mount.Guest, "/", "_")
+					hostBase = filepath.Join(runTempDir, "ephemeral"+safeGuest)
+				case "host":
+					if isAirgap {
+						return nil, fmt.Errorf("VRAXTER SHIELD: mount source 'host' is strictly forbidden in %s mode", isoMode)
+					}
+					if !allowHostMounts {
+						return nil, fmt.Errorf("VRAXTER SHIELD: mount source 'host' is disabled by default security policy")
+					}
+					hostBase = ResolveMountPath(mount.HostPath)
+				default:
+					return nil, fmt.Errorf("VRAXTER SHIELD: unknown mount source '%s'", mount.Source)
+				}
+
+				hostDir, err := containSubpath(hostBase, mount.Subpath)
+				if err != nil {
+					return nil, fmt.Errorf("VRAXTER SHIELD: %w", err)
+				}
+				if err := os.MkdirAll(hostDir, 0700); err != nil {
+					return nil, fmt.Errorf("failed to prepare mount directory: %w", err)
+				}
+
+				qfs := newQuotaFS(hostDir, mount)
+				quotaMounts = append(quotaMounts, qfs)
+				if sfc, ok := fsConfig.(sysfs.FSConfig); ok {
+					fsConfig = sfc.WithSysFSMount(qfs, mount.Guest)
+				} else if strings.EqualFold(mount.Mode, "ro") {
+					fsConfig = fsConfig.WithReadOnlyDirMount(hostDir, mount.Guest)
+				} else {
+					fsConfig = fsConfig.WithDirMount(hostDir, mount.Guest)
+				}
+
+				activeMounts = append(activeMounts, activeMount{
+					guest: path.Clean(mount.Guest),
+					host:  hostDir,
+					mode:  mount.Mode,
+				})
+			}
+		} else {
+			// Fallback for legacy permission strings (blocked in airgap and by default)
+			for _, perm := range manifest.Permissions {
+				p := strings.TrimSpace(perm)
+				low := strings.ToLower(p)
+				isRead := strings.HasPrefix(low, "fs_read:") || strings.HasPrefix(low, "fs:read:") || strings.HasPrefix(low, "filesystem:read:")
+				isWrite := strings.HasPrefix(low, "fs_write:") || strings.HasPrefix(low, "fs:write:") || strings.HasPrefix(low, "filesystem:write:")
+				if isRead || isWrite {
+					if isAirgap || !allowHostMounts {
+						return nil, fmt.Errorf("VRAXTER SHIELD: legacy host filesystem permission '%s' is blocked by default / in airgap mode", p)
+					}
+					idx := strings.Index(p, ":")
+					if strings.HasPrefix(low, "fs:read:") || strings.HasPrefix(low, "filesystem:read:") || strings.HasPrefix(low, "fs:write:") || strings.HasPrefix(low, "filesystem:write:") {
+						idx = strings.LastIndex(p, ":")
+					}
+					dir := strings.TrimSpace(p[idx+1:])
+					resolvedDir := ResolveMountPath(dir)
+					if resolvedDir != "" {
+						mode := "rw"
+						if isRead {
+							mode = "ro"
+						}
+						qfs := newQuotaFS(resolvedDir, types.MountSpec{
+							Guest:       resolvedDir,
+							Source:      "host",
+							HostPath:    resolvedDir,
+							Mode:        mode,
+							AllowDelete: isWrite,
+						})
+						quotaMounts = append(quotaMounts, qfs)
+						if sfc, ok := fsConfig.(sysfs.FSConfig); ok {
+							fsConfig = sfc.WithSysFSMount(qfs, resolvedDir)
+						} else if isRead {
+							fsConfig = fsConfig.WithReadOnlyDirMount(resolvedDir, resolvedDir)
+						} else {
+							fsConfig = fsConfig.WithDirMount(resolvedDir, resolvedDir)
+						}
+						activeMounts = append(activeMounts, activeMount{guest: resolvedDir, host: resolvedDir, mode: mode})
 					}
 				}
 			}
 		}
-	}
 
-	// Validate io.output.path statically BEFORE instantiating
-	if manifest.ManifestV1 != nil && manifest.ManifestV1.IO != nil && strings.ToLower(manifest.ManifestV1.IO.Output.Via) == "file" {
-		if err := validateGuestPath(manifest.ManifestV1.IO.Output.Path); err != nil {
-			return nil, fmt.Errorf("VRAXTER SHIELD: invalid io.output.path: %w", err)
+		// Validate io.output.path statically BEFORE instantiating
+		if manifest.ManifestV1 != nil && manifest.ManifestV1.IO != nil && strings.ToLower(manifest.ManifestV1.IO.Output.Via) == "file" {
+			if err := validateGuestPath(manifest.ManifestV1.IO.Output.Path); err != nil {
+				return nil, fmt.Errorf("VRAXTER SHIELD: invalid io.output.path: %w", err)
+			}
 		}
 	}
 
-	// Fetch or compile WASM module indexed by SHA-256 (evicting stale modules on hash change)
-	cached, err := rn.getOrCompileModule(execCtx, manifest.Command, currentHash)
+	// Compute per-instance memory limit pages (clamped to Runner ceiling) and fetch/compile module.
+	memPages := rn.effectiveMemoryLimitPages(manifest)
+	cached, err := rn.getOrCompileModule(execCtx, manifest.Command, currentHash, memPages)
 	if err != nil {
 		return nil, err
 	}
 	defer rn.releaseModule(cached)
+
+	// Static WASM bytecode import verification (Zero Over-Privilege) BEFORE instantiation.
+	if err := VerifyCompiledModule(cached.compiled, manifest); err != nil {
+		return nil, err
+	}
 
 	stdout := newLimitedBuffer(MaxWASMOutputBytes)
 	stderr := newLimitedBuffer(MaxWASMOutputBytes)
@@ -761,7 +792,7 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 		WithEnv("PATH", "").
 		WithFSConfig(fsConfig)
 
-	if manifest.ManifestV1 != nil && manifest.ManifestV1.Capabilities != nil {
+	if !isDryRun && manifest.ManifestV1 != nil && manifest.ManifestV1.Capabilities != nil {
 		caps := manifest.ManifestV1.Capabilities
 		if caps.Clock != nil {
 			if caps.Clock.Wall {
@@ -781,8 +812,13 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 		}
 	}
 
-	mod, err := rn.runtime.InstantiateModule(execCtx, cached.compiled, config)
+	mod, err := cached.runtime.InstantiateModule(execCtx, cached.compiled, config)
 	if err != nil {
+		for _, qm := range quotaMounts {
+			if v := qm.Violation(); v != "" {
+				return nil, fmt.Errorf("VRAXTER SHIELD: filesystem policy violation on mount '%s': %s (guest err: %v)", qm.guestPath, v, err)
+			}
+		}
 		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
 			return nil, fmt.Errorf("wasm skill execution timed out")
 		}
@@ -792,10 +828,17 @@ func (rn *Runner) executeWasm(ctx context.Context, manifest types.SkillManifest,
 			stderr.String(),
 		)
 	}
-	defer mod.Close(execCtx)
+	_ = mod.Close(execCtx)
+
+	// Surface any quota/policy violation even if guest swallowed the WASI EPERM/EACCES error.
+	for _, qm := range quotaMounts {
+		if v := qm.Violation(); v != "" {
+			return nil, fmt.Errorf("VRAXTER SHIELD: filesystem policy violation on mount '%s': %s", qm.guestPath, v)
+		}
+	}
 
 	// Check if output is via file (confined strictly inside the matched mount using os.OpenRoot)
-	if manifest.ManifestV1 != nil && manifest.ManifestV1.IO != nil && strings.ToLower(manifest.ManifestV1.IO.Output.Via) == "file" {
+	if !isDryRun && manifest.ManifestV1 != nil && manifest.ManifestV1.IO != nil && strings.ToLower(manifest.ManifestV1.IO.Output.Via) == "file" {
 		outGuestPath := manifest.ManifestV1.IO.Output.Path
 		if err := validateGuestPath(outGuestPath); err != nil {
 			return nil, fmt.Errorf("VRAXTER SHIELD: invalid io.output.path: %w", err)

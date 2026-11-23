@@ -28,3 +28,10 @@ type ManifestAwareSkillCoder interface {
 type SkillRunner interface {
 	Execute(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}) (*types.ExecutionResult, error)
 }
+
+// DryRunSkillRunner is an optional extension implemented by Runner to validate freshly
+// compiled skills against their true manifest capabilities while isolating runtime FS/network.
+type DryRunSkillRunner interface {
+	SkillRunner
+	ExecuteDryRun(ctx context.Context, manifest types.SkillManifest) (*types.ExecutionResult, error)
+}
