@@ -327,8 +327,13 @@ type SystemEventMsgWrapper struct {
 }
 
 type InfoMsg struct {
-	ModelID string
-	Status  string
+	ModelID        string
+	Status         string
+	IsolationMode  string
+	PrivacyPolicy  string
+	IsAirgapLocked bool
+	WhitelistedIPs []string
+	HasConfig      bool
 }
 
 type BlockType int
@@ -444,7 +449,9 @@ type Model struct {
 
 	// Isolation & Airgap Shield
 	IsolationMode  string
+	PrivacyPolicy  string
 	IsAirgapLocked bool
+	WhitelistedIPs []string
 }
 
 func NewModel(ctx context.Context, gClient *client.GRPCClient, store *db.Store, crypto *security.CryptoService, session, initialQuery string, userName string) *Model {
@@ -502,7 +509,9 @@ func NewModel(ctx context.Context, gClient *client.GRPCClient, store *db.Store, 
 		UserName:             strings.ToUpper(userName),
 		ActiveCardHistoryIdx: -1,
 		IsolationMode:        cfg.IsolationMode,
+		PrivacyPolicy:        cfg.PrivacyPolicy,
 		IsAirgapLocked:       cfg.IsAirgapLocked,
+		WhitelistedIPs:       append([]string(nil), cfg.WhitelistedIPs...),
 	}
 
 	// Pre-load specialists for autocomplete
@@ -621,7 +630,48 @@ func (m *Model) fetchInfo() tea.Cmd {
 		if err != nil {
 			return InfoMsg{ModelID: "Offline", Status: "ERR"}
 		}
-		return InfoMsg{ModelID: info["model_id"], Status: info["status"]}
+		res := InfoMsg{ModelID: info["model_id"], Status: info["status"]}
+		if cfgResp, cfgErr := m.grpcClient.GetConfig(m.ctx); cfgErr == nil && cfgResp != nil {
+			res.IsolationMode = cfgResp.IsolationMode
+			res.PrivacyPolicy = cfgResp.PrivacyPolicy
+			res.IsAirgapLocked = cfgResp.IsAirgapLocked
+			res.WhitelistedIPs = append([]string(nil), cfgResp.WhitelistedIps...)
+			res.HasConfig = true
+		}
+		return res
+	}
+}
+
+func (m *Model) effectiveIsolationMode() string {
+	mode := strings.ToLower(strings.TrimSpace(m.IsolationMode))
+	if mode == "" {
+		return "airgap"
+	}
+	return mode
+}
+
+func (m *Model) effectivePrivacyPolicy() string {
+	if strings.TrimSpace(m.PrivacyPolicy) != "" {
+		return m.PrivacyPolicy
+	}
+	if m.effectiveIsolationMode() == "airgap" {
+		return "strict_local"
+	}
+	return "custom"
+}
+
+func (m *Model) newScopedProviderManager(repo *db.ProviderRepository) *services.ProviderManager {
+	return services.NewProviderManager(repo, m.effectivePrivacyPolicy(), m.WhitelistedIPs, m.effectiveIsolationMode())
+}
+
+func (m *Model) jobCompletedTelemetry() (string, string) {
+	switch m.effectiveIsolationMode() {
+	case "hybrid":
+		return "Background job completed (hybrid egress permitted).", "HYBRID MODE"
+	case "local_lan":
+		return "Execution finished within local LAN perimeter.", "LOCAL_LAN VERIFIED"
+	default:
+		return "Execution finished with zero perimeter egress.", "STRICT_LOCAL VERIFIED"
 	}
 }
 
@@ -745,15 +795,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case SetupFinishedMsg:
-		// Persist the results
-		repo := db.NewUserRepository(m.appStore)
-		user, err := repo.GetDefaultUser(context.Background())
-		if err == nil {
-			user.Name = msg.Result.Name
-			user.Expertise = msg.Result.Expertise
-			user.Interests = msg.Result.Interests
-			user.Bio = msg.Result.Bio
-			_ = repo.UpdateUser(context.Background(), user)
+		// Persist the results (creating the default user profile if none exists yet)
+		if m.appStore != nil {
+			repo := db.NewUserRepository(m.appStore)
+			ctx := context.Background()
+			user, err := repo.GetDefaultUser(ctx)
+			if err == nil {
+				if user == nil {
+					user = &db.UserProfile{
+						ID:              uuid.New().String(),
+						Name:            msg.Result.Name,
+						Language:        "en",
+						ThemePreference: "system",
+						Expertise:       msg.Result.Expertise,
+						Interests:       msg.Result.Interests,
+						Bio:             msg.Result.Bio,
+					}
+					_ = repo.CreateUser(ctx, user)
+				} else {
+					user.Name = msg.Result.Name
+					user.Expertise = msg.Result.Expertise
+					user.Interests = msg.Result.Interests
+					user.Bio = msg.Result.Bio
+					_ = repo.UpdateUser(ctx, user)
+				}
+			}
+		}
+		if name := strings.TrimSpace(msg.Result.Name); name != "" {
+			m.UserName = name
 		}
 		m.ActiveSetup = nil
 		m.appendHistory(BlockComponent, m.renderExecutionBanner("confirmed", "OPERATOR PROFILE SAVED", "Workstation preferences & operator identity persisted to vault.", "SAVED", m.width))
@@ -775,6 +844,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 0. Immediate priority: Help Toggle
 		if msg.String() == "?" && m.Input.Value() == "" {
 			m.ShowHelp = !m.ShowHelp
+			return m, nil
+		}
+		if m.ShowHelp && msg.String() == "esc" {
+			m.ShowHelp = false
 			return m, nil
 		}
 
@@ -1222,6 +1295,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case InfoMsg:
 		m.BaseModelID = m.resolveModelDisplayName(msg.ModelID)
+		if msg.HasConfig {
+			if msg.IsolationMode != "" {
+				m.IsolationMode = msg.IsolationMode
+			}
+			if msg.PrivacyPolicy != "" {
+				m.PrivacyPolicy = msg.PrivacyPolicy
+			}
+			m.IsAirgapLocked = msg.IsAirgapLocked
+			m.WhitelistedIPs = append([]string(nil), msg.WhitelistedIPs...)
+		}
 		m.refreshModelBanner()
 
 	case HistoryResultMsg:
@@ -1286,7 +1369,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if isPlanner {
 				m.IsPlanning = false
 			}
-			notif := m.renderNotification("✓", msg.Event.Title+":", "Execution finished with zero perimeter egress.", "STRICT_LOCAL VERIFIED")
+			bodyText, badgeText := m.jobCompletedTelemetry()
+			notif := m.renderNotification("✓", msg.Event.Title+":", bodyText, badgeText)
 			if isPlanner && m.ActiveCardHistoryIdx >= 0 && m.ActiveCardHistoryIdx < len(m.History) {
 				m.insertHistoryAt(m.ActiveCardHistoryIdx, BlockComponent, notif)
 				m.ActiveCardHistoryIdx++
@@ -1752,12 +1836,13 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		m.appendHistory(BlockComponent, m.renderCmdBlock(cmd, strings.TrimRight(sb.String(), "\n")))
 		return nil
 	case "/airgap", "/isolation":
+		mode := m.effectiveIsolationMode()
 		lockStatus := "IMMUTABLE (Enforced via --airgap / VRAXTER_AIRGAP)"
 		if !m.IsAirgapLocked {
 			lockStatus = "DYNAMIC (Process Settings)"
 		}
-		modeStr := strings.ToUpper(m.IsolationMode)
-		if modeStr == "" {
+		modeStr := strings.ToUpper(mode)
+		if strings.TrimSpace(m.IsolationMode) == "" {
 			modeStr = "AIRGAP (DEFAULT)"
 		}
 
@@ -1770,16 +1855,43 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		lblStyle := lipgloss.NewStyle().Foreground(colorAsh)
 		valStyle := lipgloss.NewStyle().Foreground(colorIvory).Bold(true)
 		emStyle := lipgloss.NewStyle().Foreground(colorLedEmerald).Bold(true)
+		warnStyle := lipgloss.NewStyle().Foreground(colorLedAmber).Bold(true)
+		errStyle := lipgloss.NewStyle().Foreground(colorLedCrimson).Bold(true)
+
+		var modeStyled, ifaceText, dnsText, dialerText, cloudText string
+		switch mode {
+		case "hybrid":
+			modeStyled = warnStyle.Render(modeStr)
+			ifaceText = valStyle.Render("Loopback, Private LAN & Public WAN (IMDS 169.254.0.0/16 Blocked)")
+			dnsText = warnStyle.Render("System DNS Enabled (External WAN Queries Permitted)")
+			dialerText = warnStyle.Render("AirgapDialer (Hybrid Mode — WAN Egress Permitted)")
+			cloudText = warnStyle.Render("ENABLED")
+		case "local_lan":
+			modeStyled = lipgloss.NewStyle().Foreground(colorSapphireBright).Bold(true).Render(modeStr)
+			ifaceText = valStyle.Render("Loopback & Private LAN (RFC1918 Only; IMDS Blocked)")
+			dnsText = emStyle.Render("Local .local/.lan Only (External WAN Domains Blocked)")
+			dialerText = emStyle.Render("AirgapDialer (LAN-Only syscall.EPERM)")
+			cloudText = errStyle.Render("DEACTIVATED")
+		default: // "airgap"
+			modeStyled = emStyle.Render(modeStr)
+			ifaceText = valStyle.Render("Loopback & Local Private RFC1918 (IMDS 169.254.0.0/16 Blocked)")
+			dnsText = emStyle.Render("0 External WAN Queries (In-Memory Rejection Active)")
+			dialerText = emStyle.Render("AirgapDialer (Zero-Egress syscall.EPERM)")
+			cloudText = errStyle.Render("DEACTIVATED")
+		}
 
 		var sb strings.Builder
 		sb.WriteString(hdrStyle.Render("🛡️ VRAXTER PERIMETER DEFENSE TELEMETRY") + "\n")
 		sb.WriteString(lipgloss.NewStyle().Foreground(colorCopperLine).Render(strings.Repeat("─", cardWidth-4)) + "\n")
-		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("ACTIVE MODE:"), emStyle.Render(modeStr)))
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("ACTIVE MODE:"), modeStyled))
 		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("LOCK STATUS:"), valStyle.Render(lockStatus)))
-		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("PERMITTED INTERFACES:"), valStyle.Render("Loopback (127.0.0.1, ::1) only")))
-		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("DNS RESOLVER:"), emStyle.Render("0 External Queries (In-Memory Rejection Active)")))
-		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("SOCKET DIALER:"), emStyle.Render("AirgapDialer (Zero-Egress syscall.EPERM)")))
-		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("CLOUD PROVIDERS:"), lipgloss.NewStyle().Foreground(colorLedCrimson).Bold(true).Render("DEACTIVATED")))
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("PERMITTED INTERFACES:"), ifaceText))
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("DNS RESOLVER:"), dnsText))
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("SOCKET DIALER:"), dialerText))
+		sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("CLOUD PROVIDERS:"), cloudText))
+		if len(m.WhitelistedIPs) > 0 {
+			sb.WriteString(fmt.Sprintf("%-24s %s\n", lblStyle.Render("WHITELISTED CIDRS/IPS:"), valStyle.Render(strings.Join(m.WhitelistedIPs, ", "))))
+		}
 
 		m.appendHistory(BlockComponent, m.renderCmdBlock(cmd, strings.TrimRight(sb.String(), "\n")))
 		return nil
@@ -1886,7 +1998,16 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 
 			// We send a direct tool call payload to the server.
 			// The server's ProcessRawIntent will see the [VRAX_TOOL] prefix and route it to DispatchToolPayload.
-			payload := fmt.Sprintf(`[VRAX_TOOL] {"skill_id": "vraxter-coder", "params": {"name": "%s", "description": "%s", "spec": "%s", "prompt_run": true}}`, name, desc, desc)
+			callPayload, _ := json.Marshal(types.ToolCall{
+				SkillID: "vraxter-coder",
+				Params: map[string]interface{}{
+					"name":        name,
+					"description": desc,
+					"spec":        desc,
+					"prompt_run":  true,
+				},
+			})
+			payload := "[VRAX_TOOL] " + string(callPayload)
 			return m.fireExecution(payload)
 		}
 
@@ -1985,10 +2106,13 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		m.IsStreaming = true
 		m.restoreInputStyles()
 
+		if skillID == "vraxter-host-exec" {
+			return tea.Batch(m.fireExecution("!APPROVE_HOST_CMD "+m.PendingSkillPayload), m.Spinner.Tick)
+		}
 		return tea.Batch(m.fireExecution("!APPROVE_SKILL "+m.PendingSkillPayload), m.Spinner.Tick)
 	case "/quit", "/exit":
-		m.appendHistory(BlockComponent, m.renderExecutionBanner("started", "TERMINAL EXIT", "Press Ctrl+C to close the Vraxter workstation.", "STANDBY", m.width))
-		return nil
+		m.appendHistory(BlockComponent, m.renderExecutionBanner("started", "TERMINAL EXIT", "Closing Vraxter workstation...", "EXIT", m.width))
+		return tea.Quit
 	case "/factory-reset":
 		if len(parts) < 2 || parts[1] != "--confirm" {
 			m.appendHistory(BlockComponent, m.renderExecutionBanner("failed", "FACTORY RESET WARNING", "This will wipe all models, providers, specialists, and keys.\nAn automatic backup will be created in ~/.config/vraxter.backup-<timestamp>.\nType '/factory-reset --confirm' to proceed.", "ACTION REQUIRED", m.width))
@@ -2021,7 +2145,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 
 		pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
 		mRepo := db.NewModelRepository(m.appStore, m.appCrypto)
-		pMgr := services.NewProviderManager(pRepo, "ask", nil)
+		pMgr := m.newScopedProviderManager(pRepo)
 		mMgr := services.NewModelManager(mRepo, pRepo)
 
 		m.History = []HistoryBlock{}
@@ -2037,7 +2161,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 	case "/start":
 		pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
 		mRepo := db.NewModelRepository(m.appStore, m.appCrypto)
-		pMgr := services.NewProviderManager(pRepo, "ask", nil)
+		pMgr := m.newScopedProviderManager(pRepo)
 		mMgr := services.NewModelManager(mRepo, pRepo)
 		m.ActiveSetup = NewStartupWizard(pMgr, mMgr)
 		return nil
@@ -2048,14 +2172,14 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		}
 		if cmd == "/providers setup" && len(parts) == 2 && parts[1] == "setup" {
 			repo := db.NewProviderRepository(m.appStore, m.appCrypto)
-			mgr := services.NewProviderManager(repo, "ask", nil)
+			mgr := m.newScopedProviderManager(repo)
 			m.ActiveSetup = NewProviderWizard(mgr)
 			return nil
 		}
 		if cmd == "/models setup" && len(parts) == 2 && parts[1] == "setup" {
 			pRepo := db.NewProviderRepository(m.appStore, m.appCrypto)
 			mRepo := db.NewModelRepository(m.appStore, m.appCrypto)
-			pMgr := services.NewProviderManager(pRepo, "ask", nil)
+			pMgr := m.newScopedProviderManager(pRepo)
 			mMgr := services.NewModelManager(mRepo, pRepo)
 			m.ActiveSetup = NewModelWizard(pMgr, mMgr)
 			return nil
@@ -2072,7 +2196,7 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 			pID := parts[1]
 			return func() tea.Msg {
 				repo := db.NewProviderRepository(m.appStore, m.appCrypto)
-				mgr := services.NewProviderManager(repo, "ask", nil)
+				mgr := m.newScopedProviderManager(repo)
 				models, err := mgr.DiscoverModels(m.ctx, pID)
 				if err != nil {
 					return cmdOutputMsg{input: cmd, output: fmt.Sprintf("❌ Discovery failed: %v", err)}
@@ -3369,10 +3493,29 @@ func (m *Model) View() tea.View {
 	m.Viewport.SetWidth(panelWidth)
 	m.Viewport.SetHeight(chatHeight)
 
-	chatArea := lipgloss.NewStyle().
-		Padding(0, 1).
-		Height(chatHeight).
-		Render(m.Viewport.View())
+	var chatArea string
+	if m.ShowHelp {
+		helpHeader := lipgloss.NewStyle().Foreground(colorCopperSpecular).Bold(true).Render("◈ VRAXTER COMMAND & SHORTCUT REFERENCE") +
+			"  " + lipgloss.NewStyle().Foreground(colorAsh).Render("Press ? or ESC to close")
+		helpLines := strings.Split(helpHeader+"\n\n"+m.renderHelpContent(), "\n")
+		maxInner := chatHeight - 4
+		if maxInner < 1 {
+			maxInner = 1
+		}
+		if len(helpLines) > maxInner {
+			helpLines = helpLines[:maxInner]
+		}
+		helpBox := renderSolidBox(strings.Join(helpLines, "\n"), panelWidth, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper)
+		chatArea = lipgloss.NewStyle().
+			Padding(0, 1).
+			Height(chatHeight).
+			Render(helpBox)
+	} else {
+		chatArea = lipgloss.NewStyle().
+			Padding(0, 1).
+			Height(chatHeight).
+			Render(m.Viewport.View())
+	}
 
 	var sections []string
 	sections = append(sections, header, chatArea)

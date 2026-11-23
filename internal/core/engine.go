@@ -116,3 +116,29 @@ func (e *Engine) UnregisterSkill(id string) {
 		e.orch.ExecEngine.Registry.Unregister(id)
 	}
 }
+
+// SetHostExecGuard installs the configured Zero-Trust HostExecGuard into the engine.
+func (e *Engine) SetHostExecGuard(guard *security.HostExecGuard) {
+	if e != nil && e.orch != nil && e.orch.ExecEngine != nil {
+		e.orch.ExecEngine.HostExecGuard = guard
+	}
+}
+
+// UpdateNetworkPolicy synchronizes isolation mode and IP whitelist across engine components.
+func (e *Engine) UpdateNetworkPolicy(isolationMode string, whitelistedIPs []string) {
+	if e == nil || e.orch == nil {
+		return
+	}
+	e.orch.mu.Lock()
+	e.orch.IsolationMode = isolationMode
+	e.orch.WhitelistedIPs = append([]string(nil), whitelistedIPs...)
+	e.orch.mu.Unlock()
+	if e.orch.ExecEngine != nil {
+		if e.orch.ExecEngine.HostExecGuard != nil {
+			e.orch.ExecEngine.HostExecGuard.UpdateNetworkPolicy(isolationMode, whitelistedIPs)
+		}
+		if e.orch.ExecEngine.Runner != nil {
+			e.orch.ExecEngine.Runner.SetNetworkPolicy(isolationMode, whitelistedIPs)
+		}
+	}
+}

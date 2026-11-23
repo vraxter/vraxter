@@ -12,15 +12,31 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/pkg/types"
 )
 
-type MockZigToolchain struct{}
-func (m *MockZigToolchain) GetZigPath() string       { return "echo" } // Mocks the exec.Command to just run echo
-func (m *MockZigToolchain) IsReady(lang string) bool { return true }
+type MockZigToolchain struct {
+	zigBin string
+}
+
+func newMockZigToolchain(t *testing.T) *MockZigToolchain {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		stub := filepath.Join(t.TempDir(), "mock-zig.bat")
+		if err := os.WriteFile(stub, []byte("@echo off\r\nexit /b 0\r\n"), 0700); err != nil {
+			t.Fatalf("failed to create mock zig stub: %v", err)
+		}
+		return &MockZigToolchain{zigBin: stub}
+	}
+	return &MockZigToolchain{zigBin: "echo"}
+}
+
+func (m *MockZigToolchain) GetZigPath() string         { return m.zigBin }
+func (m *MockZigToolchain) IsReady(lang string) bool   { return true }
 func (m *MockZigToolchain) SetupSDK(lang string) error { return nil }
 
 type MockSkillRunner struct {
@@ -54,7 +70,7 @@ func TestZigCoder_Compile_Success(t *testing.T) {
 
 	coder := &ZigCoder{
 		Repo:      repo,
-		TM:        &MockZigToolchain{},
+		TM:        newMockZigToolchain(t),
 		Runner:    &MockSkillRunner{DryRunFail: false},
 		SkillsDir: tempDir,
 	}
@@ -90,7 +106,7 @@ func TestZigCoder_Compile_DryRunFail(t *testing.T) {
 
 	coder := &ZigCoder{
 		Repo:      repo,
-		TM:        &MockZigToolchain{},
+		TM:        newMockZigToolchain(t),
 		Runner:    &MockSkillRunner{DryRunFail: true}, // Simulate a crash
 		SkillsDir: tempDir,
 	}

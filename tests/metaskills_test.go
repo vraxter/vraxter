@@ -17,10 +17,17 @@ import (
 	"github.com/vraxter/vraxter/internal/skills"
 )
 
+func bindTestWorkspace(t *testing.T, dir string) {
+	t.Helper()
+	skills.SetWorkspaceRoot(dir)
+	t.Cleanup(func() { skills.SetWorkspaceRoot("") })
+}
+
 // ─── ReadFile ─────────────────────────────────────────────────────────────────
 
 func TestReadFile_Success(t *testing.T) {
 	dir := t.TempDir()
+	bindTestWorkspace(t, dir)
 	path := filepath.Join(dir, "hello.txt")
 	os.WriteFile(path, []byte("Hello, Vraxter!"), 0644)
 
@@ -34,6 +41,7 @@ func TestReadFile_Success(t *testing.T) {
 }
 
 func TestReadFile_FileNotFound(t *testing.T) {
+	bindTestWorkspace(t, t.TempDir())
 	result := skills.ReadFile("/nonexistent/path/file.go")
 	if !strings.HasPrefix(result, "vraxter-read-file ERROR") {
 		t.Errorf("expected error prefix, got: %q", result)
@@ -42,6 +50,7 @@ func TestReadFile_FileNotFound(t *testing.T) {
 
 func TestReadFile_LargeFileTruncated(t *testing.T) {
 	dir := t.TempDir()
+	bindTestWorkspace(t, dir)
 	path := filepath.Join(dir, "large.bin")
 
 	// Write 65kb of data (above 64000 byte limit)
@@ -61,6 +70,7 @@ func TestReadFile_LargeFileTruncated(t *testing.T) {
 
 func TestListDir_Success(t *testing.T) {
 	dir := t.TempDir()
+	bindTestWorkspace(t, dir)
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0644)
 	os.Mkdir(filepath.Join(dir, "internal"), 0755)
 
@@ -91,6 +101,7 @@ func TestListDir_EmptyPath_UsesCurrentDir(t *testing.T) {
 }
 
 func TestListDir_NonExistentPath(t *testing.T) {
+	bindTestWorkspace(t, t.TempDir())
 	result := skills.ListDir("/nonexistent/path/here")
 	if !strings.HasPrefix(result, "vraxter-list-dir ERROR") {
 		t.Errorf("expected error prefix for nonexistent dir, got: %q", result)
@@ -101,6 +112,7 @@ func TestListDir_NonExistentPath(t *testing.T) {
 
 func TestPatchCode_Success(t *testing.T) {
 	dir := t.TempDir()
+	bindTestWorkspace(t, dir)
 	path := filepath.Join(dir, "code.go")
 	os.WriteFile(path, []byte("func hello() {\n\treturn \"world\"\n}\n"), 0644)
 
@@ -120,6 +132,7 @@ func TestPatchCode_Success(t *testing.T) {
 }
 
 func TestPatchCode_FileNotFound(t *testing.T) {
+	bindTestWorkspace(t, t.TempDir())
 	result := skills.PatchCode("/nonexistent/file.go", "old", "new")
 	if !strings.Contains(result, "ERROR reading file") {
 		t.Errorf("expected file read error, got: %q", result)
@@ -128,6 +141,7 @@ func TestPatchCode_FileNotFound(t *testing.T) {
 
 func TestPatchCode_SearchNotFound(t *testing.T) {
 	dir := t.TempDir()
+	bindTestWorkspace(t, dir)
 	path := filepath.Join(dir, "code.go")
 	os.WriteFile(path, []byte("func hello() {}\n"), 0644)
 
@@ -139,6 +153,7 @@ func TestPatchCode_SearchNotFound(t *testing.T) {
 
 func TestPatchCode_OnlyReplacesFirstOccurrence(t *testing.T) {
 	dir := t.TempDir()
+	bindTestWorkspace(t, dir)
 	path := filepath.Join(dir, "code.go")
 	original := "x := 1\ny := x\nz := x\n"
 	os.WriteFile(path, []byte(original), 0644)

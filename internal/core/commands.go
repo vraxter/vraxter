@@ -11,12 +11,14 @@ package core
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/security"
 	"github.com/vraxter/vraxter/internal/skills"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 	"github.com/vraxter/vraxter/pkg/types"
@@ -41,6 +43,7 @@ var BuiltInCommands = map[string]InternalToolHandler{
 	"vraxter-see":               handleCmdSee,
 	"vraxter-hear":              handleCmdHear,
 	"vraxter-talk":              handleCmdTalk,
+	"vraxter-host-exec":         handleCmdHostExec,
 }
 
 func handleCmdCreateSpecialist(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
@@ -402,11 +405,61 @@ func handleCmdTalk(ctx context.Context, call types.ToolCall, codePayload, conver
 	payloadJSON := fmt.Sprintf(`{"action":"playback","target_zone":"%s","audio_base64":"%s"}`, targetZone, b64Audio)
 	
 	// Push over the stream as a special Status event so the UI/Client can catch it and handle playback
-	out <- llm.StreamEvent{
+	e.emitEvent(ctx, out, llm.StreamEvent{
 		Type:    llm.EventTypeStatus,
 		Content: fmt.Sprintf("[AUDIO_PLAYBACK_EVENT]%s", payloadJSON),
-	}
+	})
 
 	e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n🔊 Synthesized speech routed to zone '%s'\n", targetZone)})
 	return fmt.Sprintf("SUCCESS: Synthesized speech routed to zone '%s'.", targetZone)
+}
+
+// handleCmdHostExec handles any LLM/specialist-originated request to run a host command.
+// Per Zero-Trust policy, LLM-suggested host commands ALWAYS require explicit HITL approval
+// (even for read_only commands) and never execute autonomously.
+func handleCmdHostExec(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
+	if e.HostExecGuard == nil {
+		errMsg := fmt.Sprintf("\n❌ Host command denied: %v", security.ErrHostExecDisabled)
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+		return fmt.Sprintf("SYSTEM ERROR: Host command denied: %v", security.ErrHostExecDisabled)
+	}
+
+	cmdName, _ := call.Params["command"].(string)
+	var cmdArgs []string
+	if rawArgs, ok := call.Params["args"].([]interface{}); ok {
+		for _, a := range rawArgs {
+			if s, ok := a.(string); ok {
+				cmdArgs = append(cmdArgs, s)
+			}
+		}
+	} else if strArgs, ok := call.Params["args"].([]string); ok {
+		cmdArgs = append(cmdArgs, strArgs...)
+	}
+
+	// originatedFromLLM = true guarantees RequiresApproval == true for ALL commands (read_only & elevated)
+	plan, err := e.HostExecGuard.Prepare(cmdName, cmdArgs, true)
+	if err != nil {
+		errMsg := fmt.Sprintf("\n❌ Host command denied: %v", err)
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+		return fmt.Sprintf("SYSTEM ERROR: Host command denied: %v", err)
+	}
+
+	approvalPayload, _ := json.Marshal(map[string]interface{}{
+		"skill_id": "vraxter-host-exec",
+		"params": map[string]interface{}{
+			"command":  plan.Command,
+			"args":     plan.Args,
+			"path":     plan.ResolvedPath,
+			"sha256":   plan.ExpectedSHA256,
+			"tier":     string(plan.Tier),
+			"from_llm": true,
+		},
+	})
+
+	e.emitEvent(ctx, out, llm.StreamEvent{
+		Type:    llm.EventTypeSkillApprovalRequest,
+		Content: string(approvalPayload),
+		SkillID: "vraxter-host-exec",
+	})
+	return "!YIELD_FOR_APPROVAL"
 }

@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -140,8 +142,51 @@ type LimitsSpec struct {
 	MaxRuntimeMS int `json:"max_runtime_ms,omitempty"` // In milliseconds
 }
 
-// Validate checks the structural validity of the manifest against the V1 specification.
+// ManifestValidationOptions controls optional policy relaxations during manifest validation.
+type ManifestValidationOptions struct {
+	AllowHostMounts bool
+}
+
+func hasTraversalOrNull(p string) bool {
+	if strings.ContainsRune(p, '\x00') || strings.ContainsRune(p, '\\') {
+		return true
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func validateSafeSubpath(sub string) error {
+	if strings.ContainsRune(sub, '\x00') {
+		return fmt.Errorf("subpath contains null byte")
+	}
+	if filepath.IsAbs(sub) || strings.HasPrefix(sub, "/") || strings.HasPrefix(sub, "\\") {
+		return fmt.Errorf("subpath '%s' must be relative", sub)
+	}
+	normalized := strings.ReplaceAll(sub, "\\", "/")
+	for _, seg := range strings.Split(normalized, "/") {
+		if seg == ".." {
+			return fmt.Errorf("subpath '%s' must not contain path traversal ('..')", sub)
+		}
+	}
+	cleaned := path.Clean(normalized)
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
+		return fmt.Errorf("subpath '%s' escapes mount root", sub)
+	}
+	return nil
+}
+
+// Validate checks the structural and security validity of the manifest against the V1 specification.
+// By default, arbitrary "host" mounts are rejected.
 func (m *SkillManifestV1) Validate() error {
+	return m.ValidateWithOptions(ManifestValidationOptions{AllowHostMounts: false})
+}
+
+// ValidateWithOptions checks the manifest against V1 rules with explicit policy options.
+func (m *SkillManifestV1) ValidateWithOptions(opts ManifestValidationOptions) error {
 	if m.ManifestVersion != ManifestVersionV1 {
 		return fmt.Errorf("invalid manifest_version: expected '%s', got '%s'", ManifestVersionV1, m.ManifestVersion)
 	}
@@ -172,6 +217,9 @@ func (m *SkillManifestV1) Validate() error {
 
 	if strings.TrimSpace(m.Module.File) == "" {
 		return fmt.Errorf("module.file is required")
+	}
+	if hasTraversalOrNull(m.Module.File) {
+		return fmt.Errorf("invalid module.file '%s': path traversal is not allowed", m.Module.File)
 	}
 
 	if m.Module.SHA256 != "" && !validSHA256Regex.MatchString(m.Module.SHA256) {
@@ -224,6 +272,9 @@ func (m *SkillManifestV1) Validate() error {
 				if !strings.HasPrefix(m.IO.Output.Path, "/") {
 					return fmt.Errorf("io.output.path must be an absolute guest path starting with '/', got '%s'", m.IO.Output.Path)
 				}
+				if hasTraversalOrNull(m.IO.Output.Path) {
+					return fmt.Errorf("io.output.path '%s' must not contain path traversal ('..') or invalid characters", m.IO.Output.Path)
+				}
 			}
 		}
 	}
@@ -233,13 +284,25 @@ func (m *SkillManifestV1) Validate() error {
 			if !strings.HasPrefix(mount.Guest, "/") {
 				return fmt.Errorf("capabilities.fs.mounts[%d].guest must be an absolute path starting with '/', got '%s'", i, mount.Guest)
 			}
+			if hasTraversalOrNull(mount.Guest) {
+				return fmt.Errorf("capabilities.fs.mounts[%d].guest '%s' must not contain path traversal ('..')", i, mount.Guest)
+			}
+			if mount.Subpath != "" {
+				if err := validateSafeSubpath(mount.Subpath); err != nil {
+					return fmt.Errorf("capabilities.fs.mounts[%d].subpath invalid: %w", i, err)
+				}
+			}
 			switch mount.Source {
-			case "workspace", "input", "output", "skill_data", "ephemeral", "host":
+			case "workspace", "input", "output", "skill_data", "ephemeral":
+			case "host":
+				if !opts.AllowHostMounts {
+					return fmt.Errorf("capabilities.fs.mounts[%d].source 'host' is blocked by default security policy", i)
+				}
+				if strings.TrimSpace(mount.HostPath) == "" {
+					return fmt.Errorf("capabilities.fs.mounts[%d].host_path is required when source is 'host'", i)
+				}
 			default:
 				return fmt.Errorf("capabilities.fs.mounts[%d].source '%s' is invalid", i, mount.Source)
-			}
-			if mount.Source == "host" && strings.TrimSpace(mount.HostPath) == "" {
-				return fmt.Errorf("capabilities.fs.mounts[%d].host_path is required when source is 'host'", i)
 			}
 			switch mount.Mode {
 			case "ro", "rw":
@@ -271,7 +334,7 @@ func (m *SkillManifestV1) ToLegacyManifest() SkillManifest {
 		Command:     m.Module.File,
 		Checksum:    m.Module.SHA256,
 		Engine:      "wasm",
-		Tier:        Tier2CommunityVerified,
+		Tier:        Tier3Unverified,
 		ManifestV1:  m,
 	}
 

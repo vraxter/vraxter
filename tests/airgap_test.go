@@ -91,10 +91,11 @@ func TestAirgap_AntiDowngradeLockout(t *testing.T) {
 	}
 
 	h := server.NewAgentHandler(nil, nil, nil, nil, appCfg)
+	authCtx := server.WithScopes(context.Background(), "config:write")
 
 	// Attempting to downgrade isolation_mode when locked must fail with PermissionDenied
 	hybridMode := "hybrid"
-	_, err := h.UpdateConfig(context.Background(), &v1.UpdateConfigRequest{
+	_, err := h.UpdateConfig(authCtx, &v1.UpdateConfigRequest{
 		IsolationMode: &hybridMode,
 	})
 	if err == nil {
@@ -102,13 +103,13 @@ func TestAirgap_AntiDowngradeLockout(t *testing.T) {
 	}
 
 	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.PermissionDenied {
-		t.Fatalf("expected PermissionDenied gRPC code, got: %v (code: %v)", err, st.Code())
+	if !ok || st.Code() != codes.PermissionDenied || !strings.Contains(st.Message(), "airgap") {
+		t.Fatalf("expected PermissionDenied airgap lockout error, got: %v (code: %v)", err, st.Code())
 	}
 
 	// Attempting to downgrade privacy_policy when locked must fail with PermissionDenied
 	customPrivacy := "custom"
-	_, err = h.UpdateConfig(context.Background(), &v1.UpdateConfigRequest{
+	_, err = h.UpdateConfig(authCtx, &v1.UpdateConfigRequest{
 		PrivacyPolicy: &customPrivacy,
 	})
 	if err == nil {
@@ -116,8 +117,8 @@ func TestAirgap_AntiDowngradeLockout(t *testing.T) {
 	}
 
 	st, ok = status.FromError(err)
-	if !ok || st.Code() != codes.PermissionDenied {
-		t.Fatalf("expected PermissionDenied gRPC code, got: %v (code: %v)", err, st.Code())
+	if !ok || st.Code() != codes.PermissionDenied || !strings.Contains(st.Message(), "airgap") {
+		t.Fatalf("expected PermissionDenied airgap lockout error, got: %v (code: %v)", err, st.Code())
 	}
 }
 
@@ -130,10 +131,11 @@ func TestAirgap_RuntimeDowngradePrevention(t *testing.T) {
 	}
 
 	h := server.NewAgentHandler(nil, nil, nil, nil, appCfg)
+	authCtx := server.WithScopes(context.Background(), "config:write")
 
 	// Runtime downgrade from active airgap to hybrid requires daemon restart
 	hybridMode := "hybrid"
-	_, err := h.UpdateConfig(context.Background(), &v1.UpdateConfigRequest{
+	_, err := h.UpdateConfig(authCtx, &v1.UpdateConfigRequest{
 		IsolationMode: &hybridMode,
 	})
 	if err == nil {
@@ -141,8 +143,8 @@ func TestAirgap_RuntimeDowngradePrevention(t *testing.T) {
 	}
 
 	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.PermissionDenied {
-		t.Fatalf("expected PermissionDenied gRPC code for runtime downgrade, got: %v", err)
+	if !ok || st.Code() != codes.PermissionDenied || !strings.Contains(st.Message(), "downgrade") {
+		t.Fatalf("expected PermissionDenied runtime downgrade error, got: %v", err)
 	}
 }
 

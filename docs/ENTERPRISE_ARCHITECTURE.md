@@ -68,34 +68,37 @@ By defining the implementation in `vraxter config`, executives can tightly contr
 
 ---
 
+> [!NOTE]
+> **Implementation Maturity Disclosure**: Core runtime controls — gRPC `:50051` daemon with unary+streaming token scopes, Wazero WASM sandbox (`Tier3Unverified` fail-closed default, 50 MB binary / 2 MB IO caps, `os.OpenRoot` confinement), `HostExecGuard` (`$` disabled by default, SHA-256 binary allowlist), deterministic air-gap/IMDS/CIDR network shield, DDIL HTTP timeouts, SQLite `synchronous=FULL` + `VACUUM INTO`, and HITL Decision Bridge — are implemented in the repository today. The HTTP `:8080` Connect RPC endpoint (currently `EnvService` skeleton), remote Skill Hub distribution, Google Home API device discovery, and build-tag world hooks (`internal/features/*`) are experimental/roadmap stubs. Encryption at rest currently covers `providers.api_key` via AES-256-GCM; full DB encryption (SQLCipher) and Ed25519 skill signatures are scheduled for the next hardening phase.
+
 ## 4. Security Architecture & Risk Mitigation (Vraxter Shield)
 
 Adopting autonomous AI introduces significant risks. **Vraxter Shield** is the comprehensive security layer designed to mitigate them.
 
 ### Risk 1: Malicious Tool Execution (Prompt Injection)
 **The Risk:** An LLM tricked by a prompt injection could attempt to run destructive commands (e.g., `rm -rf /`).
-**Vraxter's Mitigation:** Vraxter does not give LLMs raw shell access. All actions go through the **WASM Sandbox**. Tools must be cryptographically signed, and their capabilities (Network, Filesystem) are strictly limited by an RBAC (Role-Based Access Control) engine.
+**Vraxter's Mitigation:** Vraxter never gives LLMs raw shell access. All skills execute inside the **Wazero WASM Sandbox** (`Tier3Unverified` by default, `source: "host"` mounts disabled by default and forbidden in `airgap`). Optional local host command execution (`$`) is disabled by default (`--enable-host-exec`), requires `host:exec` scope, enforces an absolute-path + `SHA-256` binary allowlist (`host_commands.json`), blocks shells/metacharacters, and mandates HITL approval for any `elevated` or LLM-originated command.
 
-### Risk 2: Supply Chain Attacks via Skill Hub
-**The Risk:** Downloading a compromised Skill from the community could infect the workstation.
-**Vraxter's Mitigation:** Vraxter calculates a **SHA-256 Checksum** for every `.wasm` binary upon installation. The `vraxter skills inspect` command cryptographically verifies the active binary against the original database hash, immediately flagging any tampering or corruption.
+### Risk 2: Supply Chain Attacks via Skill Packages
+**The Risk:** Loading a tampered or corrupted `.wasm` skill could compromise the workstation.
+**Vraxter's Mitigation:** Vraxter calculates and enforces a **SHA-256 Checksum** for every `.wasm` binary on installation and before every execution, caps `.wasm` files at 50 MB, and indexes its compiled module cache by SHA-256. The `vraxter skills inspect` command verifies the active binary against the recorded database hash. *(Asymmetric Ed25519 manifest signatures are scheduled for the next hardening phase.)*
 
 ### Risk 3: Lateral Privilege Escalation
 **The Risk:** A compromised application on the same network or host machine sends malicious gRPC requests to the Vraxter daemon to steal API keys or execute commands.
-**Vraxter's Mitigation:** Vraxter IPC (Inter-Process Communication) is secured by an auto-generated, 256-bit encryption key (`daemon.key`). All gRPC requests must pass a constant-time authentication middleware. Without the key, the daemon drops the connection immediately.
+**Vraxter's Mitigation:** Vraxter IPC is secured by an auto-generated 256-bit master key (`daemon.key`, `0600`) and granular scoped API tokens validated across both unary and streaming RPCs via constant-time authentication middleware.
 
 ### Risk 4: Data Exfiltration via Cloud APIs
 **The Risk:** Sensitive proprietary code is accidentally sent to a public AI provider, breaching NDA or compliance (HIPAA/SOC2/GDPR).
 **Vraxter's Mitigation:** Vraxter Shield enforces deterministic zero-egress protection:
 - **Isolation Modes:** Operators configure `isolation_mode: "airgap"`, `local_lan`, or `hybrid`.
-- **In-Memory DNS Protection:** Intercepts hostname lookups inside the process, instantly dropping public WAN domain queries while allowing private LAN (`.local`, `.lan`) and loopback addresses.
-- **Transport-Level Socket Interceptor:** Low-level custom network dialer (`NewAirgapDialer`) inspects raw IP destinations before SYN packets hit the kernel, blocking non-private WAN addresses with `syscall.EPERM`. Private enterprise subnets (RFC 1918: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) remain fully accessible for connecting to dedicated on-prem Ollama/vLLM compute clusters.
+- **In-Memory DNS & IMDS Protection:** Intercepts hostname lookups inside the process, dropping public WAN domain queries and blocking cloud metadata endpoints (`169.254.0.0/16`, `fe80::/10`) by default while allowing private LAN (`.local`, `.lan`), loopback, and explicit CIDR whitelists.
+- **Transport-Level Socket Interceptor & DDIL Timeouts:** Low-level custom network dialer (`NewAirgapDialer`) inspects raw IP destinations before SYN packets hit the kernel, blocking non-private WAN addresses with `syscall.EPERM`, while enforcing strict DDIL connection/TLS/header timeouts across all HTTP clients.
 - **Anti-Downgrade Runtime Lockout:** Launching with `vraxter --airgap` or setting `VRAXTER_AIRGAP=1` permanently locks the session in air-gap mode. Any attempts by prompt injections or unauthorized users to relax isolation to `hybrid` are rejected with `AIRGAP_LOCKED`.
-- **Hermetic Toolchains:** Skills and dependencies execute with `GOPROXY=off` and `GOSUMDB=off`, preventing covert exfiltration via module proxies.
+- **Hermetic Toolchains:** Skills compile inside randomized `0700` temp directories with `GOPROXY=off` and `GOSUMDB=off`, preventing covert exfiltration via module proxies.
 
 ### Risk 5: Credentials at Rest
-**The Risk:** API keys for AWS, OpenAI, or internal databases are stored in plaintext config files.
-**Vraxter's Mitigation:** All sensitive provider data is encrypted at rest using **AES-256-GCM** inside the SQLite persistence layer. The master encryption key is stored securely with restricted `0600` POSIX permissions.
+**The Risk:** API keys for cloud providers or internal LLM endpoints are stored in plaintext config files.
+**Vraxter's Mitigation:** Provider API keys (`providers.api_key`) are encrypted at rest using **AES-256-GCM** inside the SQLite persistence layer (which operates with WAL, `synchronous=FULL`, and `VACUUM INTO` backups). The master encryption key, daemon key, logs, and skill artifacts are stored with restricted `0600` permissions. *(Full-database encryption via SQLCipher is planned for the next hardening phase.)*
 
 ### Risk 6: Unintended Destructive Actions
 **The Risk:** An autonomous agent hallucinates or maliciously decides to execute a destructive command (e.g., `rm -rf`, or dropping a database).

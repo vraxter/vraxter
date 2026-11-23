@@ -10,6 +10,7 @@ package tests
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,15 +47,19 @@ func TestDispatchToolPayload_ReadFile_Success(t *testing.T) {
 	convID := "test-conv-exec"
 	chatRepo.CreateConversation(&types.Conversation{ID: convID, Title: "exec test"})
 
-	// Create a temp file to read
+	// Create a temp file to read inside confined workspace
 	dir := t.TempDir()
+	bindTestWorkspace(t, dir)
 	path := filepath.Join(dir, "hello.txt")
 	os.WriteFile(path, []byte("Vraxter Engine Test"), 0644)
 
 	out := make(chan llm.StreamEvent, 8)
-	toolJSON := `{"skill_id":"vraxter-read-file","path":"` + path + `"}`
+	payloadBytes, _ := json.Marshal(map[string]interface{}{
+		"skill_id": "vraxter-read-file",
+		"params":   map[string]interface{}{"path": path},
+	})
 
-	result := engine.DispatchToolPayload(context.Background(), out, toolJSON, "", convID)
+	result := engine.DispatchToolPayload(context.Background(), out, string(payloadBytes), "", convID)
 	close(out)
 
 	if !strings.Contains(result, "Vraxter Engine Test") {
@@ -69,12 +74,16 @@ func TestDispatchToolPayload_ListDir(t *testing.T) {
 	chatRepo.CreateConversation(&types.Conversation{ID: convID, Title: "listdir"})
 
 	dir := t.TempDir()
+	bindTestWorkspace(t, dir)
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0644)
 
 	out := make(chan llm.StreamEvent, 8)
-	toolJSON := `{"skill_id":"vraxter-list-dir","path":"` + dir + `"}`
+	payloadBytes, _ := json.Marshal(map[string]interface{}{
+		"skill_id": "vraxter-list-dir",
+		"params":   map[string]interface{}{"path": dir},
+	})
 
-	result := engine.DispatchToolPayload(context.Background(), out, toolJSON, "", convID)
+	result := engine.DispatchToolPayload(context.Background(), out, string(payloadBytes), "", convID)
 	close(out)
 
 	if !strings.Contains(result, "main.go") {
@@ -89,13 +98,21 @@ func TestDispatchToolPayload_PatchCode(t *testing.T) {
 	chatRepo.CreateConversation(&types.Conversation{ID: convID, Title: "patch"})
 
 	dir := t.TempDir()
+	bindTestWorkspace(t, dir)
 	path := filepath.Join(dir, "code.go")
 	os.WriteFile(path, []byte("func hello() { return \"world\" }"), 0644)
 
 	out := make(chan llm.StreamEvent, 8)
-	toolJSON := `{"skill_id":"vraxter-patch-code","path":"` + path + `","search":"\"world\"","replace":"\"Vraxter\""}`
+	payloadBytes, _ := json.Marshal(map[string]interface{}{
+		"skill_id": "vraxter-patch-code",
+		"params": map[string]interface{}{
+			"path":    path,
+			"search":  `"world"`,
+			"replace": `"Vraxter"`,
+		},
+	})
 
-	result := engine.DispatchToolPayload(context.Background(), out, toolJSON, "", convID)
+	result := engine.DispatchToolPayload(context.Background(), out, string(payloadBytes), "", convID)
 	close(out)
 
 	if !strings.Contains(result, "SUCCESS") {

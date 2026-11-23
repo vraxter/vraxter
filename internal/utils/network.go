@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Vraxter. All rights reserved.
-// 
+//
 // This file is part of Vraxter.
 // Vraxter is free software licensed under the GNU Affero General Public License (AGPL) v3.0.
 // See the LICENSE file in the project root for full license information.
@@ -15,8 +15,23 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+)
+
+const (
+	// DDIL network timing constants to prevent hung sockets on denied/intermittent links.
+	DDILDialTimeout           = 10 * time.Second
+	DDILKeepAlive             = 30 * time.Second
+	DDILTLSHandshakeTimeout   = 10 * time.Second
+	DDILResponseHeaderTimeout = 30 * time.Second
+	DDILIdleConnTimeout       = 90 * time.Second
+)
+
+var (
+	activeDialerMu sync.RWMutex
+	activeDialer   func(ctx context.Context, network, addr string) (net.Conn, error)
 )
 
 // IsPublicIP checks if a given IP address routes to the public internet.
@@ -31,12 +46,39 @@ func IsPublicIP(ip net.IP) bool {
 	return true
 }
 
+// IsLinkLocalIP reports whether ip falls in link-local ranges (e.g. 169.254.0.0/16 IMDS or fe80::/10).
+func IsLinkLocalIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
 // IsLoopbackIP checks if an IP is a local loopback address.
 func IsLoopbackIP(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
 	return ip.IsLoopback()
+}
+
+// isWhitelistedHostOrIP evaluates exact hostname/IP matches AND real CIDR subnet matches (net.ParseCIDR).
+func isWhitelistedHostOrIP(host string, parsedIP net.IP, whitelist []string) bool {
+	for _, w := range whitelist {
+		wClean := strings.TrimSpace(w)
+		if wClean == "" {
+			continue
+		}
+		if strings.EqualFold(host, wClean) {
+			return true
+		}
+		if parsedIP != nil {
+			if _, cidrNet, err := net.ParseCIDR(wClean); err == nil && cidrNet.Contains(parsedIP) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ParseAndLookup extracts the host from a URL and resolves it to a list of IP addresses.
@@ -75,9 +117,10 @@ func ParseAndLookup(urlStr string) ([]net.IP, string, error) {
 }
 
 // IsAllowedHost validates whether a destination host is permitted under the given isolation mode.
-// In "airgap" mode:
-// - External hostnames are blocked in-memory with ZERO DNS queries emitted.
-// - Only loopback (127.0.0.1, ::1, localhost) and explicitly whitelisted IPs are allowed.
+//   - "airgap" / "strict_local" / "local_lan": blocks public IPs, external WAN FQDNs (with zero DNS),
+//     and link-local/IMDS (169.254.0.0/16, fe80::/10) unless explicitly whitelisted (exact or CIDR).
+//   - "hybrid": permits public IPs and WAN hostnames while still blocking link-local/IMDS by default
+//     unless explicitly whitelisted.
 func IsAllowedHost(rawHost string, mode string, whitelist []string) (bool, error) {
 	host := strings.TrimSpace(rawHost)
 	if host == "" {
@@ -87,13 +130,14 @@ func IsAllowedHost(rawHost string, mode string, whitelist []string) (bool, error
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
+	// Strip IPv6 brackets if passed bare like "[::1]"
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
 
-	// Fast path: Whitelist check
-	for _, w := range whitelist {
-		wClean := strings.TrimSpace(w)
-		if strings.EqualFold(host, wClean) {
-			return true, nil
-		}
+	parsedIP := net.ParseIP(host)
+
+	// Fast path: Explicit whitelist check (exact host/IP or CIDR block)
+	if isWhitelistedHostOrIP(host, parsedIP, whitelist) {
+		return true, nil
 	}
 
 	// Localhost is always permitted
@@ -101,27 +145,36 @@ func IsAllowedHost(rawHost string, mode string, whitelist []string) (bool, error
 		return true, nil
 	}
 
+	normMode := strings.ToLower(strings.TrimSpace(mode))
+
 	// Check if host is an IP literal
-	if ip := net.ParseIP(host); ip != nil {
-		if IsPublicIP(ip) {
-			return false, fmt.Errorf("public IP %s is blocked under %s isolation perimeter (zero-egress to WAN)", ip.String(), mode)
+	if parsedIP != nil {
+		// Always block link-local / Cloud IMDS (169.254.0.0/16, fe80::/10) unless explicitly whitelisted above
+		if IsLinkLocalIP(parsedIP) {
+			return false, fmt.Errorf("link-local / IMDS IP %s is blocked under %s perimeter", parsedIP.String(), normMode)
 		}
 
-		switch mode {
+		switch normMode {
 		case "airgap", "strict_local", "local_lan":
-			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+			if IsPublicIP(parsedIP) {
+				return false, fmt.Errorf("public IP %s is blocked under %s isolation perimeter (zero-egress to WAN)", parsedIP.String(), normMode)
+			}
+			if parsedIP.IsLoopback() || parsedIP.IsPrivate() {
 				return true, nil
 			}
-			return false, fmt.Errorf("IP %s blocked in %s mode", ip.String(), mode)
-		default: // "hybrid" or other
+			return false, fmt.Errorf("IP %s blocked in %s mode", parsedIP.String(), normMode)
+		default: // "hybrid" or unrestricted: public, private, and loopback literal IPs are permitted
+			if parsedIP.IsUnspecified() {
+				return false, fmt.Errorf("unspecified IP %s is blocked", parsedIP.String())
+			}
 			return true, nil
 		}
 	}
 
 	// Host is a non-IP hostname / FQDN
-	switch mode {
+	switch normMode {
 	case "airgap", "strict_local", "local_lan":
-		// Allow .local, .lan, or internal hostnames (single-label without dots, e.g. "ollama-server")
+		// Allow .local, .lan, or internal single-label hostnames only if they resolve solely to allowed private/loopback IPs
 		lower := strings.ToLower(host)
 		if strings.HasSuffix(lower, ".local") || strings.HasSuffix(lower, ".lan") || !strings.Contains(host, ".") {
 			ips, err := net.LookupIP(host)
@@ -129,25 +182,36 @@ func IsAllowedHost(rawHost string, mode string, whitelist []string) (bool, error
 				return false, fmt.Errorf("local resolution failed for '%s': %w", host, err)
 			}
 			for _, ip := range ips {
+				if isWhitelistedHostOrIP(ip.String(), ip, whitelist) {
+					continue
+				}
+				if IsLinkLocalIP(ip) {
+					return false, fmt.Errorf("host '%s' resolved to link-local / IMDS IP %s (blocked in %s)", host, ip.String(), normMode)
+				}
 				if IsPublicIP(ip) {
-					return false, fmt.Errorf("host '%s' resolved to public IP %s (blocked in %s)", host, ip.String(), mode)
+					return false, fmt.Errorf("host '%s' resolved to public IP %s (blocked in %s)", host, ip.String(), normMode)
 				}
 			}
 			return len(ips) > 0, nil
 		}
 		// DETERMINISTIC ZERO-EGRESS: Never emit DNS queries for external WAN domains!
-		return false, fmt.Errorf("DNS resolution blocked: %s perimeter forbids external domain '%s' (zero-egress to WAN)", mode, host)
+		return false, fmt.Errorf("DNS resolution blocked: %s perimeter forbids external domain '%s' (zero-egress to WAN)", normMode, host)
 	default: // "hybrid"
 		ips, err := net.LookupIP(host)
 		if err != nil {
 			return false, fmt.Errorf("DNS resolution failed for '%s': %w", host, err)
+		}
+		for _, ip := range ips {
+			if IsLinkLocalIP(ip) && !isWhitelistedHostOrIP(ip.String(), ip, whitelist) {
+				return false, fmt.Errorf("host '%s' resolved to link-local / IMDS IP %s (blocked)", host, ip.String())
+			}
 		}
 		return len(ips) > 0, nil
 	}
 }
 
 // IsAllowedNetworkWithMode parses a URL and verifies whether the target host is permitted
-// under the specified isolation mode without leaking DNS queries in airgap mode.
+// under the specified isolation mode without leaking DNS queries in restricted modes.
 func IsAllowedNetworkWithMode(urlStr string, mode string, whitelist []string) (bool, error) {
 	u, err := url.Parse(urlStr)
 	if err != nil {
@@ -159,10 +223,9 @@ func IsAllowedNetworkWithMode(urlStr string, mode string, whitelist []string) (b
 		host = urlStr
 	}
 
-	for _, w := range whitelist {
-		if strings.EqualFold(host, w) || strings.EqualFold(urlStr, w) {
-			return true, nil
-		}
+	parsedIP := net.ParseIP(host)
+	if isWhitelistedHostOrIP(host, parsedIP, whitelist) || isWhitelistedHostOrIP(urlStr, nil, whitelist) {
+		return true, nil
 	}
 
 	return IsAllowedHost(host, mode, whitelist)
@@ -174,15 +237,22 @@ func IsAllowedNetwork(urlStr string, whitelist []string) (bool, error) {
 }
 
 // NewAirgapDialer constructs a net.DialContext function that enforces zero-egress perimeter
-// rules at the socket level. Disallowed dials fail immediately with syscall.EPERM.
+// rules at the socket level with strict DDIL connect/keepalive timeouts.
+// Disallowed dials fail immediately with syscall.EPERM.
 func NewAirgapDialer(mode string, whitelist []string) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := &net.Dialer{
+		Timeout:   DDILDialTimeout,
+		KeepAlive: DDILKeepAlive,
+	}
+	wlCopy := append([]string(nil), whitelist...)
+
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
 			host = addr
 		}
 
-		allowed, err := IsAllowedHost(host, mode, whitelist)
+		allowed, err := IsAllowedHost(host, mode, wlCopy)
 		if !allowed || err != nil {
 			return nil, &net.OpError{
 				Op:     "dial",
@@ -193,25 +263,66 @@ func NewAirgapDialer(mode string, whitelist []string) func(ctx context.Context, 
 			}
 		}
 
-		var d net.Dialer
 		return d.DialContext(ctx, network, addr)
 	}
 }
 
-// NewAirgapTransport returns an http.Transport configured with the zero-egress AirgapDialer.
+// NewAirgapTransport returns an http.Transport configured with the AirgapDialer and strict DDIL timeouts.
 func NewAirgapTransport(mode string, whitelist []string) *http.Transport {
 	return &http.Transport{
 		DialContext:           NewAirgapDialer(mode, whitelist),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
+		IdleConnTimeout:       DDILIdleConnTimeout,
+		TLSHandshakeTimeout:   DDILTLSHandshakeTimeout,
+		ResponseHeaderTimeout: DDILResponseHeaderTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 }
 
-// InstallAirgapPerimeter replaces http.DefaultTransport with the AirgapTransport,
-// enforcing zero-egress across all standard HTTP client connections in Vraxter.
+// InstallAirgapPerimeter replaces http.DefaultTransport with the AirgapTransport and registers
+// the active dialer for all DDIL HTTP clients across Vraxter.
 func InstallAirgapPerimeter(mode string, whitelist []string) {
-	http.DefaultTransport = NewAirgapTransport(mode, whitelist)
+	dialer := NewAirgapDialer(mode, whitelist)
+	activeDialerMu.Lock()
+	activeDialer = dialer
+	activeDialerMu.Unlock()
+
+	http.DefaultTransport = &http.Transport{
+		DialContext:           dialer,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       DDILIdleConnTimeout,
+		TLSHandshakeTimeout:   DDILTLSHandshakeTimeout,
+		ResponseHeaderTimeout: DDILResponseHeaderTimeout,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
+// NewDDILHTTPClient returns an *http.Client hardened for intermittent/denied (DDIL) links:
+// strict connect (10s), TLS handshake (10s), response header (30s), and idle connection (90s)
+// timeouts, while honoring the active AirgapPerimeter dialer whenever installed.
+func NewDDILHTTPClient() *http.Client {
+	fallbackDialer := &net.Dialer{
+		Timeout:   DDILDialTimeout,
+		KeepAlive: DDILKeepAlive,
+	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			activeDialerMu.RLock()
+			d := activeDialer
+			activeDialerMu.RUnlock()
+			if d != nil {
+				return d(ctx, network, addr)
+			}
+			return fallbackDialer.DialContext(ctx, network, addr)
+		},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       DDILIdleConnTimeout,
+		TLSHandshakeTimeout:   DDILTLSHandshakeTimeout,
+		ResponseHeaderTimeout: DDILResponseHeaderTimeout,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	return &http.Client{Transport: transport}
 }

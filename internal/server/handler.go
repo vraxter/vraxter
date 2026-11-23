@@ -11,7 +11,8 @@ package server
 import (
 	"context"
 	"fmt"
-	"os"
+	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/vraxter/vraxter/api/v1"
@@ -19,6 +20,7 @@ import (
 	"github.com/vraxter/vraxter/internal/core"
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/pkg/types"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -29,6 +31,9 @@ type AgentHandler struct {
 	modelManager    *services.ModelManager
 	skillService    *services.SkillService
 	config          *config.Config
+	cfgMu           sync.RWMutex
+	shutdownCh      chan<- struct{}
+	shutdownOnce    sync.Once
 }
 
 func NewAgentHandler(engine *core.Engine, pm *services.ProviderManager, mm *services.ModelManager, sm *services.SkillService, cfg *config.Config) *AgentHandler {
@@ -41,21 +46,58 @@ func NewAgentHandler(engine *core.Engine, pm *services.ProviderManager, mm *serv
 	}
 }
 
+// SetShutdownChannel registers the daemon's graceful shutdown notification channel.
+func (h *AgentHandler) SetShutdownChannel(ch chan<- struct{}) {
+	h.cfgMu.Lock()
+	defer h.cfgMu.Unlock()
+	h.shutdownCh = ch
+}
+
+func (h *AgentHandler) triggerGracefulShutdown() {
+	h.shutdownOnce.Do(func() {
+		h.cfgMu.RLock()
+		ch := h.shutdownCh
+		h.cfgMu.RUnlock()
+		if ch != nil {
+			go func() {
+				time.Sleep(150 * time.Millisecond) // Allow final gRPC frame to flush cleanly
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
+			}()
+		}
+	})
+}
+
 // Execute handles the gRPC stream for a natural language intent
 func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_ExecuteServer) error {
+	ctx := stream.Context()
+
 	if req.Query == "SYSTEM_SHUTDOWN" {
-		fmt.Println("🛑 Received Remote Shutdown Signal. Exiting...")
-		go func() {
-			time.Sleep(500 * time.Millisecond) // Give time for response to finalize
-			os.Exit(0)
-		}()
-		return stream.Send(&v1.ExecuteResponse{
+		if err := EnforceScope(ctx, "*"); err != nil {
+			return err
+		}
+		fmt.Println("🛑 Received Remote Shutdown Signal. Initiating graceful shutdown...")
+		err := stream.Send(&v1.ExecuteResponse{
 			Type:    v1.ExecuteResponse_DONE,
-			Content: "Vraxter Daemon is shutting down...",
+			Content: "Vraxter Daemon is shutting down gracefully...",
 		})
+		h.triggerGracefulShutdown()
+		return err
 	}
 
-	ctx := stream.Context()
+	if err := EnforceScope(ctx, "chat:write"); err != nil {
+		return err
+	}
+
+	trimmedQuery := strings.TrimSpace(req.Query)
+	if strings.HasPrefix(trimmedQuery, types.CommandExecutionPrefix) || strings.HasPrefix(trimmedQuery, "!APPROVE_HOST_CMD") {
+		if err := EnforceScope(ctx, "host:exec"); err != nil {
+			return err
+		}
+	}
+
 	specID := ""
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		if ids := md.Get("specialist-id"); len(ids) > 0 {
@@ -90,9 +132,12 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 		switch event.Type {
 		case llm.EventTypeToken:
 			resp.Type = v1.ExecuteResponse_TOKEN
-		case llm.EventTypeSkillCall:
+		case llm.EventTypeSkillCall, llm.EventTypeCommandCall:
 			resp.Type = v1.ExecuteResponse_TOOL_CALL
 			resp.SkillId = event.Content
+		case llm.EventTypeSkillApprovalRequest:
+			resp.Type = v1.ExecuteResponse_SKILL_APPROVAL_REQUEST
+			resp.SkillId = event.SkillID
 		case llm.EventTypeError:
 			resp.Type = v1.ExecuteResponse_ERROR
 			if event.Err != nil {
@@ -119,6 +164,9 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 
 // SubscribeEvents provides a persistent, one-way event stream for background jobs
 func (h *AgentHandler) SubscribeEvents(req *v1.SubscribeEventsRequest, stream v1.AgentService_SubscribeEventsServer) error {
+	if err := EnforceAnyScope(stream.Context(), "chat:read", "chat:write", "system:read"); err != nil {
+		return err
+	}
 	clientID := req.ClientId
 	if clientID == "" {
 		clientID = fmt.Sprintf("client-%d", time.Now().UnixNano())
@@ -162,6 +210,9 @@ func (h *AgentHandler) SubscribeEvents(req *v1.SubscribeEventsRequest, stream v1
 
 // GetActiveJobs returns all currently tracked background daemons
 func (h *AgentHandler) GetActiveJobs(ctx context.Context, req *v1.GetActiveJobsRequest) (*v1.GetActiveJobsResponse, error) {
+	if err := EnforceAnyScope(ctx, "chat:read", "chat:write", "system:read"); err != nil {
+		return nil, err
+	}
 	activeJobs := h.engine.JobManager().GetActiveJobs()
 	
 	var rpcJobs []*v1.JobStatus
@@ -178,6 +229,9 @@ func (h *AgentHandler) GetActiveJobs(ctx context.Context, req *v1.GetActiveJobsR
 }
 
 func (h *AgentHandler) GetInfo(ctx context.Context, req *v1.GetInfoRequest) (*v1.GetInfoResponse, error) {
+	if err := EnforceAnyScope(ctx, "chat:read", "chat:write", "system:read"); err != nil {
+		return nil, err
+	}
 	modelID := h.engine.GetActiveModelID("")
 	return &v1.GetInfoResponse{
 		ModelId: modelID,
@@ -187,6 +241,9 @@ func (h *AgentHandler) GetInfo(ctx context.Context, req *v1.GetInfoRequest) (*v1
 }
 
 func (h *AgentHandler) ListHistory(ctx context.Context, req *v1.ListHistoryRequest) (*v1.ListHistoryResponse, error) {
+	if err := EnforceAnyScope(ctx, "chat:read", "chat:write"); err != nil {
+		return nil, err
+	}
 	limit := int(req.Limit)
 	if limit <= 0 {
 		limit = 20
@@ -211,6 +268,9 @@ func (h *AgentHandler) ListHistory(ctx context.Context, req *v1.ListHistoryReque
 }
 
 func (h *AgentHandler) GetConversation(ctx context.Context, req *v1.GetConversationRequest) (*v1.GetConversationResponse, error) {
+	if err := EnforceAnyScope(ctx, "chat:read", "chat:write"); err != nil {
+		return nil, err
+	}
 	msgs, err := h.engine.ChatRepo.GetFullConversation(req.ConversationId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get conversation: %w", err)
@@ -230,12 +290,18 @@ func (h *AgentHandler) GetConversation(ctx context.Context, req *v1.GetConversat
 // --- Management RPC Implementations ---
 
 func (h *AgentHandler) GetSupportedProviders(ctx context.Context, req *v1.GetSupportedProvidersRequest) (*v1.GetSupportedProvidersResponse, error) {
+	if err := EnforceAnyScope(ctx, "providers:read", "config:read"); err != nil {
+		return nil, err
+	}
 	return &v1.GetSupportedProvidersResponse{
 		Providers: llm.GetSupportedProviders(),
 	}, nil
 }
 
 func (h *AgentHandler) ConfigureProvider(ctx context.Context, req *v1.ConfigureProviderRequest) (*v1.ConfigureProviderResponse, error) {
+	if err := EnforceScope(ctx, "providers:write"); err != nil {
+		return nil, err
+	}
 	id, err := h.providerManager.AddProvider(ctx, req.Name, req.Type, req.ApiKey, req.BaseUrl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure provider: %w", err)
@@ -247,6 +313,9 @@ func (h *AgentHandler) ConfigureProvider(ctx context.Context, req *v1.ConfigureP
 }
 
 func (h *AgentHandler) ListProviders(ctx context.Context, req *v1.ListProvidersRequest) (*v1.ListProvidersResponse, error) {
+	if err := EnforceAnyScope(ctx, "providers:read", "config:read"); err != nil {
+		return nil, err
+	}
 	providers, err := h.providerManager.ListProviders()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list providers: %w", err)
@@ -266,6 +335,9 @@ func (h *AgentHandler) ListProviders(ctx context.Context, req *v1.ListProvidersR
 }
 
 func (h *AgentHandler) DiscoverModels(ctx context.Context, req *v1.DiscoverModelsRequest) (*v1.DiscoverModelsResponse, error) {
+	if err := EnforceAnyScope(ctx, "models:read", "providers:read"); err != nil {
+		return nil, err
+	}
 	models, err := h.providerManager.DiscoverModels(ctx, req.ProviderId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover models: %w", err)
@@ -279,6 +351,9 @@ func (h *AgentHandler) DiscoverModels(ctx context.Context, req *v1.DiscoverModel
 }
 
 func (h *AgentHandler) RegisterModel(ctx context.Context, req *v1.RegisterModelRequest) (*v1.RegisterModelResponse, error) {
+	if err := EnforceScope(ctx, "models:write"); err != nil {
+		return nil, err
+	}
 	id, err := h.modelManager.AddModel(ctx, req.ProviderId, req.ModelName, int(req.Priority), req.Alias)
 	if err != nil {
 		return nil, fmt.Errorf("failed to register model: %w", err)
@@ -287,6 +362,9 @@ func (h *AgentHandler) RegisterModel(ctx context.Context, req *v1.RegisterModelR
 }
 
 func (h *AgentHandler) ListModels(ctx context.Context, req *v1.ListModelsRequest) (*v1.ListModelsResponse, error) {
+	if err := EnforceAnyScope(ctx, "models:read", "chat:read", "chat:write"); err != nil {
+		return nil, err
+	}
 	models, err := h.modelManager.ListModels()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list models: %w", err)

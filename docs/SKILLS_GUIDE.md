@@ -152,15 +152,17 @@ func main() {
 }
 ```
 
-### Compiling to WASI
+### Compiling to WASI & Host HTTP Bindings
 
 ```bash
 # Using TinyGo:
 tinygo build -o textstats.wasm -target=wasi .
 
-# Or using standard Go (1.21+):
+# Or using standard Go (1.24+):
 GOOS=wasip1 GOARCH=wasm go build -o textstats.wasm .
 ```
+
+Go skills that call `HttpGet(url)` via the auto-injected SDK import the host function `"vrax_sandbox"."http_get"`, which enforces manifest `capabilities.network` rules (`allowed_schemes`, `allowed_hosts`), redirect re-validation, a 2 MB response cap, and the active `airgap`/`local_lan`/`hybrid` perimeter.
 
 ---
 
@@ -170,10 +172,10 @@ When a user requests a capability that Vraxter does not currently possess, the *
 
 1. **Requirement Analysis**: Infers inputs, outputs, and storage constraints.
 2. **Code Generation**: Generates Go, Rust, or Zig code with host bindings.
-3. **Manifest Synthesis**: Automatically authors an official `skill-manifest/1` JSON specification with least-privilege capabilities.
-4. **Hermetic Compilation**: Builds the binary using `GOPROXY=off` and `GOSUMDB=off`.
-5. **Dry-Run Validation Pipeline**: Instantiates Wazero and executes the binary against simulated inputs in an isolated test harness. If the skill crashes, leaks memory, or fails validation, the binary is immediately purged.
-6. **Persistence & Hashing**: Registers the verified skill and records its SHA-256 hash in the SQLite repository.
+3. **Manifest Synthesis**: Authors a `skill-manifest/1` JSON specification (`[VRAX_MANIFEST]`) whose capabilities, IO paths, routing metadata, and limits are preserved into `<id>.manifest.json` while enforcing `Tier3Unverified` (fail-closed) governance.
+4. **Hermetic Compilation**: Builds the binary inside a randomized `0700` temporary directory using `GOPROXY=off` and `GOSUMDB=off`.
+5. **Dry-Run Validation Pipeline**: Instantiates Wazero and executes the binary in a zero-capability sandbox against `_vraxter_dry_run`. If the skill crashes or fails validation, both binary and manifest are immediately purged.
+6. **Persistence & Hashing**: Enforces the 50 MB binary ceiling, records the SHA-256 hash in SQLite, and marks the skill `Tier3Unverified` (privileged capabilities require explicit operator trust via `vraxter skills trust <id>`).
 
 ---
 
@@ -181,10 +183,10 @@ When a user requests a capability that Vraxter does not currently possess, the *
 
 Vraxter also features native capabilities that hook directly into the Orchestrator without spawning a WASM sandbox:
 
-### Native IO Skills
-- **`vraxter-read-file`**: High-speed, sandboxed reading of local workspace files into context.
-- **`vraxter-list-dir`**: Recursive exploration of repository file trees.
-- **`vraxter-patch-code`**: Precision line-targeted patching of source files.
+### Native IO Skills (Workspace-Confined via `os.OpenRoot`)
+- **`vraxter-read-file`**: High-speed reading of workspace files confined strictly inside the workspace root.
+- **`vraxter-list-dir`**: Exploration of repository file trees confined to the workspace root.
+- **`vraxter-patch-code`**: Precision line-targeted patching of workspace source files confined via `os.OpenRoot`.
 
 ### Multimodal Senses
 - **`vraxter-see`**: Vision model integration for image analysis and UI critique.
@@ -194,6 +196,9 @@ Vraxter also features native capabilities that hook directly into the Orchestrat
 ---
 
 ## 5. Registering Skills Manually
+
+> [!NOTE]
+> **Offline First**: `vraxter skills inject` is the production pathway for loading local `.wasm` binaries and `skill-manifest/1` packages. Remote Skill Hub commands (`vraxter skills install` / `download`) are currently placeholder stubs. All injected skills default to `Tier3Unverified`; `source: "host"` mounts are blocked by default and forbidden in `airgap` mode.
 
 Skills can be ingested through the CLI using multiple flexible pathways:
 

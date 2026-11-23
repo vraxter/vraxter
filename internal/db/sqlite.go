@@ -11,7 +11,6 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -27,12 +26,12 @@ type Store struct {
 	Conn *sql.DB
 }
 
-// NewStore initializes the database connection and performance modes
+// NewStore initializes the database connection, durability PRAGMAs, WAL-safe VACUUM INTO backup, and schema.
 func NewStore(dbPath string) (*Store, error) {
-	// Secure-by-Design: Perform automated backup of the workspace memory database prior to opening
+	existedBefore := false
 	if dbPath != ":memory:" && dbPath != "" {
-		if _, err := os.Stat(dbPath); err == nil {
-			_ = autoBackup(dbPath)
+		if info, err := os.Stat(dbPath); err == nil && info.Size() > 0 {
+			existedBefore = true
 		}
 	}
 
@@ -41,34 +40,49 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("could not open db: %w", err)
 	}
 
+	// Pin to a single connection BEFORE applying connection-scoped PRAGMAs (foreign_keys, busy_timeout, synchronous)
+	// so every query inherits the exact durability and referential integrity configuration.
+	db.SetMaxOpenConns(1)
+
 	if err := db.Ping(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("could not ping db: %w", err)
 	}
 
-	// Performance (WAL Mode + Optimization Pragmas)
-	// Vital for Vraxter concurrent local performance
+	// Durability + Integrity + Performance PRAGMAs (WAL Mode + Synchronous FULL + FK enforcement)
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL;",
-		"PRAGMA synchronous=NORMAL;",
+		"PRAGMA synchronous=FULL;",
+		"PRAGMA foreign_keys=ON;",
+		"PRAGMA busy_timeout=5000;",
 		"PRAGMA cache_size=-32000;",
 		"PRAGMA temp_store=MEMORY;",
 		"PRAGMA mmap_size=134217728;",
 	}
 	for _, p := range pragmas {
 		if _, err := db.Exec(p); err != nil {
+			_ = db.Close()
 			return nil, fmt.Errorf("could not set pragma %s: %w", p, err)
 		}
 	}
 
-	// Restrict open connections to serialize writes at the Go level and prevent 'database is locked' errors.
-	// WAL mode will handle the underlying SQLite synchronization.
-	db.SetMaxOpenConns(1)
+	// Secure-by-Design: Perform transactionally consistent WAL-aware backup via VACUUM INTO
+	if existedBefore {
+		if err := autoBackup(db, dbPath); err != nil {
+			log.Printf("Warning: SQLite VACUUM INTO autoBackup failed: %v", err)
+		}
+	}
 
 	store := &Store{Conn: db}
 
 	// Bootstrap required tables
 	if err := store.initSchema(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to init db schema: %w", err)
+	}
+
+	if dbPath != ":memory:" && dbPath != "" {
+		_ = os.Chmod(dbPath, 0600)
 	}
 
 	return store, nil
@@ -217,7 +231,7 @@ func (s *Store) Close() error {
 	return s.Conn.Close()
 }
 
-func autoBackup(dbPath string) error {
+func autoBackup(conn *sql.DB, dbPath string) error {
 	backupsDir := filepath.Join(filepath.Dir(dbPath), "backups")
 	if err := os.MkdirAll(backupsDir, 0700); err != nil {
 		return err
@@ -232,19 +246,22 @@ func autoBackup(dbPath string) error {
 		return nil
 	}
 
-	src, err := os.Open(dbPath)
-	if err != nil {
+	// Use SQLite VACUUM INTO on a temp file to produce a WAL-consistent, compacted snapshot,
+	// then restrict permissions to 0600 and atomically move into place.
+	tmpPath := backupPath + ".tmp"
+	_ = os.Remove(tmpPath)
+
+	if _, err := conn.Exec("VACUUM INTO ?", tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("VACUUM INTO failed: %w", err)
+	}
+
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		_ = os.Remove(tmpPath)
 		return err
 	}
-	defer src.Close()
-
-	dst, err := os.OpenFile(backupPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-
-	if _, err = io.Copy(dst, src); err != nil {
+	if err := os.Rename(tmpPath, backupPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return err
 	}
 

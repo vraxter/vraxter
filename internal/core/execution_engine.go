@@ -13,13 +13,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/security"
 	"github.com/vraxter/vraxter/internal/services"
 	"github.com/vraxter/vraxter/internal/skills"
 	"github.com/vraxter/vraxter/internal/telemetry"
@@ -30,21 +30,22 @@ import (
 // ExecutionEngine is responsible for running skills (both LLM-directed and fast-path),
 // logging execution events, and emitting result events to the output channel.
 type ExecutionEngine struct {
-	Registry      *skills.Registry
-	Runner        *skills.Runner
-	Coder         *services.CoderService
-	ChatRepo      *db.ChatRepository
-	SpecRepo      *db.SpecialistRepository
-	JobManager    *JobManager
-	CodeGen       *CodeGenService
-	Verbose       bool
-	SwarmDelegate func(ctx context.Context, out chan<- llm.StreamEvent, specialistID string, task string, threadID string) string
-	ActivateModelDelegate func(sessionID, modelID string) error
-	RestoreModelDelegate  func(sessionID string)
-	ResolveSpecialistDelegate func(ctx context.Context, query string) (*types.Specialist, error)
+	Registry                     *skills.Registry
+	Runner                       *skills.Runner
+	Coder                        *services.CoderService
+	ChatRepo                     *db.ChatRepository
+	SpecRepo                     *db.SpecialistRepository
+	JobManager                   *JobManager
+	CodeGen                      *CodeGenService
+	HostExecGuard                *security.HostExecGuard
+	Verbose                      bool
+	SwarmDelegate                func(ctx context.Context, out chan<- llm.StreamEvent, specialistID string, task string, threadID string) string
+	ActivateModelDelegate        func(sessionID, modelID string) error
+	RestoreModelDelegate         func(sessionID string)
+	ResolveSpecialistDelegate    func(ctx context.Context, query string) (*types.Specialist, error)
 	GetActiveModelConfigDelegate func(sessionID string) (types.ModelConfig, error)
 	OnSpecialistChange           func()
-	RequireSkillApproval bool
+	RequireSkillApproval         bool
 }
 
 // NewExecutionEngine creates a new ExecutionEngine.
@@ -60,14 +61,15 @@ func NewExecutionEngine(
 	requireSkillApproval bool,
 ) *ExecutionEngine {
 	return &ExecutionEngine{
-		Registry: registry,
-		Runner:   runner,
-		Coder:    coder,
-		ChatRepo:   chatRepo,
-		SpecRepo:   specRepo,
-		JobManager: jobManager,
-		CodeGen:    codegen,
-		Verbose:  verbose,
+		Registry:             registry,
+		Runner:               runner,
+		Coder:                coder,
+		ChatRepo:             chatRepo,
+		SpecRepo:             specRepo,
+		JobManager:           jobManager,
+		CodeGen:              codegen,
+		HostExecGuard:        security.NewHostExecGuard(security.HostExecOptions{Enabled: false, IsolationMode: "airgap"}),
+		Verbose:              verbose,
 		RequireSkillApproval: requireSkillApproval,
 	}
 }
@@ -98,10 +100,10 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 		// We don't emit EventTypeSkillCall here because DispatchToolPayload will do it consistently
 		manifest, err := e.Registry.FindSkill(match.ID)
 		if err != nil {
-			out <- llm.StreamEvent{
+			e.emitEvent(ctx, out, llm.StreamEvent{
 				Type:    llm.EventTypeToken,
 				Content: fmt.Sprintf("\n❌ Skill not found: %s", match.ID),
-			}
+			})
 			return
 		}
 
@@ -112,7 +114,7 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 				"params":   match.Params,
 			})
 			if feedback := e.DispatchToolPayload(ctx, out, string(payloadJSON), "", conversationID); feedback != "" {
-				out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n" + feedback}
+				e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: "\n" + feedback})
 				return
 			}
 		}
@@ -132,29 +134,79 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 
 		result, err := e.Runner.Execute(ctx, *manifest, match.Params)
 		if err != nil {
-			out <- llm.StreamEvent{
+			e.emitEvent(ctx, out, llm.StreamEvent{
 				Type:    llm.EventTypeToken,
 				Content: fmt.Sprintf("\n❌ Skill execution failed: %v", err),
-			}
+			})
 			return
 		}
 
 		finalContent = fmt.Sprintf("\n[%s]: %s", match.ID, result.Output)
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent}
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent})
 	case types.IntentTypeCommand:
-		out <- llm.StreamEvent{Type: llm.EventTypeCommandCall, Content: match.ID}
-		cmd := exec.CommandContext(ctx, match.ID, match.Args...)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			out <- llm.StreamEvent{
+		if e.HostExecGuard == nil {
+			e.emitEvent(ctx, out, llm.StreamEvent{
 				Type:    llm.EventTypeToken,
-				Content: fmt.Sprintf("\n❌ Command execution failed: %v", err),
-			}
+				Content: fmt.Sprintf("\n❌ Host command denied: %v", security.ErrHostExecDisabled),
+			})
+			return
+		}
+		if rawPayload, ok := match.Params["_raw_payload"].(string); ok && security.ContainsShellMetacharacters(rawPayload) {
+			e.emitEvent(ctx, out, llm.StreamEvent{
+				Type:    llm.EventTypeToken,
+				Content: fmt.Sprintf("\n❌ Host command denied: %v", security.ErrInjectionDetected),
+			})
 			return
 		}
 
-		finalContent = fmt.Sprintf("\n[%s]: %s", match.ID, string(output))
-		out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent}
+		originatedFromLLM, _ := match.Params["_from_llm"].(bool)
+		hitlApproved, _ := match.Params["_hitl_approved"].(bool)
+
+		plan, err := e.HostExecGuard.Prepare(match.ID, match.Args, originatedFromLLM)
+		if err != nil {
+			e.emitEvent(ctx, out, llm.StreamEvent{
+				Type:    llm.EventTypeToken,
+				Content: fmt.Sprintf("\n❌ Host command denied: %v", err),
+			})
+			return
+		}
+
+		if plan.RequiresApproval && !hitlApproved {
+			approvalPayload, _ := json.Marshal(map[string]interface{}{
+				"skill_id": "vraxter-host-exec",
+				"params": map[string]interface{}{
+					"command":  plan.Command,
+					"args":     plan.Args,
+					"path":     plan.ResolvedPath,
+					"sha256":   plan.ExpectedSHA256,
+					"tier":     string(plan.Tier),
+					"from_llm": plan.OriginatedFromLLM,
+				},
+			})
+			e.emitEvent(ctx, out, llm.StreamEvent{
+				Type:    llm.EventTypeSkillApprovalRequest,
+				Content: string(approvalPayload),
+				SkillID: "vraxter-host-exec",
+			})
+			return
+		}
+
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeCommandCall, Content: plan.Command})
+		res, err := e.HostExecGuard.ExecutePrepared(ctx, plan)
+		if err != nil {
+			errOut := ""
+			if res != nil && res.CombinedOutput() != "" {
+				errOut = "\n" + res.CombinedOutput()
+			}
+			e.emitEvent(ctx, out, llm.StreamEvent{
+				Type:    llm.EventTypeToken,
+				Content: fmt.Sprintf("\n❌ Command execution failed: %v%s", err, errOut),
+			})
+			return
+		}
+
+		finalContent = fmt.Sprintf("\n[%s]: %s", plan.Command, res.CombinedOutput())
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent})
 	case types.IntentTypeSpecialist:
 		displayName := match.ID
 		spec, err := e.SpecRepo.GetSpecialist(match.ID)
@@ -163,10 +215,10 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 		}
 
 		// Notify TUI of specialist focus & delegation via SpecialistResult event (not chat token)
-		out <- llm.StreamEvent{
+		e.emitEvent(ctx, out, llm.StreamEvent{
 			Type:    llm.EventTypeSpecialistResult,
 			Content: fmt.Sprintf("%s|%s|", match.ID, displayName),
-		}
+		})
 
 		if e.SwarmDelegate != nil {
 			taskText, _ := match.Params["task"].(string)
@@ -174,14 +226,14 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 			
 			// ◈ SEMANTIC PROTOCOL: Sub-agent result is now STREAMED natively.
 			// We send a metadata-only event to ensure the TUI latches the ID, but we do NOT repeat the content.
-			out <- llm.StreamEvent{
+			e.emitEvent(ctx, out, llm.StreamEvent{
 				Type:    llm.EventTypeSpecialistResult, 
 				Content: fmt.Sprintf("%s|%s|", match.ID, displayName),
-			}
+			})
 			finalContent = swarmResult
 		} else {
 			finalContent = "\n❌ Error: SwarmDelegate not fully bound in engine."
-			out <- llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent}
+			e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent})
 		}
 	}
 
@@ -451,6 +503,17 @@ func (e *ExecutionEngine) handleCoderSkill(ctx context.Context, out chan<- llm.S
 }
 
 func (e *ExecutionEngine) HandleStandardSkill(ctx context.Context, out chan<- llm.StreamEvent, call types.ToolCall, skillID string) string {
+	return e.HandleStandardSkillWithBypass(ctx, out, call, skillID, false)
+}
+
+// HandleStandardSkillApproved runs a standard skill after explicit human approval without mutating shared engine flags.
+func (e *ExecutionEngine) HandleStandardSkillApproved(ctx context.Context, out chan<- llm.StreamEvent, call types.ToolCall, skillID string) string {
+	return e.HandleStandardSkillWithBypass(ctx, out, call, skillID, true)
+}
+
+// HandleStandardSkillWithBypass executes a standard skill with a per-invocation bypassApproval flag
+// so concurrent sessions never mutate shared ExecutionEngine configuration.
+func (e *ExecutionEngine) HandleStandardSkillWithBypass(ctx context.Context, out chan<- llm.StreamEvent, call types.ToolCall, skillID string, bypassApproval bool) string {
 	manifest, err := e.Registry.FindSkill(skillID)
 	if err != nil {
 		return fmt.Sprintf("ERROR: Skill %s not found in registry.", skillID)
@@ -472,7 +535,7 @@ func (e *ExecutionEngine) HandleStandardSkill(ctx context.Context, out chan<- ll
 		return fmt.Sprintf("DAEMON SPAWNED: Skill '%s' is now running in the background with Job ID: %s. You will be notified when it completes.", skillID, jobID)
 	}
 
-	if manifest.RequiresApproval(e.RequireSkillApproval) {
+	if !bypassApproval && manifest.RequiresApproval(e.RequireSkillApproval) {
 		payloadBytes, _ := json.Marshal(call)
 		e.emitEvent(ctx, out, llm.StreamEvent{
 			Type:    llm.EventTypeSkillApprovalRequest,
