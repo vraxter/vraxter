@@ -28,6 +28,7 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/experimental/sysfs"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/tetratelabs/wazero/sys"
 	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/security"
 	"github.com/vraxter/vraxter/internal/telemetry"
@@ -108,6 +109,7 @@ type Runner struct {
 	Timeout             time.Duration
 	MaxBinaryBytes      int64
 	MaxMemoryPages      uint32
+	DefaultCPUFuel      int64
 	compilationCache    wazero.CompilationCache
 	runtimes            map[uint32]wazero.Runtime       // keyed by memoryLimitPages
 	cache               map[moduleCacheKey]*cachedModule // indexed by (SHA-256, memoryLimitPages)
@@ -130,6 +132,16 @@ func (rn *Runner) maxBinaryBytes() int64 {
 		return MaxWASMBinaryBytes
 	}
 	return limit
+}
+
+func (rn *Runner) defaultMaxCPUFuel() int64 {
+	rn.mu.RLock()
+	fuel := rn.DefaultCPUFuel
+	rn.mu.RUnlock()
+	if fuel <= 0 {
+		return DefaultMaxCPUFuel
+	}
+	return fuel
 }
 
 func (rn *Runner) effectiveMemoryLimitPages(manifest types.SkillManifest) uint32 {
@@ -155,6 +167,7 @@ func NewRunner() *Runner {
 		Timeout:          60 * time.Second,
 		MaxBinaryBytes:   MaxWASMBinaryBytes,
 		MaxMemoryPages:   DefaultMemoryLimitPages,
+		DefaultCPUFuel:   DefaultMaxCPUFuel,
 		compilationCache: wazero.NewCompilationCache(),
 		runtimes:         make(map[uint32]wazero.Runtime),
 		cache:            make(map[moduleCacheKey]*cachedModule),
@@ -646,6 +659,10 @@ func (rn *Runner) getOrCompileModule(ctx context.Context, wasmPath, expectedHash
 		return nil, fmt.Errorf("WASM binary changed concurrently on disk (expected %s, got %s)", expectedHash, actualHash)
 	}
 
+	if instrumented, fuelErr := InstrumentWASMWithFuel(wasmBytes, rn.defaultMaxCPUFuel()); fuelErr == nil && len(instrumented) > 0 {
+		wasmBytes = instrumented
+	}
+
 	compiled, err := rt.CompileModule(ctx, wasmBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile WASM module: %w", err)
@@ -989,6 +1006,7 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 		}
 	}
 
+	maxCPUFuel := manifest.GetMaxCPUFuel(rn.defaultMaxCPUFuel())
 	wasmStart := time.Now()
 	if !isDryRun {
 		rn.recordAudit(execCtx, audit.EventWASMExecStart, map[string]interface{}{
@@ -996,11 +1014,46 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 			"wasm_sha256":   currentHash,
 			"trust_tier":    int(manifest.Tier),
 			"signer_key_id": signerKeyID,
+			"max_cpu_fuel":  maxCPUFuel,
 		})
 	}
 
+	config = config.WithStartFunctions()
 	mod, err := cached.runtime.InstantiateModule(execCtx, cached.compiled, config)
+	if err == nil && mod != nil {
+		SetModuleFuel(mod, maxCPUFuel)
+		if startFn := mod.ExportedFunction("_start"); startFn != nil {
+			_, err = startFn.Call(execCtx)
+			var exitErr *sys.ExitError
+			if err != nil && errors.As(err, &exitErr) && exitErr.ExitCode() == 0 {
+				err = nil
+			}
+		}
+	}
+
 	if err != nil {
+		fuelExhausted := mod != nil && IsModuleFuelExhausted(mod)
+		fuelConsumed := GetModuleFuelConsumed(mod, maxCPUFuel)
+		if mod != nil {
+			_ = mod.Close(execCtx)
+		}
+
+		if fuelExhausted {
+			if !isDryRun {
+				rn.recordAudit(execCtx, audit.EventWASMExecEnd, map[string]interface{}{
+					"skill_id":          manifest.ID,
+					"wasm_sha256":       currentHash,
+					"trust_tier":        int(manifest.Tier),
+					"signer_key_id":     signerKeyID,
+					"exit_status":       "cpu_fuel_exhausted",
+					"cpu_fuel_consumed": fuelConsumed,
+					"max_cpu_fuel":      maxCPUFuel,
+					"duration_ms":       time.Since(wasmStart).Milliseconds(),
+				})
+			}
+			return nil, fmt.Errorf("%w: skill '%s' consumed %d / %d fuel units", ErrCPUFuelExhausted, manifest.ID, fuelConsumed, maxCPUFuel)
+		}
+
 		for _, qm := range quotaMounts {
 			if v := qm.Violation(); v != "" {
 				if !isDryRun {
@@ -1045,7 +1098,9 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 			stderr.String(),
 		)
 	}
-	_ = mod.Close(execCtx)
+	if mod != nil {
+		_ = mod.Close(execCtx)
+	}
 
 	// Surface any quota/policy violation even if guest swallowed the WASI EPERM/EACCES error.
 	for _, qm := range quotaMounts {

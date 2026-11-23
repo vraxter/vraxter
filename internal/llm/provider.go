@@ -18,7 +18,14 @@ import (
 
 type Message = interfaces.Message
 type CompletionRequest = interfaces.CompletionRequest
+type ToolDefinition = interfaces.ToolDefinition
+type ToolCall = interfaces.ToolCall
 type StreamEventType = interfaces.StreamEventType
+
+var (
+	Float64Ptr = interfaces.Float64Ptr
+	Int64Ptr   = interfaces.Int64Ptr
+)
 
 const (
 	EventTypeToken       = interfaces.EventTypeToken

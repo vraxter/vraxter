@@ -10,6 +10,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -91,6 +92,22 @@ func (sc *StreamCoordinator) Run(
 		if entry.Config.Alias != "" {
 			displayModel = entry.Config.Alias
 		}
+		breakerKey := entry.Config.ProviderID
+		if breakerKey == "" {
+			breakerKey = entry.Config.ID
+		}
+		if breakerKey == "" {
+			breakerKey = entry.Config.Model
+		}
+
+		// DDIL Circuit Breaker fast-fail check: skip Open providers immediately without waiting for timeout
+		if sc.Router != nil && !sc.Router.AllowProvider(breakerKey) {
+			lastErr = fmt.Errorf("circuit breaker open for provider %s (%s)", breakerKey, displayModel)
+			if sc.Verbose {
+				slog.Warn("StreamCoordinator skipping provider due to open circuit breaker", "model", displayModel, "breaker_key", breakerKey)
+			}
+			continue
+		}
 
 		if i == 0 {
 			if sc.Verbose {
@@ -107,6 +124,9 @@ func (sc *StreamCoordinator) Run(
 
 		stream, err := entry.Provider.StreamGenerate(ctx, currentReq)
 		if err != nil {
+			if sc.Router != nil {
+				sc.Router.RecordProviderFailure(breakerKey)
+			}
 			if sc.Verbose {
 				slog.Warn("StreamCoordinator model stream init failed", "model", displayModel, "error", err)
 			}
@@ -116,11 +136,15 @@ func (sc *StreamCoordinator) Run(
 
 		parser := NewStreamParser(markerChat, markerTool, markerCode)
 		isCommitted := false
+		var nativeToolCalls []llm.ToolCall
 
 	streamLoop:
 		for event := range stream {
 			switch event.Type {
 			case llm.EventTypeError:
+				if sc.Router != nil {
+					sc.Router.RecordProviderFailure(breakerKey)
+				}
 				if !isCommitted {
 					if sc.Verbose {
 						slog.Warn("StreamCoordinator model stream failed early", "model", displayModel, "error", event.Err)
@@ -138,10 +162,30 @@ func (sc *StreamCoordinator) Run(
 				}
 				return nil
 
+			case llm.EventTypeSkillCall:
+				isCommitted = true
+				if event.ToolCall != nil {
+					nativeToolCalls = append(nativeToolCalls, *event.ToolCall)
+				} else if strings.TrimSpace(event.Content) != "" {
+					var parsed map[string]interface{}
+					if err := json.Unmarshal([]byte(event.Content), &parsed); err == nil {
+						name, _ := parsed["skill_id"].(string)
+						if name == "" {
+							name = event.SkillID
+						}
+						args, _ := parsed["params"].(map[string]interface{})
+						nativeToolCalls = append(nativeToolCalls, llm.ToolCall{
+							Name:      name,
+							Arguments: args,
+							RawJSON:   event.Content,
+						})
+					}
+				}
+
 			case llm.EventTypeToken:
 				if chatContent := parser.ProcessToken(event.Content); chatContent != "" {
 					isCommitted = true
-					
+
 					// SHIELD: Filter out internal control signals from the user-visible stream
 					cleanContent := chatContent
 					if containsControlSignal(chatContent) {
@@ -161,6 +205,9 @@ func (sc *StreamCoordinator) Run(
 				}
 
 			case llm.EventTypeDone:
+				if sc.Router != nil {
+					sc.Router.RecordProviderSuccess(breakerKey)
+				}
 				if tail := parser.Flush(); tail != "" {
 					isCommitted = true
 					select {
@@ -173,38 +220,67 @@ func (sc *StreamCoordinator) Run(
 					}
 				}
 
-				toolP := parser.ToolPayload()
-				codeP := parser.CodePayload()
-				hasToolMarker := parser.HasToolMarker()
-
-				// Local-model fallback: if the model emitted a JSON object containing "skill_id"
-				// without the [VRAX_TOOL] marker, extract it automatically.
-				if len(toolP) == 0 && !hasToolMarker {
-					if inferred := parser.InferUnmarkedToolJSON(); inferred != "" {
-						toolP = inferred
+				if len(nativeToolCalls) > 0 {
+					for _, tc := range nativeToolCalls {
+						codeP := ""
+						if (tc.Name == "vraxter-coder" || tc.Name == "vraxter-coder-rust") && tc.Arguments != nil {
+							for _, k := range []string{"code", "tool_code", "source"} {
+								if cStr, ok := tc.Arguments[k].(string); ok && cStr != "" {
+									codeP = cStr
+									break
+								}
+							}
+						}
+						toolBytes, _ := json.Marshal(map[string]interface{}{
+							"skill_id": tc.Name,
+							"params":   tc.Arguments,
+						})
+						select {
+						case queue <- types.Event{
+							Type: types.EventTypeToolCall,
+							Payload: map[string]string{
+								"tool_payload": string(toolBytes),
+								"code_payload": codeP,
+							},
+						}:
+						case <-ctx.Done():
+						}
 					}
-				}
+				} else {
+					// Fallback: parse VRX textual protocol ([VRAX_TOOL] / [VRAX_CODE]) when native tool calls are absent
+					toolP := parser.ToolPayload()
+					codeP := parser.CodePayload()
+					hasToolMarker := parser.HasToolMarker()
 
-				if sc.Verbose {
-					slog.Info("Stream Done", "tool_bytes", len(toolP), "code_bytes", len(codeP))
-				}
-
-				if len(toolP) > 0 || len(codeP) > 0 || hasToolMarker {
-					if len(toolP) == 0 && hasToolMarker {
-						// The LLM emitted [VRAX_TOOL] but failed to provide a JSON payload.
-						// We inject a special payload to ensure ExecutePipeline bounces an error back.
-						toolP = `{"skill_id": "INVALID_EMPTY_PAYLOAD"}`
+					// Local-model fallback: if the model emitted a JSON object containing "skill_id"
+					// without the [VRAX_TOOL] marker, extract it automatically.
+					if len(toolP) == 0 && !hasToolMarker {
+						if inferred := parser.InferUnmarkedToolJSON(); inferred != "" {
+							toolP = inferred
+						}
 					}
 
-					select {
-					case queue <- types.Event{
-						Type: types.EventTypeToolCall,
-						Payload: map[string]string{
-							"tool_payload": toolP,
-							"code_payload": codeP,
-						},
-					}:
-					case <-ctx.Done():
+					if sc.Verbose {
+						slog.Info("Stream Done", "tool_bytes", len(toolP), "code_bytes", len(codeP))
+					}
+
+					if len(toolP) > 0 || len(codeP) > 0 || hasToolMarker {
+						if len(toolP) == 0 && hasToolMarker {
+							// The LLM emitted [VRAX_TOOL] but failed to provide a JSON payload.
+							// We inject a special payload to ensure ExecutePipeline bounces an error back.
+							toolP = `{"skill_id": "INVALID_EMPTY_PAYLOAD"}`
+						}
+
+						select {
+						case queue <- types.Event{
+							Type: types.EventTypeToolCall,
+							Payload: map[string]string{
+								"tool_payload": toolP,
+								"code_payload": codeP,
+							},
+						}:
+						case <-ctx.Done():
+						}
 					}
 				}
 

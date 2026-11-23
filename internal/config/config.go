@@ -43,6 +43,7 @@ type Config struct {
 	AppDir               string
 	DBPath               string
 	KeyPath              string
+	DBMasterKeyPath      string
 	SocketPath           string
 	ListenAddr           string
 	SkillsDir            string
@@ -58,6 +59,7 @@ type Config struct {
 	HubURL               string
 	RequireSkillApproval bool
 	RequireSignedSkills  bool
+	EncryptDBAtRest      bool
 	WhitelistedIPs       []string
 	HostExec             HostExecConfig
 	TLS                  TLSConfig
@@ -70,6 +72,7 @@ type Settings struct {
 	HubURL               string         `json:"hub_url"`
 	RequireSkillApproval bool           `json:"require_skill_approval"`
 	RequireSignedSkills  bool           `json:"require_signed_skills,omitempty"`
+	EncryptDBAtRest      bool           `json:"encrypt_db_at_rest,omitempty"`
 	AuditJSONLPath       string         `json:"audit_jsonl_path,omitempty"`
 	WhitelistedIPs       []string       `json:"whitelisted_ips"`
 	HostExec             HostExecConfig `json:"host_exec"`
@@ -115,6 +118,7 @@ func Load() Config {
 	var hub = DefaultHubURL
 	var requireSkillApproval = false
 	var requireSignedSkills = false
+	var encryptDBAtRest = false
 	var auditJSONLPath string
 	var whitelistedIPs []string
 	var listenAddr string
@@ -146,6 +150,7 @@ func Load() Config {
 			}
 			requireSkillApproval = s.RequireSkillApproval
 			requireSignedSkills = s.RequireSignedSkills
+			encryptDBAtRest = s.EncryptDBAtRest
 			if strings.TrimSpace(s.AuditJSONLPath) != "" {
 				auditJSONLPath = strings.TrimSpace(s.AuditJSONLPath)
 			}
@@ -198,6 +203,9 @@ func Load() Config {
 	if envReqSig := os.Getenv("VRAXTER_REQUIRE_SIGNED_SKILLS"); envReqSig == "true" || envReqSig == "1" {
 		requireSignedSkills = true
 	}
+	if envEncDB := os.Getenv("VRAXTER_ENCRYPT_DB_AT_REST"); envEncDB == "true" || envEncDB == "1" {
+		encryptDBAtRest = true
+	}
 	if envAuditJSONL := strings.TrimSpace(os.Getenv("VRAXTER_AUDIT_JSONL_PATH")); envAuditJSONL != "" {
 		auditJSONLPath = envAuditJSONL
 	}
@@ -214,6 +222,7 @@ func Load() Config {
 		AppDir:               appDir,
 		DBPath:               filepath.Join(appDir, "vraxter.db"),
 		KeyPath:              filepath.Join(appDir, ".masterkey"),
+		DBMasterKeyPath:      filepath.Join(appDir, "db_master.key"),
 		SocketPath:           socketPath,
 		ListenAddr:           listenAddr,
 		SkillsDir:            skillsDir,
@@ -229,6 +238,7 @@ func Load() Config {
 		HubURL:               hub,
 		RequireSkillApproval: requireSkillApproval,
 		RequireSignedSkills:  requireSignedSkills,
+		EncryptDBAtRest:      encryptDBAtRest,
 		WhitelistedIPs:       whitelistedIPs,
 		HostExec:             hostExec,
 		TLS:                  tlsCfg,
@@ -261,6 +271,7 @@ func (c *Config) SaveSettings() error {
 		HubURL:               c.HubURL,
 		RequireSkillApproval: c.RequireSkillApproval,
 		RequireSignedSkills:  c.RequireSignedSkills,
+		EncryptDBAtRest:      c.EncryptDBAtRest,
 		AuditJSONLPath:       c.AuditJSONLPath,
 		WhitelistedIPs:       c.WhitelistedIPs,
 		HostExec:             c.HostExec,

@@ -138,8 +138,9 @@ type ClockSpec struct {
 
 // LimitsSpec specifies runtime resource limits.
 type LimitsSpec struct {
-	MemoryMB     int `json:"memory_mb,omitempty"`     // 1 to 2048 MB
-	MaxRuntimeMS int `json:"max_runtime_ms,omitempty"` // In milliseconds
+	MemoryMB     int   `json:"memory_mb,omitempty"`     // 1 to 2048 MB
+	MaxRuntimeMS int   `json:"max_runtime_ms,omitempty"` // In milliseconds
+	MaxCPUFuel   int64 `json:"max_cpu_fuel,omitempty"`   // Deterministic CPU instruction/block fuel budget
 }
 
 // ManifestValidationOptions controls optional policy relaxations during manifest validation.
@@ -424,5 +425,16 @@ func (m *SkillManifest) GetMemoryLimitPages(defaultPages uint32) uint32 {
 		return defaultPages
 	}
 	return 2048 // 128MB default
+}
+
+// GetMaxCPUFuel returns the effective deterministic CPU fuel budget for the skill.
+func (m *SkillManifest) GetMaxCPUFuel(defaultFuel int64) int64 {
+	if m.ManifestV1 != nil && m.ManifestV1.Limits != nil && m.ManifestV1.Limits.MaxCPUFuel > 0 {
+		return m.ManifestV1.Limits.MaxCPUFuel
+	}
+	if defaultFuel > 0 {
+		return defaultFuel
+	}
+	return 50_000_000
 }
 

@@ -9,6 +9,7 @@
 package db
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
 	"log"
@@ -18,24 +19,112 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vraxter/vraxter/internal/security"
+	"github.com/vraxter/vraxter/internal/utils"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver without CGO
 )
 
-// Store manages the core SQLite connection and schemas
+// StoreOptions configures at-rest encryption and key management for a SQLite Store.
+type StoreOptions struct {
+	EncryptAtRest bool
+	Crypto        *security.CryptoService
+	MasterKeyPath string
+}
+
+// Store manages the core SQLite connection, schema, and at-rest AES-256-GCM encryption.
 type Store struct {
-	Conn *sql.DB
+	Conn          *sql.DB
+	dbPath        string
+	workingPath   string
+	sealedEncPath string
+	encryptAtRest bool
+	crypto        *security.CryptoService
 }
 
 // NewStore initializes the database connection, durability PRAGMAs, WAL-safe VACUUM INTO backup, and schema.
 func NewStore(dbPath string) (*Store, error) {
+	return NewStoreWithOptions(dbPath, StoreOptions{})
+}
+
+// NewStoreWithOptions initializes the SQLite Store with optional full-file at-rest sealing (encrypt_db_at_rest)
+// and column-level AES-256-GCM encryption backed by db_master.key.
+func NewStoreWithOptions(dbPath string, opts StoreOptions) (*Store, error) {
+	crypto := opts.Crypto
+	if crypto == nil {
+		var err error
+		if strings.TrimSpace(opts.MasterKeyPath) != "" {
+			crypto, err = security.NewCryptoService(opts.MasterKeyPath)
+		} else if dbPath != "" && dbPath != ":memory:" {
+			crypto, err = security.NewDBMasterCryptoService(filepath.Dir(dbPath))
+		} else {
+			crypto, err = security.NewDBMasterCryptoService("")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed initializing db_master.key crypto service: %w", err)
+		}
+	}
+
+	workingPath := dbPath
+	sealedEncPath := ""
+	encryptAtRest := opts.EncryptAtRest
+
+	if dbPath != "" && dbPath != ":memory:" {
+		sealedEncPath = dbPath + ".enc"
+		// Automatically enable sealed mode if a sealed .db.enc archive exists on disk
+		if !encryptAtRest {
+			if _, errEnc := os.Stat(sealedEncPath); errEnc == nil {
+				if _, errPlain := os.Stat(dbPath); os.IsNotExist(errPlain) {
+					encryptAtRest = true
+				}
+			}
+		}
+
+		if encryptAtRest {
+			workingPath = filepath.Join(filepath.Dir(dbPath), "."+filepath.Base(dbPath)+".working")
+			_ = os.Remove(workingPath)
+			_ = os.Remove(workingPath + "-wal")
+			_ = os.Remove(workingPath + "-shm")
+
+			if infoEnc, err := os.Stat(sealedEncPath); err == nil && infoEnc.Size() > 0 {
+				if err := crypto.DecryptFile(sealedEncPath, workingPath); err != nil {
+					return nil, fmt.Errorf("failed decrypting sealed SQLite database %s: %w", sealedEncPath, err)
+				}
+				_ = os.Remove(dbPath)
+				_ = os.Remove(dbPath + "-wal")
+				_ = os.Remove(dbPath + "-shm")
+			} else if infoPlain, err := os.Stat(dbPath); err == nil && infoPlain.Size() > 0 {
+				raw, readErr := os.ReadFile(dbPath)
+				if readErr != nil {
+					return nil, fmt.Errorf("failed reading existing SQLite file %s: %w", dbPath, readErr)
+				}
+				if bytes.HasPrefix(raw, []byte(security.EncryptedBlobMagic)) {
+					plain, decErr := crypto.DecryptBytes(raw)
+					if decErr != nil {
+						return nil, fmt.Errorf("failed decrypting sealed SQLite file %s: %w", dbPath, decErr)
+					}
+					if err := utils.AtomicWriteFile(workingPath, plain, 0600); err != nil {
+						return nil, err
+					}
+				} else {
+					if err := utils.AtomicWriteFile(workingPath, raw, 0600); err != nil {
+						return nil, err
+					}
+				}
+				_ = os.Remove(dbPath)
+				_ = os.Remove(dbPath + "-wal")
+				_ = os.Remove(dbPath + "-shm")
+			}
+		}
+	}
+
 	existedBefore := false
-	if dbPath != ":memory:" && dbPath != "" {
-		if info, err := os.Stat(dbPath); err == nil && info.Size() > 0 {
+	if workingPath != ":memory:" && workingPath != "" {
+		if info, err := os.Stat(workingPath); err == nil && info.Size() > 0 {
 			existedBefore = true
 		}
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", workingPath)
 	if err != nil {
 		return nil, fmt.Errorf("could not open db: %w", err)
 	}
@@ -68,12 +157,26 @@ func NewStore(dbPath string) (*Store, error) {
 
 	// Secure-by-Design: Perform transactionally consistent WAL-aware backup via VACUUM INTO
 	if existedBefore {
-		if err := autoBackup(db, dbPath); err != nil {
-			log.Printf("Warning: SQLite VACUUM INTO autoBackup failed: %v", err)
+		if !encryptAtRest {
+			if err := autoBackup(db, workingPath); err != nil {
+				log.Printf("Warning: SQLite VACUUM INTO autoBackup failed: %v", err)
+			}
+		}
+		if crypto != nil && dbPath != "" && dbPath != ":memory:" {
+			if _, err := autoBackupEncrypted(db, dbPath, crypto); err != nil {
+				log.Printf("Warning: SQLite encrypted autoBackup failed: %v", err)
+			}
 		}
 	}
 
-	store := &Store{Conn: db}
+	store := &Store{
+		Conn:          db,
+		dbPath:        dbPath,
+		workingPath:   workingPath,
+		sealedEncPath: sealedEncPath,
+		encryptAtRest: encryptAtRest,
+		crypto:        crypto,
+	}
 
 	// Bootstrap required tables
 	if err := store.initSchema(); err != nil {
@@ -81,11 +184,86 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to init db schema: %w", err)
 	}
 
-	if dbPath != ":memory:" && dbPath != "" {
-		_ = os.Chmod(dbPath, 0600)
+	if workingPath != ":memory:" && workingPath != "" {
+		_ = os.Chmod(workingPath, 0600)
 	}
 
 	return store, nil
+}
+
+// Crypto returns the store's AES-256-GCM CryptoService.
+func (s *Store) Crypto() *security.CryptoService {
+	if s == nil {
+		return nil
+	}
+	return s.crypto
+}
+
+// SetCrypto overrides the store's AES-256-GCM CryptoService.
+func (s *Store) SetCrypto(c *security.CryptoService) {
+	if s != nil {
+		s.crypto = c
+	}
+}
+
+// EncryptField encrypts a sensitive column string with AES-256-GCM ("vraxter-enc-v1:...").
+func (s *Store) EncryptField(plain string) string {
+	if s == nil || s.crypto == nil || plain == "" {
+		return plain
+	}
+	enc, err := s.crypto.EncryptEnvelope(plain)
+	if err != nil {
+		return plain
+	}
+	return enc
+}
+
+// DecryptField decrypts an AES-256-GCM "vraxter-enc-v1:..." column string (or returns legacy plaintext).
+func (s *Store) DecryptField(val string) string {
+	if s == nil || s.crypto == nil || val == "" {
+		return val
+	}
+	dec, err := s.crypto.DecryptEnvelope(val)
+	if err != nil {
+		return val
+	}
+	return dec
+}
+
+// EncryptBlob encrypts a sensitive binary column with AES-256-GCM ("VRXENC01" header).
+func (s *Store) EncryptBlob(plain []byte) []byte {
+	if s == nil || s.crypto == nil || len(plain) == 0 {
+		return plain
+	}
+	enc, err := s.crypto.EncryptBytes(plain)
+	if err != nil {
+		return plain
+	}
+	return enc
+}
+
+// DecryptBlob decrypts an AES-256-GCM "VRXENC01" binary column (or returns legacy blob).
+func (s *Store) DecryptBlob(val []byte) []byte {
+	if s == nil || s.crypto == nil || len(val) == 0 {
+		return val
+	}
+	dec, err := s.crypto.DecryptBytes(val)
+	if err != nil {
+		return val
+	}
+	return dec
+}
+
+// BackupEncrypted creates an AES-256-GCM encrypted snapshot (.db.enc, mode 0600) of the live database.
+func (s *Store) BackupEncrypted() (string, error) {
+	if s == nil || s.Conn == nil || s.crypto == nil {
+		return "", fmt.Errorf("store or crypto service is not initialized")
+	}
+	targetBase := s.dbPath
+	if targetBase == "" || targetBase == ":memory:" {
+		return "", fmt.Errorf("cannot create file backup for in-memory database")
+	}
+	return autoBackupEncrypted(s.Conn, targetBase, s.crypto)
 }
 
 func (s *Store) initSchema() error {
@@ -257,7 +435,89 @@ func (s *Store) initSchema() error {
 }
 
 func (s *Store) Close() error {
+	if s == nil || s.Conn == nil {
+		return nil
+	}
+	if s.encryptAtRest && s.workingPath != "" && s.workingPath != ":memory:" && s.crypto != nil {
+		snapTmp := s.workingPath + ".seal.tmp"
+		_ = os.Remove(snapTmp)
+		_, vacErr := s.Conn.Exec("VACUUM INTO ?", snapTmp)
+		closeErr := s.Conn.Close()
+
+		srcToEncrypt := snapTmp
+		if vacErr != nil {
+			srcToEncrypt = s.workingPath
+		}
+		encTarget := s.sealedEncPath
+		if encTarget == "" {
+			encTarget = s.dbPath + ".enc"
+		}
+		encErr := s.crypto.EncryptFile(srcToEncrypt, encTarget)
+		_ = os.Remove(snapTmp)
+		if encErr == nil {
+			// Remove all unencrypted SQLite and WAL/SHM artifacts from disk
+			for _, p := range []string{
+				s.workingPath, s.workingPath + "-wal", s.workingPath + "-shm",
+				s.dbPath, s.dbPath + "-wal", s.dbPath + "-shm",
+			} {
+				if p != "" && p != encTarget {
+					_ = os.Remove(p)
+				}
+			}
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		return encErr
+	}
 	return s.Conn.Close()
+}
+
+func autoBackupEncrypted(conn *sql.DB, dbPath string, crypto *security.CryptoService) (string, error) {
+	if crypto == nil {
+		return "", fmt.Errorf("nil crypto service")
+	}
+	backupsDir := filepath.Join(filepath.Dir(dbPath), "backups")
+	if err := os.MkdirAll(backupsDir, 0700); err != nil {
+		return "", err
+	}
+
+	timestamp := time.Now().Format("2006-01-02")
+	encBackupPath := filepath.Join(backupsDir, fmt.Sprintf("vraxter_%s.db.enc", timestamp))
+
+	tmpSnap := filepath.Join(backupsDir, fmt.Sprintf(".vraxter_%s.snap.tmp", timestamp))
+	_ = os.Remove(tmpSnap)
+	defer os.Remove(tmpSnap)
+
+	if _, err := conn.Exec("VACUUM INTO ?", tmpSnap); err != nil {
+		return "", fmt.Errorf("VACUUM INTO failed: %w", err)
+	}
+
+	if err := crypto.EncryptFile(tmpSnap, encBackupPath); err != nil {
+		return "", fmt.Errorf("failed encrypting backup snapshot: %w", err)
+	}
+	_ = os.Chmod(encBackupPath, 0600)
+
+	// Rolling retention: maintain the last 7 daily encrypted backups
+	files, err := os.ReadDir(backupsDir)
+	if err == nil {
+		var encFiles []os.DirEntry
+		for _, f := range files {
+			if !f.IsDir() && strings.HasPrefix(f.Name(), "vraxter_") && strings.HasSuffix(f.Name(), ".db.enc") {
+				encFiles = append(encFiles, f)
+			}
+		}
+		if len(encFiles) > 7 {
+			sort.Slice(encFiles, func(i, j int) bool {
+				return encFiles[i].Name() < encFiles[j].Name()
+			})
+			for i := 0; i < len(encFiles)-7; i++ {
+				_ = os.Remove(filepath.Join(backupsDir, encFiles[i].Name()))
+			}
+		}
+	}
+
+	return encBackupPath, nil
 }
 
 func autoBackup(conn *sql.DB, dbPath string) error {

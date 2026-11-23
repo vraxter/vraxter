@@ -66,10 +66,13 @@ func (r *MemoryRepository) SaveEmbedding(conversationID, text string, vector []f
 		return fmt.Errorf("failed to encode vector: %w", err)
 	}
 
+	encText := r.Store.EncryptField(text)
+	encBlob := r.Store.EncryptBlob(blob)
+
 	id := uuid.New().String()
 	_, err = r.Store.Conn.Exec(
 		"INSERT INTO embeddings (id, conversation_id, text_content, vector) VALUES (?, ?, ?, ?)",
-		id, conversationID, text, blob,
+		id, conversationID, encText, encBlob,
 	)
 	return err
 }
@@ -113,8 +116,10 @@ func (r *MemoryRepository) search(conversationID string, queryVector []float32, 
 		if err := rows.Scan(&node.ID, &node.TextContent, &blob, &node.CreatedAt); err != nil {
 			continue
 		}
-		
-		node.Vector, err = ConvertBytesToFloat32Array(blob)
+		node.TextContent = r.Store.DecryptField(node.TextContent)
+		decBlob := r.Store.DecryptBlob(blob)
+
+		node.Vector, err = ConvertBytesToFloat32Array(decBlob)
 		if err != nil {
 			continue
 		}

@@ -10,6 +10,7 @@ package interfaces
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 )
 
@@ -19,25 +20,55 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// ToolDefinition describes a callable tool/function exposed via native LLM tool calling.
+type ToolDefinition struct {
+	Name             string          `json:"name"`
+	Description      string          `json:"description,omitempty"`
+	ParametersSchema json.RawMessage `json:"parameters_schema,omitempty"`
+}
+
+// ToolCall represents a structured native tool/function invocation returned by an LLM.
+type ToolCall struct {
+	ID        string                 `json:"id,omitempty"`
+	Name      string                 `json:"name"`
+	Arguments map[string]interface{} `json:"arguments,omitempty"`
+	RawJSON   string                 `json:"raw_json,omitempty"`
+}
+
 // CompletionRequest is the standard struct to decouple Vraxter logic from specific APIs
 type CompletionRequest struct {
-	Model    string
-	Messages []Message
-	Format   string // Format "json" if structured output is needed
+	Model       string
+	Messages    []Message
+	Format      string           // Format "json" if structured output is needed
+	Temperature *float64         `json:"temperature,omitempty"`
+	Seed        *int64           `json:"seed,omitempty"`
+	MaxTokens   int              `json:"max_tokens,omitempty"`
+	TopP        *float64         `json:"top_p,omitempty"`
+	Tools       []ToolDefinition `json:"tools,omitempty"`
+}
+
+// Float64Ptr returns a pointer to v (helper for deterministic Temperature = 0.0 / TopP).
+func Float64Ptr(v float64) *float64 {
+	return &v
+}
+
+// Int64Ptr returns a pointer to v (helper for deterministic Seed).
+func Int64Ptr(v int64) *int64 {
+	return &v
 }
 
 // StreamEventType defines what's coming through the channel (token, tool-call, error)
 type StreamEventType string
 
 const (
-	EventTypeToken       StreamEventType = "token"
-	EventTypeError       StreamEventType = "error"
-	EventTypeDone        StreamEventType = "done"
-	EventTypeSkillCall   StreamEventType = "skill_call"
-	EventTypeCommandCall StreamEventType = "command_call"
-	EventTypePlanProposal StreamEventType = "plan_proposal"
-	EventTypeStatus       StreamEventType = "status"
-	EventTypeSpecialistResult StreamEventType = "specialist_result"
+	EventTypeToken                StreamEventType = "token"
+	EventTypeError                StreamEventType = "error"
+	EventTypeDone                 StreamEventType = "done"
+	EventTypeSkillCall            StreamEventType = "skill_call"
+	EventTypeCommandCall          StreamEventType = "command_call"
+	EventTypePlanProposal         StreamEventType = "plan_proposal"
+	EventTypeStatus               StreamEventType = "status"
+	EventTypeSpecialistResult     StreamEventType = "specialist_result"
 	EventTypeSkillApprovalRequest StreamEventType = "skill_approval_request"
 )
 
@@ -46,8 +77,9 @@ type StreamEvent struct {
 	Type          StreamEventType
 	Content       string
 	Err           error
-	ActiveModelID string // The model ID currently driving the session
-	SkillID       string // Used for tool calls or approvals
+	ActiveModelID string    // The model ID currently driving the session
+	SkillID       string    // Used for tool calls or approvals
+	ToolCall      *ToolCall // Populated when a provider emits a structured native tool call
 }
 
 // SendStreamEvent sends evt to ch without blocking indefinitely if ctx is canceled.
@@ -63,7 +95,8 @@ func SendStreamEvent(ctx context.Context, ch chan<- StreamEvent, evt StreamEvent
 
 // CompletionResponse encapsulates what an LLM responds
 type CompletionResponse struct {
-	Content string
+	Content   string
+	ToolCalls []ToolCall
 }
 
 // ModelMetadata represents a model discovered from a provider's registry

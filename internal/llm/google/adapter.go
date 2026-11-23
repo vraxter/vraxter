@@ -35,9 +35,15 @@ type inlineData struct {
 	Data     string `json:"data"`
 }
 
+type geminiFunctionCall struct {
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"args,omitempty"`
+}
+
 type geminiPart struct {
-	Text       string      `json:"text,omitempty"`
-	InlineData *inlineData `json:"inline_data,omitempty"`
+	Text         string              `json:"text,omitempty"`
+	InlineData   *inlineData         `json:"inline_data,omitempty"`
+	FunctionCall *geminiFunctionCall `json:"functionCall,omitempty"`
 }
 
 type geminiContent struct {
@@ -45,16 +51,36 @@ type geminiContent struct {
 	Parts []geminiPart `json:"parts"`
 }
 
+type geminiGenerationConfig struct {
+	Temperature     *float64 `json:"temperature,omitempty"`
+	TopP            *float64 `json:"topP,omitempty"`
+	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
+	Seed            *int64   `json:"seed,omitempty"`
+}
+
+type geminiFunctionDeclaration struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+type geminiToolDeclarationGroup struct {
+	FunctionDeclarations []geminiFunctionDeclaration `json:"functionDeclarations,omitempty"`
+}
+
 type geminiReq struct {
-	Contents          []geminiContent `json:"contents"`
-	SystemInstruction *geminiContent  `json:"system_instruction,omitempty"`
+	Contents          []geminiContent             `json:"contents"`
+	SystemInstruction *geminiContent              `json:"system_instruction,omitempty"`
+	GenerationConfig  *geminiGenerationConfig     `json:"generationConfig,omitempty"`
+	Tools             []geminiToolDeclarationGroup `json:"tools,omitempty"`
 }
 
 type geminiRes struct {
 	Candidates []struct {
 		Content struct {
 			Parts []struct {
-				Text string `json:"text"`
+				Text         string              `json:"text,omitempty"`
+				FunctionCall *geminiFunctionCall `json:"functionCall,omitempty"`
 			} `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
@@ -144,12 +170,40 @@ func buildGeminiPayload(messages []interfaces.Message) geminiReq {
 	}
 }
 
+func applyGeminiRequestOptions(payload *geminiReq, req interfaces.CompletionRequest) {
+	if req.Temperature != nil || req.TopP != nil || req.MaxTokens > 0 || req.Seed != nil {
+		payload.GenerationConfig = &geminiGenerationConfig{
+			Temperature:     req.Temperature,
+			TopP:            req.TopP,
+			MaxOutputTokens: req.MaxTokens,
+			Seed:            req.Seed,
+		}
+	}
+	if len(req.Tools) > 0 {
+		var decls []geminiFunctionDeclaration
+		for _, t := range req.Tools {
+			if strings.TrimSpace(t.Name) == "" {
+				continue
+			}
+			decls = append(decls, geminiFunctionDeclaration{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.ParametersSchema,
+			})
+		}
+		if len(decls) > 0 {
+			payload.Tools = []geminiToolDeclarationGroup{{FunctionDeclarations: decls}}
+		}
+	}
+}
+
 func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest) (interfaces.CompletionResponse, error) {
 	if a.apiKey == "" {
 		return interfaces.CompletionResponse{}, fmt.Errorf("Google API Key is missing")
 	}
 
 	payload := buildGeminiPayload(req.Messages)
+	applyGeminiRequestOptions(&payload, req)
 
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -189,7 +243,26 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 		return interfaces.CompletionResponse{}, fmt.Errorf("no content returned by Google")
 	}
 
-	return interfaces.CompletionResponse{Content: parsed.Candidates[0].Content.Parts[0].Text}, nil
+	var textBuilder strings.Builder
+	var toolCalls []interfaces.ToolCall
+	for _, p := range parsed.Candidates[0].Content.Parts {
+		if p.Text != "" {
+			textBuilder.WriteString(p.Text)
+		}
+		if p.FunctionCall != nil && strings.TrimSpace(p.FunctionCall.Name) != "" {
+			rawBytes, _ := json.Marshal(p.FunctionCall.Args)
+			toolCalls = append(toolCalls, interfaces.ToolCall{
+				Name:      p.FunctionCall.Name,
+				Arguments: p.FunctionCall.Args,
+				RawJSON:   string(rawBytes),
+			})
+		}
+	}
+
+	return interfaces.CompletionResponse{
+		Content:   textBuilder.String(),
+		ToolCalls: toolCalls,
+	}, nil
 }
 
 func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionRequest) (<-chan interfaces.StreamEvent, error) {
@@ -201,6 +274,7 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 	}
 
 	payload := buildGeminiPayload(req.Messages)
+	applyGeminiRequestOptions(&payload, req)
 
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -249,9 +323,32 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 			}
 
 			if len(chunk.Candidates) > 0 && len(chunk.Candidates[0].Content.Parts) > 0 {
-				token := chunk.Candidates[0].Content.Parts[0].Text
-				if !interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: token}) {
-					return
+				for _, p := range chunk.Candidates[0].Content.Parts {
+					if p.Text != "" {
+						if !interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: p.Text}) {
+							return
+						}
+					}
+					if p.FunctionCall != nil && strings.TrimSpace(p.FunctionCall.Name) != "" {
+						rawBytes, _ := json.Marshal(p.FunctionCall.Args)
+						tc := interfaces.ToolCall{
+							Name:      p.FunctionCall.Name,
+							Arguments: p.FunctionCall.Args,
+							RawJSON:   string(rawBytes),
+						}
+						payloadBytes, _ := json.Marshal(map[string]interface{}{
+							"skill_id": tc.Name,
+							"params":   tc.Arguments,
+						})
+						if !interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{
+							Type:     interfaces.EventTypeSkillCall,
+							SkillID:  tc.Name,
+							Content:  string(payloadBytes),
+							ToolCall: &tc,
+						}) {
+							return
+						}
+					}
 				}
 			}
 		}

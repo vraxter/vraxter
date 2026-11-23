@@ -124,7 +124,10 @@ func bootstrap() {
 			os.Exit(1)
 		}
 
-		appStore, err = db.NewStore(appConfig.DBPath)
+		appStore, err = db.NewStoreWithOptions(appConfig.DBPath, db.StoreOptions{
+			EncryptAtRest: appConfig.EncryptDBAtRest,
+			MasterKeyPath: appConfig.DBMasterKeyPath,
+		})
 		if err != nil {
 			fmt.Printf("Fatal: Error connecting to database: %v\n", err)
 			os.Exit(1)
