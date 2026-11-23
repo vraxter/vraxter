@@ -1,0 +1,137 @@
+{
+  "generated_at_utc": "2026-11-23T20:29:21Z",
+  "go_version": "go1.26.3",
+  "goos": "windows",
+  "goarch": "amd64",
+  "num_cpu": 6,
+  "bench01_zero_egress_airgap": {
+    "total_egress_attempts": 20,
+    "blocked_attempts": 20,
+    "permitted_outbound_connections": 0,
+    "perimeter_block_rate_pct": 100,
+    "otel_network_egress_count": 0,
+    "wasm_http_exfil_blocked": 5,
+    "host_exec_network_blocked": 5,
+    "imds_link_local_blocked": 5,
+    "passed": true
+  },
+  "bench02_wasm_cold_warm_start": {
+    "cold_start_latency": {
+      "samples": 15,
+      "min_us": 1745.8,
+      "p50_us": 2156.8,
+      "p95_us": 12972.6,
+      "p99_us": 12972.6,
+      "max_us": 12972.6,
+      "mean_us": 3040.06,
+      "p50_ms": 2.157,
+      "p95_ms": 12.973,
+      "p99_ms": 12.973
+    },
+    "cold_start_bytes_per_op": 893132,
+    "cold_start_allocs_per_op": 2618,
+    "warm_start_latency": {
+      "samples": 50,
+      "min_us": 945.9,
+      "p50_us": 1620.9,
+      "p95_us": 2208.5,
+      "p99_us": 3410.1,
+      "max_us": 3410.1,
+      "mean_us": 1633.99,
+      "p50_ms": 1.621,
+      "p95_ms": 2.209,
+      "p99_ms": 3.41
+    },
+    "warm_start_bytes_per_op": 227984,
+    "warm_start_allocs_per_op": 570,
+    "os_subprocess_baseline_latency": {
+      "samples": 10,
+      "min_us": 11755,
+      "p50_us": 12597.6,
+      "p95_us": 55833,
+      "p99_us": 55833,
+      "max_us": 55833,
+      "mean_us": 16915.3,
+      "p50_ms": 12.598,
+      "p95_ms": 55.833,
+      "p99_ms": 55.833
+    },
+    "warm_speedup_vs_os_subprocess_x": 7.77,
+    "passed": true
+  },
+  "bench03_deterministic_dos_containment": {
+    "cpu_fuel_budget": 500,
+    "cpu_fuel_consumed_on_trap": 500,
+    "cpu_infinite_loop_trap_time_ms": 8.332,
+    "memory_bomb_limit_mb": 2,
+    "memory_bomb_requested_mb": 32,
+    "memory_bomb_trap_time_ms": 12.942,
+    "disk_quota_violation_trap_time_ms": 8.487,
+    "concurrent_legit_skills_run": 12,
+    "concurrent_legit_skills_passed": 12,
+    "concurrent_legit_latency": {
+      "samples": 12,
+      "min_us": 17200.1,
+      "p50_us": 19096.4,
+      "p95_us": 21398.6,
+      "p99_us": 21398.6,
+      "max_us": 21398.6,
+      "mean_us": 19358.28,
+      "p50_ms": 19.096,
+      "p95_ms": 21.399,
+      "p99_ms": 21.399
+    },
+    "passed": true
+  },
+  "bench04_execution_determinism": {
+    "iterations": 50,
+    "unique_output_hashes": 1,
+    "unique_wasm_hashes": 1,
+    "unique_manifest_hashes": 1,
+    "unique_entry_hashes": 1,
+    "determinism_rate_pct": 100,
+    "canonical_wasm_sha256": "7521b6974e76e31a00b17cef5f45b493739c105fa633a5a22626a311e50c164d",
+    "canonical_manifest_sha256": "9e25451abdde1678bf4404aabf0b0e7653243829f5ff9aa968b7b30dec708622",
+    "canonical_output_sha256": "60a3f9fc1a2739f7727af7d6c00379f8a382abc6b66293cd25888238e6037f91",
+    "passed": true
+  },
+  "bench05_crash_safety_recovery": {
+    "kill_cycles": 25,
+    "corrupted_atomic_files": 0,
+    "orphan_tmp_files_in_target": 0,
+    "sqlite_integrity_checks_passed": 25,
+    "sealed_db_cycles_verified": 5,
+    "passed": true
+  },
+  "bench06_offline_skill_pipeline": {
+    "used_go_wasi_compiler": true,
+    "compile_time_ms": 360.228,
+    "static_verify_time_ms": 805.03,
+    "ed25519_sign_time_ms": 22.331,
+    "register_signed_time_ms": 851.748,
+    "first_sandbox_exec_time_ms": 884.735,
+    "total_end_to_end_time_ms": 2924.073,
+    "passed": true
+  },
+  "bench07_immutable_audit_overhead": {
+    "events_recorded": 1000,
+    "total_write_time_ms": 720.456,
+    "write_throughput_ops_sec": 1388.01,
+    "per_event_write_latency": {
+      "samples": 1000,
+      "min_us": 0,
+      "p50_us": 583.8,
+      "p95_us": 1246.4,
+      "p99_us": 1723.2,
+      "max_us": 9199.9,
+      "mean_us": 720.45,
+      "p50_ms": 0.584,
+      "p95_ms": 1.246,
+      "p99_ms": 1.723
+    },
+    "verify_chain_events": 1000,
+    "verify_chain_total_time_ms": 70.597,
+    "verify_throughput_ops_sec": 14164.91,
+    "passed": true
+  }
+}
