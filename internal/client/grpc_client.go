@@ -73,6 +73,11 @@ func (c *GRPCClient) GetInfo(ctx context.Context) (map[string]string, error) {
 	}, nil
 }
 
+// GetConfig fetches active daemon isolation and security configuration.
+func (c *GRPCClient) GetConfig(ctx context.Context) (*v1.ConfigResponse, error) {
+	return c.client.GetConfig(ctx, &v1.GetConfigRequest{})
+}
+
 // ExecuteStream sends a query and returns a generic LLM StreamEvent channel
 func (c *GRPCClient) ExecuteStream(ctx context.Context, query string, conversationID string, specialistID string, modelID string) (<-chan llm.StreamEvent, error) {
 	if specialistID != "" {
@@ -113,6 +118,9 @@ func (c *GRPCClient) ExecuteStream(ctx context.Context, query string, conversati
 				if resp.SkillId != "" {
 					event.Content = resp.SkillId
 				}
+			case v1.ExecuteResponse_SKILL_APPROVAL_REQUEST:
+				event.Type = llm.EventTypeSkillApprovalRequest
+				event.SkillID = resp.SkillId
 			case v1.ExecuteResponse_ERROR:
 				event.Type = llm.EventTypeError
 				event.Err = fmt.Errorf("%s", resp.Content)
@@ -124,11 +132,18 @@ func (c *GRPCClient) ExecuteStream(ctx context.Context, query string, conversati
 				event.Type = llm.EventTypeSpecialistResult
 			case v1.ExecuteResponse_DONE:
 				event.Type = llm.EventTypeDone
-				out <- event
+				select {
+				case out <- event:
+				case <-ctx.Done():
+				}
 				return
 			}
 
-			out <- event
+			select {
+			case out <- event:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -152,7 +167,11 @@ func (c *GRPCClient) SubscribeEvents(ctx context.Context, clientID string) (<-ch
 			if err != nil {
 				return // Stream closed or errored
 			}
-			out <- event
+			select {
+			case out <- event:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 

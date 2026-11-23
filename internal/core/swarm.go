@@ -67,14 +67,20 @@ func (s *SwarmDispatcher) Dispatch(sessionID string, swarmTitle string, tasks []
 				ctx := context.Background()
 
 				if s.engine.SwarmDelegate != nil {
-					// We need a dummy channel to swallow intermediate tokens so they don't block
+					// Drain intermediate tokens without leaking the drainer goroutine after completion.
 					outDrain := make(chan llm.StreamEvent, 100)
+					var drainWG sync.WaitGroup
+					drainWG.Add(1)
 					go func() {
+						defer drainWG.Done()
 						for range outDrain {
 						}
 					}()
-					
+
 					swarmResult := s.engine.SwarmDelegate(ctx, outDrain, task.SpecialistID, task.Query, sessionID)
+					close(outDrain)
+					drainWG.Wait()
+
 					results <- fmt.Sprintf("=== Result from %s ===\n%s", displayName, swarmResult)
 				} else {
 					errs <- fmt.Errorf("swarm delegate not wired in engine")

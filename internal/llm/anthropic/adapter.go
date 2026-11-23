@@ -16,6 +16,7 @@ import (
 	"net/http"
 
 	"github.com/vraxter/vraxter/internal/llm/registry"
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 )
 
@@ -58,7 +59,7 @@ func NewAdapter(apiKey, host string) *Adapter {
 	return &Adapter{
 		apiKey:     apiKey,
 		baseURL:    host,
-		httpClient: &http.Client{},
+		httpClient: utils.NewDDILHTTPClient(),
 	}
 }
 
@@ -153,11 +154,13 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 		defer close(ch)
 		res, err := a.Generate(ctx, req)
 		if err != nil {
-			ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err}
+			interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err})
 			return
 		}
-		ch <- interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: res.Content}
-		ch <- interfaces.StreamEvent{Type: interfaces.EventTypeDone}
+		if !interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: res.Content}) {
+			return
+		}
+		interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeDone})
 	}()
 	return ch, nil
 }

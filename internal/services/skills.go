@@ -56,9 +56,10 @@ func (s *SkillService) InstallSkill(m types.SkillManifest) error {
 
 	// 4. Calculate Integrity Checksum (Phase 12)
 	checksum, err := s.CalculateHash(m.Command)
-	if err == nil {
-		m.Checksum = checksum
+	if err != nil {
+		return fmt.Errorf("failed to verify skill binary size/hash: %w", err)
 	}
+	m.Checksum = checksum
 
 	// 5. Ensure ManifestV1 is synthesized if missing, and persist to <id>.manifest.json
 	if m.ManifestV1 == nil {
@@ -104,7 +105,7 @@ func (s *SkillService) InstallSkill(m types.SkillManifest) error {
 
 	manifestDest := filepath.Join(s.skillsDir, m.ID+".manifest.json")
 	if manifestData, err := json.MarshalIndent(m.ManifestV1, "", "  "); err == nil {
-		_ = os.WriteFile(manifestDest, manifestData, 0644)
+		_ = os.WriteFile(manifestDest, manifestData, 0600)
 	}
 
 	return s.repo.UpsertSkill(m)
@@ -112,12 +113,29 @@ func (s *SkillService) InstallSkill(m types.SkillManifest) error {
 
 
 func (s *SkillService) CalculateHash(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:]), nil
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	if fi.Size() > skills.MaxWASMBinaryBytes {
+		return "", fmt.Errorf("WASM binary %s exceeds maximum allowed size (%d > %d bytes)", path, fi.Size(), skills.MaxWASMBinaryBytes)
+	}
+
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, skills.MaxWASMBinaryBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if n > skills.MaxWASMBinaryBytes {
+		return "", fmt.Errorf("WASM binary %s exceeds maximum allowed size (%d bytes)", path, skills.MaxWASMBinaryBytes)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func copyFile(src, dst string) error {
@@ -127,19 +145,36 @@ func copyFile(src, dst string) error {
 	}
 	defer sourceFile.Close()
 
-	destFile, err := os.Create(dst)
+	fi, err := sourceFile.Stat()
 	if err != nil {
 		return err
 	}
-	defer destFile.Close()
+	if fi.Size() > skills.MaxWASMBinaryBytes {
+		return fmt.Errorf("skill binary %s exceeds maximum allowed size (%d > %d bytes)", src, fi.Size(), skills.MaxWASMBinaryBytes)
+	}
 
-	_, err = io.Copy(destFile, sourceFile)
+	destFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
 
-	// Make executable if it's a binary/wasm (usually just keep bits or set 0755)
-	return os.Chmod(dst, 0755)
+	n, err := io.Copy(destFile, io.LimitReader(sourceFile, skills.MaxWASMBinaryBytes+1))
+	if err != nil {
+		_ = destFile.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if n > skills.MaxWASMBinaryBytes {
+		_ = destFile.Close()
+		_ = os.Remove(dst)
+		return fmt.Errorf("skill binary %s exceeds maximum allowed size (%d bytes)", src, skills.MaxWASMBinaryBytes)
+	}
+	if err := destFile.Close(); err != nil {
+		return err
+	}
+
+	// WASM bytecode is executed by Wazero, never directly by the OS; restrict to owner-only 0600.
+	return os.Chmod(dst, 0600)
 }
 
 
@@ -260,10 +295,8 @@ func parseManifestData(data []byte, defaultID string) (types.SkillManifest, erro
 	if version == "" {
 		version = "1.0.0"
 	}
-	tier := raw.Tier
-	if tier == 0 {
-		tier = types.Tier2CommunityVerified
-	}
+	// External/injected skills always start as Tier3Unverified until explicitly trusted by an operator.
+	tier := types.Tier3Unverified
 
 	// Handle parameters schema flexibly: could be raw string or JSON object/array
 	schemaBytes := raw.ParamsSchema
@@ -354,7 +387,12 @@ func (s *SkillService) RegisterFromWASM(path string, manifestPath string) (types
 		if wasmFile == "" {
 			wasmFile = strings.TrimSuffix(filepath.Base(manifestPath), filepath.Ext(manifestPath)) + ".wasm"
 		}
-		resolvedWASM := filepath.Join(filepath.Dir(manifestPath), wasmFile)
+		manifestDir := filepath.Clean(filepath.Dir(manifestPath))
+		resolvedWASM := filepath.Clean(filepath.Join(manifestDir, wasmFile))
+		relWASM, relErr := filepath.Rel(manifestDir, resolvedWASM)
+		if relErr != nil || relWASM == ".." || strings.HasPrefix(relWASM, ".."+string(os.PathSeparator)) || filepath.IsAbs(wasmFile) {
+			return types.SkillManifest{}, fmt.Errorf("invalid wasm module path '%s': escapes manifest directory", wasmFile)
+		}
 		if _, err := os.Stat(resolvedWASM); err != nil {
 			return types.SkillManifest{}, fmt.Errorf("wasm module '%s' referenced in manifest was not found at '%s'", wasmFile, resolvedWASM)
 		}
@@ -429,14 +467,15 @@ func (s *SkillService) RegisterFromWASM(path string, manifestPath string) (types
 			Name:        id,
 			Description: fmt.Sprintf("Injected local skill (%s)", id),
 			Version:     "1.0.0",
-			Tier:        types.Tier2CommunityVerified,
+			Tier:        types.Tier3Unverified,
 		}
 	}
 
-	// 4. Enforce security constraints
+	// 4. Enforce security constraints (external/injected skills always start unverified)
 	m.Command = absPath
 	m.Engine = "wasm"
 	m.IsOfficial = false
+	m.Tier = types.Tier3Unverified
 
 	// 5. Install (copy to internal skills storage, calculate SHA-256 hash, persist to DB)
 	if err := s.InstallSkill(m); err != nil {

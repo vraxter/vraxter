@@ -75,7 +75,10 @@ func (h *AgentHandler) InstallSkill(ctx context.Context, req *v1.InstallSkillReq
 	if err := EnforceScope(ctx, "skills:write"); err != nil {
 		return nil, err
 	}
-	if h.config.PrivacyPolicy == "strict_local" {
+	h.cfgMu.RLock()
+	privacyPolicy := h.config.PrivacyPolicy
+	h.cfgMu.RUnlock()
+	if privacyPolicy == "strict_local" {
 		return &v1.InstallSkillResponse{
 			Success: false,
 			Message: "Error: Vraxter is in strict_local mode. Hub interaction is disabled. Use 'vraxter skills inject' for local files.",
@@ -88,7 +91,10 @@ func (h *AgentHandler) DownloadSkill(ctx context.Context, req *v1.DownloadSkillR
 	if err := EnforceScope(ctx, "skills:write"); err != nil {
 		return nil, err
 	}
-	if h.config.PrivacyPolicy == "strict_local" {
+	h.cfgMu.RLock()
+	privacyPolicy := h.config.PrivacyPolicy
+	h.cfgMu.RUnlock()
+	if privacyPolicy == "strict_local" {
 		return &v1.DownloadSkillResponse{
 			Success: false,
 			Message: "Error: Vraxter is in strict_local mode. Hub interaction is disabled.",

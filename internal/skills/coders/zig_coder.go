@@ -17,10 +17,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/pkg/interfaces"
+	"github.com/vraxter/vraxter/pkg/types"
 )
 
 type ZigToolchain interface {
@@ -39,15 +39,22 @@ type ZigCoder struct {
 func (c *ZigCoder) Language() string { return "zig" }
 
 func (c *ZigCoder) Compile(name, description, paramsSchema, code string, permissions []string) error {
+	return c.CompileWithManifest(name, description, paramsSchema, code, permissions, nil)
+}
+
+func (c *ZigCoder) CompileWithManifest(name, description, paramsSchema, code string, permissions []string, manifestV1 *types.SkillManifestV1) error {
 	if !c.TM.IsReady("zig") {
 		if err := c.TM.SetupSDK("zig"); err != nil {
 			return err
 		}
 	}
 
-	skillID := strings.ReplaceAll(strings.ToLower(name), " ", "-")
-	workDir := filepath.Join(os.TempDir(), "vraxter-zig-build-"+skillID)
-	os.MkdirAll(workDir, 0700)
+	skillID := sanitizeSkillID(name)
+	workDir, err := os.MkdirTemp("", "vraxter-zig-build-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary Zig build directory: %w", err)
+	}
+	_ = os.Chmod(workDir, 0700)
 	defer os.RemoveAll(workDir)
 
 	srcPath := filepath.Join(workDir, "main.zig")
@@ -64,18 +71,21 @@ func (c *ZigCoder) Compile(name, description, paramsSchema, code string, permiss
 		return fmt.Errorf("zig compiler failed: %v | log: %s", err, string(output))
 	}
 
+	_ = os.Chmod(wasmPath, 0600)
+
 	checksum := ""
 	if data, err := os.ReadFile(wasmPath); err == nil {
 		h := sha256.Sum256(data)
 		checksum = hex.EncodeToString(h[:])
 	}
 
-	manifest := BuildAndSaveV1Manifest(c.SkillsDir, skillID, name, description, wasmPath, checksum, paramsSchema, "zig", permissions)
+	manifest := BuildAndSaveV1ManifestWithTemplate(c.SkillsDir, skillID, name, description, wasmPath, checksum, paramsSchema, "zig", permissions, manifestV1)
 
-	// 7. Execution Dry-Run Verification (Failsafe)
-	_, err = c.Runner.Execute(context.Background(), manifest, map[string]interface{}{"_vraxter_dry_run": true})
+	// 7. Execution Dry-Run Verification (Failsafe in zero-capability sandbox)
+	_, err = c.Runner.Execute(context.Background(), dryRunSandboxManifest(manifest), map[string]interface{}{"_vraxter_dry_run": true})
 	if err != nil {
-		os.Remove(wasmPath) // Purge corrupted binary
+		_ = os.Remove(wasmPath) // Purge corrupted binary
+		_ = os.Remove(filepath.Join(c.SkillsDir, skillID+".manifest.json"))
 		return fmt.Errorf("skill compiled successfully but failed verification check (Dry-Run crashed): %v", err)
 	}
 

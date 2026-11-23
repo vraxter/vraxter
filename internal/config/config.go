@@ -14,6 +14,15 @@ import (
 	"path/filepath"
 )
 
+// HostExecConfig controls local guarded host command execution ($).
+// Enabled is always false by default and can ONLY be toggled locally via --enable-host-exec
+// or local settings.json (never mutable over gRPC).
+type HostExecConfig struct {
+	Enabled           bool   `json:"enabled"`
+	CommandsFile      string `json:"commands_file,omitempty"`
+	DefaultTimeoutSec int    `json:"default_timeout_sec,omitempty"`
+}
+
 // Config holds global daemon data.
 type Config struct {
 	AppDir               string
@@ -30,15 +39,17 @@ type Config struct {
 	HubURL               string
 	RequireSkillApproval bool
 	WhitelistedIPs       []string
+	HostExec             HostExecConfig
 }
 
 type Settings struct {
-	Implementation       string   `json:"implementation"`
-	PrivacyPolicy        string   `json:"privacy_policy"`
-	IsolationMode        string   `json:"isolation_mode,omitempty"`
-	HubURL               string   `json:"hub_url"`
-	RequireSkillApproval bool     `json:"require_skill_approval"`
-	WhitelistedIPs       []string `json:"whitelisted_ips"`
+	Implementation       string         `json:"implementation"`
+	PrivacyPolicy        string         `json:"privacy_policy"`
+	IsolationMode        string         `json:"isolation_mode,omitempty"`
+	HubURL               string         `json:"hub_url"`
+	RequireSkillApproval bool           `json:"require_skill_approval"`
+	WhitelistedIPs       []string       `json:"whitelisted_ips"`
+	HostExec             HostExecConfig `json:"host_exec"`
 }
 
 // DefaultHubURL can be overridden at build time using -ldflags "-X github.com/vraxter/vraxter/internal/config.DefaultHubURL=..."
@@ -77,6 +88,11 @@ func Load() Config {
 	var hub = DefaultHubURL
 	var requireSkillApproval = false
 	var whitelistedIPs []string
+	hostExec := HostExecConfig{
+		Enabled:           false,
+		CommandsFile:      filepath.Join(appDir, "host_commands.json"),
+		DefaultTimeoutSec: 15,
+	}
 
 	if data, err := os.ReadFile(settingsPath); err == nil {
 		var s Settings
@@ -100,6 +116,13 @@ func Load() Config {
 			requireSkillApproval = s.RequireSkillApproval
 			if len(s.WhitelistedIPs) > 0 {
 				whitelistedIPs = s.WhitelistedIPs
+			}
+			hostExec.Enabled = s.HostExec.Enabled
+			if s.HostExec.CommandsFile != "" {
+				hostExec.CommandsFile = s.HostExec.CommandsFile
+			}
+			if s.HostExec.DefaultTimeoutSec > 0 {
+				hostExec.DefaultTimeoutSec = s.HostExec.DefaultTimeoutSec
 			}
 		}
 	}
@@ -149,6 +172,7 @@ func Load() Config {
 		HubURL:               hub,
 		RequireSkillApproval: requireSkillApproval,
 		WhitelistedIPs:       whitelistedIPs,
+		HostExec:             hostExec,
 	}
 }
 
@@ -161,6 +185,7 @@ func (c *Config) SaveSettings() error {
 		HubURL:               c.HubURL,
 		RequireSkillApproval: c.RequireSkillApproval,
 		WhitelistedIPs:       c.WhitelistedIPs,
+		HostExec:             c.HostExec,
 	}
 	data, _ := json.MarshalIndent(s, "", "  ")
 	return os.WriteFile(filepath.Join(c.AppDir, "settings.json"), data, 0600)

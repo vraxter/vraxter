@@ -46,8 +46,8 @@ func (h *AgentHandler) GenerateToken(ctx context.Context, req *v1.GenerateTokenR
 		Scopes:    req.Scopes,
 	}
 
-	if globalAPIKeyRepo != nil {
-		if err := globalAPIKeyRepo.Create(apiKey); err != nil {
+	if repo := getAPIKeyRepo(); repo != nil {
+		if err := repo.Create(apiKey); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to save token: %v", err)
 		}
 	} else {
@@ -65,8 +65,8 @@ func (h *AgentHandler) RevokeToken(ctx context.Context, req *v1.RevokeTokenReque
 		return nil, status.Errorf(codes.PermissionDenied, "only root key can revoke tokens")
 	}
 
-	if globalAPIKeyRepo != nil {
-		if err := globalAPIKeyRepo.Delete(req.Id); err != nil {
+	if repo := getAPIKeyRepo(); repo != nil {
+		if err := repo.Delete(req.Id); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to delete token: %v", err)
 		}
 	} else {
@@ -85,8 +85,8 @@ func (h *AgentHandler) ListTokens(ctx context.Context, req *v1.ListTokensRequest
 	}
 
 	var res []*v1.TokenInfo
-	if globalAPIKeyRepo != nil {
-		keys, err := globalAPIKeyRepo.List()
+	if repo := getAPIKeyRepo(); repo != nil {
+		keys, err := repo.List()
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to list tokens: %v", err)
 		}

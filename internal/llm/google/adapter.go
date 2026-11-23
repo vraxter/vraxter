@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/vraxter/vraxter/internal/llm/registry"
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 )
 
@@ -82,7 +83,7 @@ func NewAdapter(apiKey, host string) *Adapter {
 	return &Adapter{
 		apiKey:     apiKey,
 		host:       strings.TrimSuffix(host, "/"),
-		httpClient: &http.Client{},
+		httpClient: utils.NewDDILHTTPClient(),
 	}
 }
 
@@ -217,7 +218,7 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 		defer close(ch)
 		resp, err := a.httpClient.Do(httpReq)
 		if err != nil {
-			ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err}
+			interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err})
 			return
 		}
 		defer resp.Body.Close()
@@ -226,31 +227,36 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			var errData []map[string]interface{}
 			json.Unmarshal(bodyBytes, &errData)
-			ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: fmt.Errorf("google stream error %d: %v", resp.StatusCode, errData)}
+			interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: fmt.Errorf("google stream error %d: %v", resp.StatusCode, errData)})
 			return
 		}
 
 		dec := json.NewDecoder(resp.Body)
 		_, err = dec.Token()
 		if err != nil {
-			ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: fmt.Errorf("failed to parse stream start: %w", err)}
+			interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: fmt.Errorf("failed to parse stream start: %w", err)})
 			return
 		}
 
 		for dec.More() {
+			if ctx.Err() != nil {
+				return
+			}
 			var chunk geminiRes
 			if err := dec.Decode(&chunk); err != nil {
-				ch <- interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: fmt.Errorf("failed to decode chunk: %w", err)}
+				interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: fmt.Errorf("failed to decode chunk: %w", err)})
 				return
 			}
 
 			if len(chunk.Candidates) > 0 && len(chunk.Candidates[0].Content.Parts) > 0 {
 				token := chunk.Candidates[0].Content.Parts[0].Text
-				ch <- interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: token}
+				if !interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeToken, Content: token}) {
+					return
+				}
 			}
 		}
 
-		ch <- interfaces.StreamEvent{Type: interfaces.EventTypeDone}
+		interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeDone})
 	}()
 
 	return ch, nil

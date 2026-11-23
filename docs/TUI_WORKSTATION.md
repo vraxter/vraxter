@@ -96,7 +96,7 @@ System telemetry, background jobs, and execution confirmations are rendered as b
 | Command | Arguments | Description |
 | :--- | :--- | :--- |
 | **`/start`** | — | Launches the unified onboarding flow (Profile ➔ Providers ➔ Models). |
-| **`/help`, `/?`** | — | Displays the interactive keyboard and command reference. |
+| **`/help`, `/?`** | — | Displays the interactive command reference (pressing `?` with empty input toggles the live help overlay; `ESC` closes it). |
 | **`/airgap`, `/isolation`** | — | Displays live telemetry on socket dialer, DNS filters, and zero-egress state. |
 | **`/plan`** | `<task>` | Decomposes complex goals into multi-phase `.vrx` implementation plans. |
 | **`/specialists`** | `[list/add/delete]` | Manages domain sub-agents (or delegate directly via `@<name>`). |
@@ -117,6 +117,6 @@ System telemetry, background jobs, and execution confirmations are rendered as b
 
 ## 7. Real-Time Architecture
 
-The TUI connects to the headless `vraxter` daemon over **Connect RPC / gRPC (HTTP/2)**:
+The TUI connects to the headless `vraxter server` daemon over **gRPC (HTTP/2)** on `127.0.0.1:50051`:
 - **Zero-Latency Streaming**: LLM tokens render in real time without buffering.
 - **Asynchronous Global Event Bus**: Background task completions, tool invocations, and supervisor handoffs arrive as push notifications, eliminating CPU-intensive polling loops.
