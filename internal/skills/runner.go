@@ -28,6 +28,9 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/experimental/sysfs"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/vraxter/vraxter/internal/audit"
+	"github.com/vraxter/vraxter/internal/security"
+	"github.com/vraxter/vraxter/internal/telemetry"
 	"github.com/vraxter/vraxter/pkg/types"
 )
 
@@ -102,18 +105,21 @@ type networkPolicy struct {
 }
 
 type Runner struct {
-	Timeout          time.Duration
-	MaxBinaryBytes   int64
-	MaxMemoryPages   uint32
-	compilationCache wazero.CompilationCache
-	runtimes         map[uint32]wazero.Runtime       // keyed by memoryLimitPages
-	cache            map[moduleCacheKey]*cachedModule // indexed by (SHA-256, memoryLimitPages)
-	pathHash         map[string]string                // maps normalized .wasm path -> latest SHA-256 hex
-	execSem          chan struct{}                    // bounded execution concurrency semaphore
-	mu               sync.RWMutex
-	isolationMode    string
-	whitelistedIPs   []string
-	allowHostMounts  bool
+	Timeout             time.Duration
+	MaxBinaryBytes      int64
+	MaxMemoryPages      uint32
+	compilationCache    wazero.CompilationCache
+	runtimes            map[uint32]wazero.Runtime       // keyed by memoryLimitPages
+	cache               map[moduleCacheKey]*cachedModule // indexed by (SHA-256, memoryLimitPages)
+	pathHash            map[string]string                // maps normalized .wasm path -> latest SHA-256 hex
+	execSem             chan struct{}                    // bounded execution concurrency semaphore
+	mu                  sync.RWMutex
+	isolationMode       string
+	whitelistedIPs      []string
+	allowHostMounts     bool
+	trustedSignersDir   string
+	requireSignedSkills bool
+	auditLedger         *audit.Ledger
 }
 
 func (rn *Runner) maxBinaryBytes() int64 {
@@ -250,6 +256,131 @@ func (rn *Runner) SetAllowHostMounts(allow bool) {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
 	rn.allowHostMounts = allow
+}
+
+// SetTrustedSignersDir configures the directory containing trusted Ed25519 public keys for pre-execution verification.
+func (rn *Runner) SetTrustedSignersDir(dir string) {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	rn.trustedSignersDir = strings.TrimSpace(dir)
+}
+
+// TrustedSignersDir returns the configured directory of trusted Ed25519 public keys.
+func (rn *Runner) TrustedSignersDir() string {
+	rn.mu.RLock()
+	defer rn.mu.RUnlock()
+	return rn.trustedSignersDir
+}
+
+// SetRequireSignedSkills controls whether unsigned skills (missing a valid Ed25519 .sig) are blocked at runtime.
+func (rn *Runner) SetRequireSignedSkills(require bool) {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	rn.requireSignedSkills = require
+}
+
+// RequireSignedSkills reports whether unsigned skills are blocked at runtime.
+func (rn *Runner) RequireSignedSkills() bool {
+	rn.mu.RLock()
+	defer rn.mu.RUnlock()
+	return rn.requireSignedSkills
+}
+
+// SetAuditLedger attaches a forensic audit ledger to the WASM runner.
+func (rn *Runner) SetAuditLedger(l *audit.Ledger) {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	rn.auditLedger = l
+}
+
+func (rn *Runner) recordAudit(ctx context.Context, eventType string, payload interface{}) {
+	rn.mu.RLock()
+	l := rn.auditLedger
+	rn.mu.RUnlock()
+	if l == nil {
+		l = audit.DefaultLedger()
+	}
+	if l == nil {
+		return
+	}
+	_, _ = l.Append(ctx, audit.AuditEventInput{
+		EventType: eventType,
+		Payload:   payload,
+	})
+}
+
+func (rn *Runner) verifyPreExecutionSignature(manifest *types.SkillManifest, currentHash string) (string, error) {
+	sigPath := security.DiscoverSkillSignaturePath(manifest.Command, "", manifest.ID)
+	if sigPath == "" {
+		if rn.RequireSignedSkills() {
+			return "", fmt.Errorf("VRAXTER SHIELD: skill '%s' is unsigned (.sig missing) and require_signed_skills is enabled (Tier3Unverified blocked)", manifest.ID)
+		}
+		return "", nil
+	}
+
+	env, err := security.LoadSignatureEnvelope(sigPath)
+	if err != nil {
+		return "", fmt.Errorf("VRAXTER SHIELD: skill '%s' has a corrupt signature file: %w", manifest.ID, err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(env.WASMSha256), strings.TrimSpace(currentHash)) {
+		return "", fmt.Errorf("VRAXTER SHIELD: skill '%s' WASM binary SHA-256 (%s) does not match Ed25519 signature (%s)", manifest.ID, currentHash, env.WASMSha256)
+	}
+
+	trustDir := rn.TrustedSignersDir()
+	if trustDir == "" && strings.TrimSpace(manifest.Command) != "" {
+		trustDir = filepath.Join(filepath.Dir(filepath.Dir(filepath.Clean(manifest.Command))), "trusted_signers")
+	}
+	store := security.NewTrustedSignerStore(trustDir)
+
+	var verifiedSigner *security.TrustedSigner
+	checkedManifest := false
+
+	// 1. If an adjacent <id>.manifest.json or manifest.json exists on disk, verify it matches the signature.
+	if strings.TrimSpace(manifest.Command) != "" {
+		wasmDir := filepath.Dir(manifest.Command)
+		baseNoExt := strings.TrimSuffix(filepath.Base(manifest.Command), filepath.Ext(manifest.Command))
+		for _, cand := range []string{
+			filepath.Join(wasmDir, manifest.ID+".manifest.json"),
+			filepath.Join(wasmDir, baseNoExt+".manifest.json"),
+			filepath.Join(wasmDir, "manifest.json"),
+		} {
+			if raw, readErr := os.ReadFile(cand); readErr == nil {
+				canonicalDisk, cErr := security.CanonicalizeManifestJSON(raw)
+				if cErr != nil {
+					return "", fmt.Errorf("VRAXTER SHIELD: failed canonicalizing on-disk manifest %s: %w", cand, cErr)
+				}
+				signer, _, vErr := store.VerifySkillAgainstStore(manifest.Command, canonicalDisk, sigPath)
+				if vErr != nil {
+					return "", vErr
+				}
+				verifiedSigner = signer
+				checkedManifest = true
+				break
+			}
+		}
+	}
+
+	// 2. If manifest.ManifestV1 is populated in memory, also verify it matches the signature (prevents in-memory tampering).
+	if manifest.ManifestV1 != nil {
+		canonicalMem, cErr := security.CanonicalizeSkillManifestV1(manifest.ManifestV1)
+		if cErr != nil {
+			return "", fmt.Errorf("VRAXTER SHIELD: failed canonicalizing in-memory ManifestV1: %w", cErr)
+		}
+		signer, _, vErr := store.VerifySkillAgainstStore(manifest.Command, canonicalMem, sigPath)
+		if vErr != nil {
+			return "", vErr
+		}
+		verifiedSigner = signer
+		checkedManifest = true
+	}
+
+	if !checkedManifest || verifiedSigner == nil {
+		return "", fmt.Errorf("VRAXTER SHIELD: signed skill '%s' is missing a verifiable V1 manifest", manifest.ID)
+	}
+
+	manifest.Tier = verifiedSigner.TrustTier
+	manifest.IsOfficial = (verifiedSigner.TrustTier == types.Tier1Official)
+	return verifiedSigner.KeyID, nil
 }
 
 // HasCachedHash reports whether a compiled WASM module with the given SHA-256 is currently cached.
@@ -586,6 +717,11 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 	timeout := manifest.GetExecutionTimeout(rn.Timeout)
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if !isDryRun {
+		newCtx, span := telemetry.StartSpan(execCtx, "runner.ExecuteWASM")
+		execCtx = newCtx
+		defer span.End()
+	}
 	execCtx = context.WithValue(execCtx, manifestKey, manifest)
 	execCtx = context.WithValue(execCtx, networkPolicyKey, networkPolicy{
 		isolationMode:  isoMode,
@@ -607,6 +743,15 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 		return nil, fmt.Errorf("shield: failed to verify binary integrity: %w", err)
 	}
 	if manifest.Checksum != "" && currentHash != manifest.Checksum {
+		if !isDryRun {
+			rn.recordAudit(execCtx, audit.EventPolicyEvaluated, map[string]interface{}{
+				"check":       "wasm_binary_integrity",
+				"skill_id":    manifest.ID,
+				"wasm_sha256": currentHash,
+				"decision":    "DENY",
+				"reason":      "checksum_mismatch",
+			})
+		}
 		return nil, fmt.Errorf(
 			"CRITICAL SECURITY ALERT: Binary %s integrity verification FAILED. "+
 				"Expected %s, got %s. Possible hijacking or corruption detected",
@@ -616,19 +761,51 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 		)
 	}
 
+	var signerKeyID string
 	if !isDryRun {
+		var sigErr error
+		signerKeyID, sigErr = rn.verifyPreExecutionSignature(&manifest, currentHash)
+		if sigErr != nil {
+			rn.recordAudit(execCtx, audit.EventPolicyEvaluated, map[string]interface{}{
+				"check":       "wasm_signature_verification",
+				"skill_id":    manifest.ID,
+				"wasm_sha256": currentHash,
+				"trust_tier":  int(manifest.Tier),
+				"decision":    "DENY",
+				"reason":      sigErr.Error(),
+			})
+			return nil, sigErr
+		}
+
 		isOfficial := manifest.IsOfficial
 		hasHighReputation := manifest.Score >= 4.0 && manifest.Downloads > 100
 		isSandboxSafe := len(manifest.Permissions) == 0 && !hasPrivilegedCapabilities(manifest.ManifestV1)
 
-		isAuthorized := isOfficial || hasHighReputation || isSandboxSafe
+		isAuthorized := isOfficial || hasHighReputation || isSandboxSafe || manifest.Tier == types.Tier1Official || manifest.Tier == types.Tier2CommunityVerified
 
 		// Fail-closed: unset Tier (0) or Tier3Unverified require explicit trust for any privileged skill.
 		if !isAuthorized && (manifest.Tier == 0 || manifest.Tier >= types.Tier3Unverified) {
+			rn.recordAudit(execCtx, audit.EventPolicyEvaluated, map[string]interface{}{
+				"check":       "wasm_trust_tier",
+				"skill_id":    manifest.ID,
+				"wasm_sha256": currentHash,
+				"trust_tier":  int(manifest.Tier),
+				"decision":    "DENY",
+				"reason":      "untrusted_privileged_skill",
+			})
 			return nil, fmt.Errorf(
 				"VRAXTER SHIELD: Skill '%s' requires specialized permissions and lacks community trust. "+
 					"To allow this skill, run 'vraxter skills trust %s'", manifest.ID, manifest.ID)
 		}
+
+		rn.recordAudit(execCtx, audit.EventPolicyEvaluated, map[string]interface{}{
+			"check":         "wasm_trust_and_signature",
+			"skill_id":      manifest.ID,
+			"wasm_sha256":   currentHash,
+			"trust_tier":    int(manifest.Tier),
+			"signer_key_id": signerKeyID,
+			"decision":      "ALLOW",
+		})
 	}
 
 	// Validate mount policy, path containment, and wrap every mount with quotaFS BEFORE instantiating.
@@ -812,15 +989,55 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 		}
 	}
 
+	wasmStart := time.Now()
+	if !isDryRun {
+		rn.recordAudit(execCtx, audit.EventWASMExecStart, map[string]interface{}{
+			"skill_id":      manifest.ID,
+			"wasm_sha256":   currentHash,
+			"trust_tier":    int(manifest.Tier),
+			"signer_key_id": signerKeyID,
+		})
+	}
+
 	mod, err := cached.runtime.InstantiateModule(execCtx, cached.compiled, config)
 	if err != nil {
 		for _, qm := range quotaMounts {
 			if v := qm.Violation(); v != "" {
+				if !isDryRun {
+					rn.recordAudit(execCtx, audit.EventWASMExecEnd, map[string]interface{}{
+						"skill_id":      manifest.ID,
+						"wasm_sha256":   currentHash,
+						"trust_tier":    int(manifest.Tier),
+						"signer_key_id": signerKeyID,
+						"exit_status":   "policy_violation",
+						"duration_ms":   time.Since(wasmStart).Milliseconds(),
+					})
+				}
 				return nil, fmt.Errorf("VRAXTER SHIELD: filesystem policy violation on mount '%s': %s (guest err: %v)", qm.guestPath, v, err)
 			}
 		}
 		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+			if !isDryRun {
+				rn.recordAudit(execCtx, audit.EventWASMExecEnd, map[string]interface{}{
+					"skill_id":      manifest.ID,
+					"wasm_sha256":   currentHash,
+					"trust_tier":    int(manifest.Tier),
+					"signer_key_id": signerKeyID,
+					"exit_status":   "timeout",
+					"duration_ms":   time.Since(wasmStart).Milliseconds(),
+				})
+			}
 			return nil, fmt.Errorf("wasm skill execution timed out")
+		}
+		if !isDryRun {
+			rn.recordAudit(execCtx, audit.EventWASMExecEnd, map[string]interface{}{
+				"skill_id":      manifest.ID,
+				"wasm_sha256":   currentHash,
+				"trust_tier":    int(manifest.Tier),
+				"signer_key_id": signerKeyID,
+				"exit_status":   "crashed",
+				"duration_ms":   time.Since(wasmStart).Milliseconds(),
+			})
 		}
 		return nil, fmt.Errorf(
 			"wasm skill crashed during execution: %v, stderr: %s",
@@ -833,8 +1050,29 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 	// Surface any quota/policy violation even if guest swallowed the WASI EPERM/EACCES error.
 	for _, qm := range quotaMounts {
 		if v := qm.Violation(); v != "" {
+			if !isDryRun {
+				rn.recordAudit(execCtx, audit.EventWASMExecEnd, map[string]interface{}{
+					"skill_id":      manifest.ID,
+					"wasm_sha256":   currentHash,
+					"trust_tier":    int(manifest.Tier),
+					"signer_key_id": signerKeyID,
+					"exit_status":   "policy_violation",
+					"duration_ms":   time.Since(wasmStart).Milliseconds(),
+				})
+			}
 			return nil, fmt.Errorf("VRAXTER SHIELD: filesystem policy violation on mount '%s': %s", qm.guestPath, v)
 		}
+	}
+
+	if !isDryRun {
+		rn.recordAudit(execCtx, audit.EventWASMExecEnd, map[string]interface{}{
+			"skill_id":      manifest.ID,
+			"wasm_sha256":   currentHash,
+			"trust_tier":    int(manifest.Tier),
+			"signer_key_id": signerKeyID,
+			"exit_status":   "completed",
+			"duration_ms":   time.Since(wasmStart).Milliseconds(),
+		})
 	}
 
 	// Check if output is via file (confined strictly inside the matched mount using os.OpenRoot)

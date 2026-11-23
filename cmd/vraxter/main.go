@@ -26,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	tea "charm.land/bubbletea/v2"
+	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/client"
 	"github.com/vraxter/vraxter/internal/config"
 	"github.com/vraxter/vraxter/internal/core"
@@ -37,6 +38,7 @@ import (
 	"github.com/vraxter/vraxter/internal/server"
 	"github.com/vraxter/vraxter/internal/services"
 	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/telemetry"
 	"github.com/vraxter/vraxter/internal/tui"
 	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/spf13/cobra"
@@ -56,9 +58,10 @@ var (
 	agentFlag          string
 	sessionFlag        string
 	modelFlag          string
-	airgapFlag         bool
-	enableHostExecFlag bool
-	newFlag            bool
+	airgapFlag              bool
+	enableHostExecFlag      bool
+	requireSignedSkillsFlag bool
+	newFlag                 bool
 	verboseFlag        bool
 	addrFlag           string
 	listenTCPFlag      string
@@ -81,6 +84,9 @@ func bootstrap() {
 		if enableHostExecFlag {
 			appConfig.HostExec.Enabled = true
 		}
+		if requireSignedSkillsFlag {
+			appConfig.RequireSignedSkills = true
+		}
 		if strings.TrimSpace(listenTCPFlag) != "" {
 			ep := strings.TrimSpace(listenTCPFlag)
 			if !strings.HasPrefix(ep, "tcp://") && !strings.HasPrefix(ep, "unix://") {
@@ -101,6 +107,9 @@ func bootstrap() {
 
 		// Enforce zero-egress network perimeter on all HTTP dials
 		utils.InstallAirgapPerimeter(appConfig.IsolationMode, appConfig.WhitelistedIPs)
+		_, _ = telemetry.Configure(telemetry.Config{
+			IsolationMode: appConfig.IsolationMode,
+		})
 		
 		// Setup logging: Redirect all background service logs to a file with restricted permissions (0600)
 		logFile, err := os.OpenFile(filepath.Join(appConfig.AppDir, "vraxter.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
@@ -132,9 +141,13 @@ func bootstrap() {
 		registry := skills.NewRegistry()
 		runner := skills.NewRunner()
 		runner.SetNetworkPolicy(appConfig.IsolationMode, appConfig.WhitelistedIPs)
+		runner.SetTrustedSignersDir(appConfig.TrustedSignersDir)
+		runner.SetRequireSignedSkills(appConfig.RequireSignedSkills)
 
 		skillRepo := db.NewSkillRepository(appStore)
 		appSkillService = services.NewSkillService(skillRepo, appConfig.SkillsDir)
+		appSkillService.SetTrustedSignersDir(appConfig.TrustedSignersDir)
+		appSkillService.SetRequireSignedSkills(appConfig.RequireSignedSkills)
 		if err := appSkillService.LoadAllIntoRegistry(registry); err != nil {
 			fmt.Printf("Warning: Startup Skill synchronization failed: %v\n", err)
 		}
@@ -155,6 +168,10 @@ func bootstrap() {
 			IsolationMode:  appConfig.IsolationMode,
 			WhitelistedIPs: appConfig.WhitelistedIPs,
 		}))
+		if auditLedger, aErr := audit.NewLedger(appStore, appConfig.AppDir, appConfig.AuditJSONLPath); aErr == nil {
+			appEngine.SetAuditLedger(auditLedger)
+			audit.SetDefaultLedger(auditLedger)
+		}
 
 		providerRepo := db.NewProviderRepository(appStore, appCrypto)
 		modelRepo := db.NewModelRepository(appStore, appCrypto)
@@ -200,6 +217,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVarP(&modelFlag, "model", "m", "", "Force use of a specific LLM model ID/alias")
 	rootCmd.PersistentFlags().BoolVar(&airgapFlag, "airgap", false, "Enforce strict zero-egress airgap perimeter")
 	rootCmd.PersistentFlags().BoolVar(&enableHostExecFlag, "enable-host-exec", false, "Enable guarded local host command execution ($) via host_commands.json")
+	rootCmd.PersistentFlags().BoolVar(&requireSignedSkillsFlag, "require-signed-skills", false, "Block installation and execution of unsigned skills (require valid Ed25519 signature)")
 	rootCmd.PersistentFlags().StringVar(&addrFlag, "addr", "", "Target gRPC daemon endpoint (default: unix://<AppDir>/vraxter.sock on Unix, tcp://127.0.0.1:50051 on Windows)")
 	rootCmd.PersistentFlags().StringVar(&listenTCPFlag, "listen-tcp", "", "Bind gRPC server to a TCP address with mandatory mTLS 1.3 (e.g. 0.0.0.0:50051)")
 	rootCmd.PersistentFlags().StringVar(&tlsCAFlag, "tls-ca", "", "Path to mTLS 1.3 Root CA certificate PEM")

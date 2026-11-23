@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/security"
 	"github.com/vraxter/vraxter/internal/skills"
@@ -439,10 +440,33 @@ func handleCmdHostExec(ctx context.Context, call types.ToolCall, codePayload, co
 	// originatedFromLLM = true guarantees RequiresApproval == true for ALL commands (read_only & elevated)
 	plan, err := e.HostExecGuard.Prepare(cmdName, cmdArgs, true)
 	if err != nil {
+		e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+			"check":    "host_exec_guard",
+			"command":  cmdName,
+			"decision": "DENY",
+			"reason":   err.Error(),
+			"from_llm": true,
+		})
 		errMsg := fmt.Sprintf("\n❌ Host command denied: %v", err)
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
 		return fmt.Sprintf("SYSTEM ERROR: Host command denied: %v", err)
 	}
+
+	e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+		"check":         "host_exec_guard",
+		"command":       plan.Command,
+		"binary_sha256": plan.ExpectedSHA256,
+		"tier":          string(plan.Tier),
+		"decision":      "ALLOW",
+		"from_llm":      true,
+	})
+	e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventHITLDecision, map[string]interface{}{
+		"decision":      "REQUESTED",
+		"target_type":   "host_cmd",
+		"command":       plan.Command,
+		"binary_sha256": plan.ExpectedSHA256,
+		"from_llm":      true,
+	})
 
 	approvalPayload, _ := json.Marshal(map[string]interface{}{
 		"skill_id": "vraxter-host-exec",

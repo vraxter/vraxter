@@ -47,6 +47,8 @@ type Config struct {
 	ListenAddr           string
 	SkillsDir            string
 	SDKDir               string
+	TrustedSignersDir    string
+	AuditJSONLPath       string
 	EnableGoogleHome     bool
 	SpatialConfigPath    string
 	Implementation       string
@@ -55,6 +57,7 @@ type Config struct {
 	IsAirgapLocked       bool     // True when airgap is enforced by immutable env/flag
 	HubURL               string
 	RequireSkillApproval bool
+	RequireSignedSkills  bool
 	WhitelistedIPs       []string
 	HostExec             HostExecConfig
 	TLS                  TLSConfig
@@ -66,6 +69,8 @@ type Settings struct {
 	IsolationMode        string         `json:"isolation_mode,omitempty"`
 	HubURL               string         `json:"hub_url"`
 	RequireSkillApproval bool           `json:"require_skill_approval"`
+	RequireSignedSkills  bool           `json:"require_signed_skills,omitempty"`
+	AuditJSONLPath       string         `json:"audit_jsonl_path,omitempty"`
 	WhitelistedIPs       []string       `json:"whitelisted_ips"`
 	HostExec             HostExecConfig `json:"host_exec"`
 	ListenAddr           string         `json:"listen_addr,omitempty"`
@@ -93,11 +98,13 @@ func Load() Config {
 
 	skillsDir := filepath.Join(appDir, "skills")
 	sdkDir := filepath.Join(appDir, "sdk")
+	trustedSignersDir := filepath.Join(appDir, "trusted_signers")
 
 	// Ensure the directories exist with restricted permissions (0700)
 	_ = os.MkdirAll(appDir, 0700)
 	_ = os.MkdirAll(skillsDir, 0700)
 	_ = os.MkdirAll(sdkDir, 0700)
+	_ = os.MkdirAll(trustedSignersDir, 0700)
 
 	// 3. Load from settings.json if exists
 	settingsPath := filepath.Join(appDir, "settings.json")
@@ -107,6 +114,8 @@ func Load() Config {
 	var isAirgapLocked = false
 	var hub = DefaultHubURL
 	var requireSkillApproval = false
+	var requireSignedSkills = false
+	var auditJSONLPath string
 	var whitelistedIPs []string
 	var listenAddr string
 	var tlsCfg TLSConfig
@@ -136,6 +145,10 @@ func Load() Config {
 				hub = s.HubURL
 			}
 			requireSkillApproval = s.RequireSkillApproval
+			requireSignedSkills = s.RequireSignedSkills
+			if strings.TrimSpace(s.AuditJSONLPath) != "" {
+				auditJSONLPath = strings.TrimSpace(s.AuditJSONLPath)
+			}
 			if len(s.WhitelistedIPs) > 0 {
 				whitelistedIPs = s.WhitelistedIPs
 			}
@@ -182,6 +195,12 @@ func Load() Config {
 	if envReqApp := os.Getenv("VRAXTER_REQUIRE_SKILL_APPROVAL"); envReqApp == "true" {
 		requireSkillApproval = true
 	}
+	if envReqSig := os.Getenv("VRAXTER_REQUIRE_SIGNED_SKILLS"); envReqSig == "true" || envReqSig == "1" {
+		requireSignedSkills = true
+	}
+	if envAuditJSONL := strings.TrimSpace(os.Getenv("VRAXTER_AUDIT_JSONL_PATH")); envAuditJSONL != "" {
+		auditJSONLPath = envAuditJSONL
+	}
 	if envAddr := strings.TrimSpace(os.Getenv("VRAXTER_GRPC_ADDR")); envAddr != "" {
 		listenAddr = envAddr
 	}
@@ -199,6 +218,8 @@ func Load() Config {
 		ListenAddr:           listenAddr,
 		SkillsDir:            skillsDir,
 		SDKDir:               sdkDir,
+		TrustedSignersDir:    trustedSignersDir,
+		AuditJSONLPath:       auditJSONLPath,
 		EnableGoogleHome:     os.Getenv("VRAXTER_GOOGLE_HOME") == "true",
 		SpatialConfigPath:    filepath.Join(appDir, "spatial.json"),
 		Implementation:       impl,
@@ -207,6 +228,7 @@ func Load() Config {
 		IsAirgapLocked:       isAirgapLocked,
 		HubURL:               hub,
 		RequireSkillApproval: requireSkillApproval,
+		RequireSignedSkills:  requireSignedSkills,
 		WhitelistedIPs:       whitelistedIPs,
 		HostExec:             hostExec,
 		TLS:                  tlsCfg,
@@ -238,6 +260,8 @@ func (c *Config) SaveSettings() error {
 		IsolationMode:        c.IsolationMode,
 		HubURL:               c.HubURL,
 		RequireSkillApproval: c.RequireSkillApproval,
+		RequireSignedSkills:  c.RequireSignedSkills,
+		AuditJSONLPath:       c.AuditJSONLPath,
 		WhitelistedIPs:       c.WhitelistedIPs,
 		HostExec:             c.HostExec,
 		ListenAddr:           c.ListenAddr,

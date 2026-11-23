@@ -210,6 +210,35 @@ func (s *Store) initSchema() error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS audit_ledger (
+		seq INTEGER PRIMARY KEY AUTOINCREMENT,
+		entry_id TEXT UNIQUE NOT NULL,
+		timestamp_utc TEXT NOT NULL,
+		trace_id TEXT NOT NULL,
+		session_id TEXT NOT NULL DEFAULT '',
+		actor TEXT NOT NULL,
+		event_type TEXT NOT NULL,
+		payload_json TEXT NOT NULL,
+		prev_hash TEXT NOT NULL,
+		entry_hash TEXT NOT NULL,
+		signer_key_id TEXT NOT NULL,
+		signature TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_audit_ledger_trace ON audit_ledger (trace_id);
+	CREATE INDEX IF NOT EXISTS idx_audit_ledger_ts ON audit_ledger (timestamp_utc);
+
+	CREATE TRIGGER IF NOT EXISTS trg_audit_ledger_no_update
+	BEFORE UPDATE ON audit_ledger
+	BEGIN
+		SELECT RAISE(ABORT, 'audit_ledger is append-only');
+	END;
+
+	CREATE TRIGGER IF NOT EXISTS trg_audit_ledger_no_delete
+	BEFORE DELETE ON audit_ledger
+	BEGIN
+		SELECT RAISE(ABORT, 'audit_ledger is append-only');
+	END;
+
 	`
 	_, err := s.Conn.Exec(schema)
 	if err != nil {

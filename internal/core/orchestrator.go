@@ -10,6 +10,8 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -20,12 +22,14 @@ import (
 	"github.com/google/shlex"
 
 	"github.com/google/uuid"
+	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/prompts"
 	"github.com/vraxter/vraxter/internal/security"
 	"github.com/vraxter/vraxter/internal/services"
 	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/telemetry"
 	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 	"github.com/vraxter/vraxter/pkg/types"
@@ -101,6 +105,7 @@ type Orchestrator struct {
 	UserRepo    *db.UserRepository
 	MemorySvc   *services.MemoryService
 	Swarm       *SwarmDispatcher
+	AuditLedger *audit.Ledger
 
 	// Performance Cache
 	mu                sync.RWMutex
@@ -276,7 +281,48 @@ func NewOrchestrator(
 	o.ExecEngine.RestoreModelDelegate = o.ClearSessionOverride
 	o.ExecEngine.ResolveSpecialistDelegate = o.Resolver.FindSpecialistSemantically
 	o.ExecEngine.OnSpecialistChange = o.InvalidateCache
+
+	if ledger, lErr := audit.NewLedger(store, "", ""); lErr == nil {
+		o.SetAuditLedger(ledger)
+		if audit.DefaultLedger() == nil {
+			audit.SetDefaultLedger(ledger)
+		}
+	}
 	return o, nil
+}
+
+// SetAuditLedger attaches a forensic audit ledger to the orchestrator, execution engine, and WASM runner.
+func (o *Orchestrator) SetAuditLedger(l *audit.Ledger) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.AuditLedger = l
+	o.mu.Unlock()
+	if o.ExecEngine != nil {
+		o.ExecEngine.AuditLedger = l
+		if o.ExecEngine.Runner != nil {
+			o.ExecEngine.Runner.SetAuditLedger(l)
+		}
+	}
+}
+
+func (o *Orchestrator) recordAudit(ctx context.Context, sessionID, actor, eventType string, payload interface{}) {
+	o.mu.RLock()
+	l := o.AuditLedger
+	o.mu.RUnlock()
+	if l == nil {
+		l = audit.DefaultLedger()
+	}
+	if l == nil {
+		return
+	}
+	_, _ = l.Append(ctx, audit.AuditEventInput{
+		SessionID: sessionID,
+		Actor:     actor,
+		EventType: eventType,
+		Payload:   payload,
+	})
 }
 
 // InvalidateCache clears the cache expiry to force an immediate refresh on the next query.
@@ -663,8 +709,9 @@ func (o *Orchestrator) resolveConversationContext(sessionID, specialistID string
 	return conversationID
 }
 
-func (o *Orchestrator) gatherPromptContext(ctx context.Context, text, sourceUser string) (string, string) {
+func (o *Orchestrator) gatherPromptContext(ctx context.Context, text, sourceUser string) (string, string, int) {
 	var userProfilePool, memoryContextPool string
+	var memoryCount int
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -687,6 +734,7 @@ func (o *Orchestrator) gatherPromptContext(ctx context.Context, text, sourceUser
 		ragCtx, cancel := context.WithTimeout(ctx, 8*time.Second) // Strict RAG timeout
 		defer cancel()
 		memories, _ := o.MemorySvc.SearchMemories(ragCtx, text, 3)
+		memoryCount = len(memories)
 		if len(memories) > 0 {
 			var b strings.Builder
 			for _, m := range memories {
@@ -696,7 +744,7 @@ func (o *Orchestrator) gatherPromptContext(ctx context.Context, text, sourceUser
 		}
 	}()
 	wg.Wait()
-	return userProfilePool, memoryContextPool
+	return userProfilePool, memoryContextPool, memoryCount
 }
 
 func (o *Orchestrator) resolveExecutionModel(ctx context.Context, text, sessionID, overrideModelID string, out chan<- llm.StreamEvent) (types.ModelConfig, error) {
@@ -747,9 +795,14 @@ func (o *Orchestrator) resolveExecutionModel(ctx context.Context, text, sessionI
 func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, text, specialistID, overrideModelID, sourceZone, sourceUser string) (<-chan llm.StreamEvent, error) {
 	out := make(chan llm.StreamEvent)
 	intentID := uuid.New().String()
+	ctx, _, span := telemetry.EnsureTraceID(ctx, "orchestrator.ProcessRawIntent")
 
 	go func() {
 		defer close(out)
+		defer span.End()
+		reqStart := time.Now()
+		finalStatus := "completed"
+		var resolvedModelID string
 
 		// 1. Initial Status message to confirm responsiveness
 		select {
@@ -772,6 +825,43 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 		if overrideModelID != "" {
 			_ = o.SetSessionOverride(conversationID, overrideModelID)
 		}
+
+		actor := "user"
+		if specialistID != "" {
+			actor = "specialist:" + specialistID
+		} else if strings.TrimSpace(sourceUser) != "" {
+			actor = strings.TrimSpace(sourceUser)
+		}
+
+		ctx = audit.WithSessionID(ctx, conversationID)
+		ctx = audit.WithActor(ctx, actor)
+
+		o.mu.RLock()
+		isoMode := o.IsolationMode
+		o.mu.RUnlock()
+
+		inputSum := sha256.Sum256([]byte(text))
+		inputHash := hex.EncodeToString(inputSum[:])
+
+		o.recordAudit(ctx, conversationID, actor, audit.EventRequestReceived, map[string]interface{}{
+			"input_sha256":   inputHash,
+			"input_length":   len(text),
+			"origin":         audit.OriginFromContext(ctx),
+			"isolation_mode": isoMode,
+			"specialist_id":  specialistID,
+			"source_zone":    sourceZone,
+		})
+
+		defer func() {
+			if resolvedModelID == "" {
+				resolvedModelID = o.GetActiveModelID(conversationID)
+			}
+			o.recordAudit(ctx, conversationID, actor, audit.EventResponseEmitted, map[string]interface{}{
+				"model_id":         resolvedModelID,
+				"status":           finalStatus,
+				"total_latency_ms": time.Since(reqStart).Milliseconds(),
+			})
+		}()
 
 		trimmedText := strings.TrimSpace(text)
 
@@ -813,6 +903,11 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 					}
 				}
 			}
+			o.recordAudit(ctx, conversationID, "user", audit.EventHITLDecision, map[string]interface{}{
+				"decision":    "APPROVED",
+				"target_type": "host_cmd",
+				"command":     cmdName,
+			})
 			o.ExecEngine.RunFastPath(ctx, out, types.IntentMatch{
 				Type:       types.IntentTypeCommand,
 				ID:         cmdName,
@@ -883,6 +978,11 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 			payloadStr := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!APPROVE_SKILL"))
 			var call types.ToolCall
 			if err := json.Unmarshal([]byte(payloadStr), &call); err == nil {
+				o.recordAudit(ctx, conversationID, "user", audit.EventHITLDecision, map[string]interface{}{
+					"decision":    "APPROVED",
+					"target_type": "skill",
+					"skill_id":    call.SkillID,
+				})
 				if !sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ **Skill Execution Approved:** `%s`\n", call.SkillID)}) {
 					return
 				}
@@ -911,6 +1011,11 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 			payloadStr := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!REJECT_SKILL"))
 			var call types.ToolCall
 			if err := json.Unmarshal([]byte(payloadStr), &call); err == nil {
+				o.recordAudit(ctx, conversationID, "user", audit.EventHITLDecision, map[string]interface{}{
+					"decision":    "REJECTED",
+					"target_type": "skill",
+					"skill_id":    call.SkillID,
+				})
 				if !sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n❌ **Skill Execution Rejected:** `%s`\n", call.SkillID)}) {
 					return
 				}
@@ -1052,6 +1157,12 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 			// FAST PATH 1: Exact Command Match
 			explicitMatch, intentErr := o.IdentifyIntent(ctx, trimmedText)
 			if intentErr != nil && strings.HasPrefix(trimmedText, types.CommandExecutionPrefix) {
+				finalStatus = "denied"
+				o.recordAudit(ctx, conversationID, actor, audit.EventPolicyEvaluated, map[string]interface{}{
+					"check":    "host_exec_syntax",
+					"decision": "DENY",
+					"reason":   intentErr.Error(),
+				})
 				sendEvent(ctx, out, llm.StreamEvent{
 					Type:    llm.EventTypeToken,
 					Content: fmt.Sprintf("\n❌ Host command denied: %v", intentErr),
@@ -1104,7 +1215,20 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 		o.mu.RUnlock()
 
 		// 2. Load context in parallel (RAG memory & User Profile)
-		userProfilePool, memoryContextPool := o.gatherPromptContext(ctx, trimmedText, sourceUser)
+		userProfilePool, memoryContextPool, memoryCount := o.gatherPromptContext(ctx, trimmedText, sourceUser)
+		sourcesLoaded := []string{"models_catalog", "specialists_catalog"}
+		if userProfilePool != "" {
+			sourcesLoaded = append(sourcesLoaded, "user_profile")
+		}
+		if memoryCount > 0 {
+			sourcesLoaded = append(sourcesLoaded, "rag_memories")
+		}
+		o.recordAudit(ctx, conversationID, actor, audit.EventContextAssembled, map[string]interface{}{
+			"sources":          sourcesLoaded,
+			"memory_count":     memoryCount,
+			"has_user_profile": userProfilePool != "",
+			"isolation_mode":   isoMode,
+		})
 
 		// If no model override is provided, but we have a targeted specialist, check if it has a fixed model
 		if overrideModelID == "" && specialistID != "" {
@@ -1118,8 +1242,14 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 		// LLM EXECUTION: Resolve Model (falls back to use-case intent parsing if no override)
 		modelCfg, err := o.resolveExecutionModel(ctx, trimmedText, conversationID, overrideModelID, out)
 		if err != nil {
+			finalStatus = "error"
 			sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeError, Err: err})
 			return
+		}
+		if modelCfg.Alias != "" {
+			resolvedModelID = modelCfg.Alias
+		} else {
+			resolvedModelID = modelCfg.Model
 		}
 
 		userMsgContent := text

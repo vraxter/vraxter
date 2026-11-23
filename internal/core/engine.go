@@ -13,6 +13,7 @@ package core
 import (
 	"context"
 
+	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/security"
@@ -67,6 +68,10 @@ func NewEngine(
 	if err != nil {
 		return nil, err
 	}
+	if ledger, lErr := audit.NewLedger(store, appDir, ""); lErr == nil {
+		orch.SetAuditLedger(ledger)
+		audit.SetDefaultLedger(ledger)
+	}
 	return &Engine{
 		orch:           orch,
 		SpecialistRepo: orch.SpecialistRepo,
@@ -74,6 +79,21 @@ func NewEngine(
 		ChatRepo:       orch.ChatRepo,
 		Verbose:        orch.Verbose,
 	}, nil
+}
+
+// SetAuditLedger attaches a forensic audit ledger to the engine.
+func (e *Engine) SetAuditLedger(l *audit.Ledger) {
+	if e != nil && e.orch != nil {
+		e.orch.SetAuditLedger(l)
+	}
+}
+
+// AuditLedger returns the engine's active forensic audit ledger.
+func (e *Engine) AuditLedger() *audit.Ledger {
+	if e != nil && e.orch != nil {
+		return e.orch.AuditLedger
+	}
+	return audit.DefaultLedger()
 }
 
 // JobManager returns the underlying JobManager for handling global events

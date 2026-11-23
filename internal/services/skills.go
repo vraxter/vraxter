@@ -19,8 +19,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/security"
 	"github.com/vraxter/vraxter/internal/skills"
 	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/types"
@@ -28,12 +30,51 @@ import (
 
 // SkillService handles installation and registration of system skills
 type SkillService struct {
-	repo      *db.SkillRepository
-	skillsDir string
+	repo                *db.SkillRepository
+	skillsDir           string
+	trustedSignersDir   string
+	requireSignedSkills bool
+	mu                  sync.RWMutex
 }
 
 func NewSkillService(repo *db.SkillRepository, skillsDir string) *SkillService {
-	return &SkillService{repo: repo, skillsDir: skillsDir}
+	defaultTrustDir := ""
+	if strings.TrimSpace(skillsDir) != "" {
+		defaultTrustDir = filepath.Join(filepath.Dir(filepath.Clean(skillsDir)), "trusted_signers")
+	}
+	return &SkillService{
+		repo:              repo,
+		skillsDir:         skillsDir,
+		trustedSignersDir: defaultTrustDir,
+	}
+}
+
+// SetTrustedSignersDir configures the directory containing trusted Ed25519 public keys.
+func (s *SkillService) SetTrustedSignersDir(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.trustedSignersDir = strings.TrimSpace(dir)
+}
+
+// TrustedSignersDir returns the configured directory of trusted Ed25519 public keys.
+func (s *SkillService) TrustedSignersDir() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.trustedSignersDir
+}
+
+// SetRequireSignedSkills enforces that every installed skill carries a valid Ed25519 signature.
+func (s *SkillService) SetRequireSignedSkills(require bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requireSignedSkills = require
+}
+
+// RequireSignedSkills reports whether unsigned skills are blocked at installation time.
+func (s *SkillService) RequireSignedSkills() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.requireSignedSkills
 }
 
 // InstallSkill persists a new skill to the database after copying the binary to the internal storage
@@ -55,23 +96,23 @@ func (s *SkillService) InstallSkill(m types.SkillManifest) error {
 		}
 	}
 
-	// 3. Copy if needed
-	if srcPath != destPath {
-		if err := copyFile(srcPath, destPath); err != nil {
-			return fmt.Errorf("failed to copy skill binary: %w", err)
-		}
-	}
-	m.Command = destPath
-
-	// 4. Calculate Integrity Checksum (Phase 12)
-	checksum, err := s.CalculateHash(m.Command)
+	// 2c. Calculate Integrity Checksum before copying
+	checksum, err := s.CalculateHash(srcPath)
 	if err != nil {
 		return fmt.Errorf("failed to verify skill binary size/hash: %w", err)
 	}
 	m.Checksum = checksum
 
-	// 5. Ensure ManifestV1 is synthesized if missing, and persist to <id>.manifest.json
+	// 2d. Ensure ManifestV1 is synthesized if missing so canonical verification and persistence are consistent
 	if m.ManifestV1 == nil {
+		var schemaRaw json.RawMessage
+		if trimmed := strings.TrimSpace(m.ParamsSchema); trimmed != "" {
+			if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+				schemaRaw = json.RawMessage(trimmed)
+			} else if quoted, qErr := json.Marshal(trimmed); qErr == nil {
+				schemaRaw = quoted
+			}
+		}
 		m.ManifestV1 = &types.SkillManifestV1{
 			Schema:          types.ManifestSchemaV1URI,
 			ManifestVersion: types.ManifestVersionV1,
@@ -92,7 +133,7 @@ func (s *SkillService) InstallSkill(m types.SkillManifest) error {
 				Input: types.InputSpec{
 					Via:    "stdin",
 					Format: "json",
-					Schema: json.RawMessage(m.ParamsSchema),
+					Schema: schemaRaw,
 				},
 				Output: types.OutputSpec{
 					Via:    "stdout",
@@ -112,6 +153,43 @@ func (s *SkillService) InstallSkill(m types.SkillManifest) error {
 		m.ManifestV1.Module.SHA256 = m.Checksum
 	}
 
+	// 2e. Pre-installation Ed25519 signature verification against trusted_signers/
+	sigPath := security.DiscoverSkillSignaturePath(srcPath, "", m.ID)
+	if sigPath != "" {
+		canonicalBytes, err := security.CanonicalizeSkillManifestV1(m.ManifestV1)
+		if err != nil {
+			return fmt.Errorf("failed canonicalizing skill manifest for signature verification: %w", err)
+		}
+		store := security.NewTrustedSignerStore(s.TrustedSignersDir())
+		signer, _, err := store.VerifySkillAgainstStore(srcPath, canonicalBytes, sigPath)
+		if err != nil {
+			return err
+		}
+		m.Tier = signer.TrustTier
+		m.IsOfficial = (signer.TrustTier == types.Tier1Official)
+	} else if s.RequireSignedSkills() {
+		return fmt.Errorf("VRAXTER SHIELD: skill '%s' is unsigned (.sig missing) and require_signed_skills is enabled (Tier3Unverified blocked)", m.ID)
+	}
+
+	// 3. Copy binary atomically if needed
+	if srcPath != destPath {
+		if err := copyFile(srcPath, destPath); err != nil {
+			return fmt.Errorf("failed to copy skill binary: %w", err)
+		}
+	}
+	m.Command = destPath
+
+	// 4. Copy verified signature envelope atomically if present
+	if sigPath != "" {
+		sigDest := filepath.Join(s.skillsDir, m.ID+".sig")
+		if filepath.Clean(sigPath) != filepath.Clean(sigDest) {
+			if err := utils.AtomicCopyFile(sigPath, sigDest, 0600); err != nil {
+				return fmt.Errorf("failed to persist skill signature: %w", err)
+			}
+		}
+	}
+
+	// 5. Persist <id>.manifest.json atomically
 	manifestDest := filepath.Join(s.skillsDir, m.ID+".manifest.json")
 	if manifestData, err := json.MarshalIndent(m.ManifestV1, "", "  "); err == nil {
 		if err := utils.AtomicWriteFile(manifestDest, manifestData, 0600); err != nil {

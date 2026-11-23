@@ -10,6 +10,7 @@ package security
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
@@ -119,4 +120,67 @@ func (m *KeyManager) LoadPublicKey() (*ecdsa.PublicKey, error) {
 	}
 
 	return pub.(*ecdsa.PublicKey), nil
+}
+
+// GetOrCreateEd25519Keys returns the local Ed25519 skill-signing keypair in keysDir,
+// generating and atomically saving it (0600 private, 0644 public) if it does not exist.
+func (m *KeyManager) GetOrCreateEd25519Keys(signerName string) (*Ed25519KeyPair, error) {
+	if err := os.MkdirAll(m.keysDir, 0700); err != nil {
+		return nil, err
+	}
+	privPath := filepath.Join(m.keysDir, "vraxter_ed25519.key")
+	if _, err := os.Stat(privPath); err == nil {
+		priv, name, err := LoadEd25519PrivateKey(privPath)
+		if err != nil {
+			return nil, err
+		}
+		pub := priv.Public().(ed25519.PublicKey)
+		if name == "" {
+			name = signerName
+		}
+		return &Ed25519KeyPair{
+			KeyID:      ComputeEd25519KeyID(pub),
+			SignerName: name,
+			PublicKey:  pub,
+			PrivateKey: priv,
+		}, nil
+	}
+	return m.GenerateEd25519Keys(signerName)
+}
+
+// GenerateEd25519Keys creates a new Ed25519 signing keypair in keysDir.
+func (m *KeyManager) GenerateEd25519Keys(signerName string) (*Ed25519KeyPair, error) {
+	if err := os.MkdirAll(m.keysDir, 0700); err != nil {
+		return nil, err
+	}
+	kp, err := GenerateEd25519KeyPair(signerName)
+	if err != nil {
+		return nil, err
+	}
+	privDER, err := x509.MarshalPKCS8PrivateKey(kp.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	privPEM := pem.EncodeToMemory(&pem.Block{
+		Type:    "PRIVATE KEY",
+		Headers: map[string]string{"Key-ID": kp.KeyID, "Signer-Name": kp.SignerName},
+		Bytes:   privDER,
+	})
+	if err := utils.AtomicWriteFile(filepath.Join(m.keysDir, "vraxter_ed25519.key"), privPEM, 0600); err != nil {
+		return nil, err
+	}
+
+	pubDER, err := x509.MarshalPKIXPublicKey(kp.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	pubPEM := pem.EncodeToMemory(&pem.Block{
+		Type:    "PUBLIC KEY",
+		Headers: map[string]string{"Key-ID": kp.KeyID, "Signer-Name": kp.SignerName},
+		Bytes:   pubDER,
+	})
+	if err := utils.AtomicWriteFile(filepath.Join(m.keysDir, "vraxter_ed25519.pub"), pubPEM, 0644); err != nil {
+		return nil, err
+	}
+	return kp, nil
 }
