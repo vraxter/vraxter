@@ -75,7 +75,7 @@ func (m *ProviderWizard) updateEndpointPlaceholder() {
 	pType := strings.ToLower(strings.TrimSpace(m.inputs[1].Value()))
 	switch pType {
 	case "custom":
-		m.inputs[3].Placeholder = "Base URL (e.g. http://192.168.1.35:11434/)"
+		m.inputs[3].Placeholder = "Base URL (e.g. http://127.0.0.1:11434/)"
 	case "ollama":
 		m.inputs[3].Placeholder = "Base URL (Optional, defaults to http://localhost:11434)"
 	default:
@@ -222,7 +222,7 @@ func (m *ProviderWizard) View() tea.View {
 	case 3:
 		switch pType {
 		case "custom":
-			helpText = "Enter your custom OpenAI-compatible or Ollama endpoint (e.g. http://192.168.1.35:11434/)."
+			helpText = "Enter your custom OpenAI-compatible or local Ollama endpoint (e.g. http://127.0.0.1:11434/)."
 		case "ollama":
 			helpText = "Leave empty for http://localhost:11434, or specify a remote Ollama URL."
 		default:

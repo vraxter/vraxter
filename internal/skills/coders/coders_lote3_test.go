@@ -66,15 +66,36 @@ func main() {
 		t.Fatalf("WASM build failed: %v\n%s", err, string(out))
 	}
 
-	// Instantiate and run inside real skills.Runner (proves vrax_sandbox.http_get links cleanly & HttpGet("") does not panic).
+	// 1. Without network capability declared, static verification MUST reject the module.
 	rn := skills.NewRunner()
 	defer rn.Close(context.Background())
 
-	res, err := rn.Execute(context.Background(), types.SkillManifest{
+	if _, err := rn.Execute(context.Background(), types.SkillManifest{
 		ID:      "http-sdk-test",
 		Command: wasmPath,
 		Engine:  "wasm",
 		Tier:    types.Tier3Unverified,
+	}, map[string]interface{}{}); err == nil || !strings.Contains(err.Error(), "vrax_sandbox.http_get") {
+		t.Fatalf("expected static import verification to reject http_get without network capability, got: %v", err)
+	}
+
+	// 2. With network capability declared, vrax_sandbox.http_get links cleanly and HttpGet("") returns "" without panicking.
+	res, err := rn.Execute(context.Background(), types.SkillManifest{
+		ID:      "http-sdk-test",
+		Command: wasmPath,
+		Engine:  "wasm",
+		Tier:    types.Tier2CommunityVerified,
+		ManifestV1: &types.SkillManifestV1{
+			ManifestVersion: types.ManifestVersionV1,
+			ID:              "http-sdk-test",
+			Name:            "HTTP SDK Test",
+			Version:         "1.0.0",
+			Description:     "Tests empty URL HttpGet guard",
+			Module:          types.ModuleSpec{File: "http_sdk_test.wasm"},
+			Capabilities: &types.CapabilitiesSpec{
+				Network: &types.NetworkSpec{Mode: "fetch"},
+			},
+		},
 	}, map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("Runner.Execute failed (import mismatch or panic?): %v", err)

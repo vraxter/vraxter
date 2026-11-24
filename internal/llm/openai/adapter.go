@@ -37,21 +37,98 @@ type openaiMessage struct {
 	Content interface{} `json:"content"`
 }
 
+type openaiToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+type openaiTool struct {
+	Type     string             `json:"type"`
+	Function openaiToolFunction `json:"function"`
+}
+
+type openaiToolCall struct {
+	Index    int    `json:"index,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Function struct {
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
+	} `json:"function"`
+}
+
 type openaiReq struct {
-	Model    string          `json:"model"`
-	Messages []openaiMessage `json:"messages"`
-	Stream   bool            `json:"stream,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []openaiMessage `json:"messages"`
+	Stream      bool            `json:"stream,omitempty"`
+	Temperature *float64        `json:"temperature,omitempty"`
+	Seed        *int64          `json:"seed,omitempty"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	TopP        *float64        `json:"top_p,omitempty"`
+	Tools       []openaiTool    `json:"tools,omitempty"`
 }
 
 type openaiRes struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content   string           `json:"content"`
+			ToolCalls []openaiToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		Delta struct {
-			Content string `json:"content"`
+			Content   string           `json:"content"`
+			ToolCalls []openaiToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 	} `json:"choices"`
+}
+
+func buildOpenAITools(tools []interfaces.ToolDefinition) []openaiTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]openaiTool, 0, len(tools))
+	for _, t := range tools {
+		if strings.TrimSpace(t.Name) == "" {
+			continue
+		}
+		schema := t.ParametersSchema
+		if len(bytes.TrimSpace(schema)) == 0 {
+			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		out = append(out, openaiTool{
+			Type: "function",
+			Function: openaiToolFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  schema,
+			},
+		})
+	}
+	return out
+}
+
+func parseOpenAIToolCalls(rawCalls []openaiToolCall) []interfaces.ToolCall {
+	if len(rawCalls) == 0 {
+		return nil
+	}
+	var out []interfaces.ToolCall
+	for _, rc := range rawCalls {
+		if strings.TrimSpace(rc.Function.Name) == "" {
+			continue
+		}
+		args := make(map[string]interface{})
+		rawArgs := strings.TrimSpace(rc.Function.Arguments)
+		if rawArgs != "" {
+			_ = json.Unmarshal([]byte(rawArgs), &args)
+		}
+		out = append(out, interfaces.ToolCall{
+			ID:        rc.ID,
+			Name:      rc.Function.Name,
+			Arguments: args,
+			RawJSON:   rawArgs,
+		})
+	}
+	return out
 }
 
 type Adapter struct {
@@ -170,9 +247,14 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 	}
 
 	payload := openaiReq{
-		Model:    req.Model,
-		Messages: buildOpenAIMessages(req.Messages),
-		Stream:   false,
+		Model:       req.Model,
+		Messages:    buildOpenAIMessages(req.Messages),
+		Stream:      false,
+		Temperature: req.Temperature,
+		Seed:        req.Seed,
+		MaxTokens:   req.MaxTokens,
+		TopP:        req.TopP,
+		Tools:       buildOpenAITools(req.Tools),
 	}
 
 	b, err := json.Marshal(payload)
@@ -210,7 +292,10 @@ func (a *Adapter) Generate(ctx context.Context, req interfaces.CompletionRequest
 		return interfaces.CompletionResponse{}, fmt.Errorf("no choices returned by OpenAI")
 	}
 
-	return interfaces.CompletionResponse{Content: parsed.Choices[0].Message.Content}, nil
+	return interfaces.CompletionResponse{
+		Content:   parsed.Choices[0].Message.Content,
+		ToolCalls: parseOpenAIToolCalls(parsed.Choices[0].Message.ToolCalls),
+	}, nil
 }
 
 func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionRequest) (<-chan interfaces.StreamEvent, error) {
@@ -219,9 +304,14 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 	}
 
 	payload := openaiReq{
-		Model:    req.Model,
-		Messages: buildOpenAIMessages(req.Messages),
-		Stream:   true,
+		Model:       req.Model,
+		Messages:    buildOpenAIMessages(req.Messages),
+		Stream:      true,
+		Temperature: req.Temperature,
+		Seed:        req.Seed,
+		MaxTokens:   req.MaxTokens,
+		TopP:        req.TopP,
+		Tools:       buildOpenAITools(req.Tools),
 	}
 
 	b, err := json.Marshal(payload)
@@ -258,6 +348,33 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 			return
 		}
 
+		var toolCallOrder []int
+		toolCallAccum := make(map[int]*openaiToolCall)
+		accumulateCalls := func(calls []openaiToolCall) {
+			for idx, tc := range calls {
+				slot := tc.Index
+				if slot == 0 && idx > 0 {
+					slot = idx
+				}
+				acc, exists := toolCallAccum[slot]
+				if !exists {
+					cp := tc
+					toolCallAccum[slot] = &cp
+					toolCallOrder = append(toolCallOrder, slot)
+				} else {
+					if tc.ID != "" {
+						acc.ID = tc.ID
+					}
+					if tc.Function.Name != "" {
+						acc.Function.Name += tc.Function.Name
+					}
+					if tc.Function.Arguments != "" {
+						acc.Function.Arguments += tc.Function.Arguments
+					}
+				}
+			}
+		}
+
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
@@ -284,6 +401,12 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 							return
 						}
 					}
+					if len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+						accumulateCalls(chunk.Choices[0].Delta.ToolCalls)
+					}
+					if len(chunk.Choices[0].Message.ToolCalls) > 0 {
+						accumulateCalls(chunk.Choices[0].Message.ToolCalls)
+					}
 				}
 			} else if strings.HasPrefix(line, "{") {
 				// Fallback if endpoint returned a non-SSE single JSON response
@@ -298,6 +421,12 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 							return
 						}
 					}
+					if len(single.Choices[0].Message.ToolCalls) > 0 {
+						accumulateCalls(single.Choices[0].Message.ToolCalls)
+					}
+					if len(single.Choices[0].Delta.ToolCalls) > 0 {
+						accumulateCalls(single.Choices[0].Delta.ToolCalls)
+					}
 				}
 			}
 		}
@@ -305,6 +434,30 @@ func (a *Adapter) StreamGenerate(ctx context.Context, req interfaces.CompletionR
 		if err := scanner.Err(); err != nil && ctx.Err() == nil {
 			interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeError, Err: err})
 			return
+		}
+
+		if len(toolCallOrder) > 0 {
+			var orderedRaw []openaiToolCall
+			for _, slot := range toolCallOrder {
+				if acc := toolCallAccum[slot]; acc != nil {
+					orderedRaw = append(orderedRaw, *acc)
+				}
+			}
+			for _, tc := range parseOpenAIToolCalls(orderedRaw) {
+				tcCopy := tc
+				payloadBytes, _ := json.Marshal(map[string]interface{}{
+					"skill_id": tc.Name,
+					"params":   tc.Arguments,
+				})
+				if !interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{
+					Type:     interfaces.EventTypeSkillCall,
+					SkillID:  tc.Name,
+					Content:  string(payloadBytes),
+					ToolCall: &tcCopy,
+				}) {
+					return
+				}
+			}
 		}
 
 		interfaces.SendStreamEvent(ctx, ch, interfaces.StreamEvent{Type: interfaces.EventTypeDone})

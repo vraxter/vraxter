@@ -21,6 +21,7 @@ import (
 	"github.com/vraxter/vraxter/internal/client"
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/types"
 	"github.com/spf13/cobra"
 )
@@ -48,7 +49,7 @@ var listModelsCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// 1. Try gRPC first
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err == nil {
 			defer gClient.Close()
 			models, err := gClient.ListModels(ctx, modelFilterProv)
@@ -167,7 +168,7 @@ var activateModelCmd = &cobra.Command{
 		}
 
 		p := filepath.Join(appConfig.AppDir, "active_model")
-		if err := os.WriteFile(p, []byte(id), 0644); err != nil {
+		if err := utils.AtomicWriteFile(p, []byte(id), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Error locking model: %v\n", err)
 			os.Exit(1)
 		}
@@ -265,7 +266,7 @@ func init() {
 }
 
 func getModelManager() *services.ModelManager {
-	bootstrap()
+	ensureLocalStore()
 	mRepo := db.NewModelRepository(appStore, appCrypto)
 	pRepo := db.NewProviderRepository(appStore, appCrypto)
 	return services.NewModelManager(mRepo, pRepo)

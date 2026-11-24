@@ -40,17 +40,25 @@ func TestAirgapDialer_BlocksPublicIP(t *testing.T) {
 	}
 }
 
-func TestAirgapDialer_AllowsPrivateLAN(t *testing.T) {
-	dialer := utils.NewAirgapDialer("airgap", nil)
-
+func TestAirgapDialer_BlocksUnwhitelistedPrivateLANAndAllowsLocalLAN(t *testing.T) {
 	ctx := context.Background()
-	// Dialing a private LAN IP (e.g., Ollama server on another machine) must NOT return syscall.EPERM.
-	// Since no server is actually running on 192.168.1.250:11434 in unit test environment,
-	// it should fail at the OS network layer (e.g. timeout / unreachable / connection refused),
-	// but it must NOT be rejected by the airgap perimeter interceptor (syscall.EPERM).
-	_, err := dialer(ctx, "tcp", "192.168.1.250:11434")
-	if errors.Is(err, syscall.EPERM) {
-		t.Fatalf("expected dialer to allow private LAN dial to 192.168.1.250:11434, but was blocked with EPERM")
+
+	// Strict airgap mode is loopback-only unless explicitly whitelisted: unwhitelisted RFC 1918 LAN IPs must fail with EPERM.
+	airgapDialer := utils.NewAirgapDialer("airgap", nil)
+	if _, err := airgapDialer(ctx, "tcp", "192.168.1.250:11434"); !errors.Is(err, syscall.EPERM) {
+		t.Fatalf("expected strict airgap dialer to block unwhitelisted private LAN IP with EPERM, got: %v", err)
+	}
+
+	// Explicit whitelist entry permits a specific internal endpoint even under strict airgap.
+	whitelistedAirgapDialer := utils.NewAirgapDialer("airgap", []string{"192.168.1.0/24"})
+	if _, err := whitelistedAirgapDialer(ctx, "tcp", "192.168.1.250:11434"); errors.Is(err, syscall.EPERM) {
+		t.Fatalf("expected whitelisted airgap dialer to permit CIDR-whitelisted LAN IP, but got EPERM: %v", err)
+	}
+
+	// local_lan mode permits RFC 1918 private LAN subnets (must NOT fail with syscall.EPERM).
+	lanDialer := utils.NewAirgapDialer("local_lan", nil)
+	if _, err := lanDialer(ctx, "tcp", "192.168.1.250:11434"); errors.Is(err, syscall.EPERM) {
+		t.Fatalf("expected local_lan dialer to allow private LAN dial to 192.168.1.250:11434, but was blocked with EPERM")
 	}
 }
 

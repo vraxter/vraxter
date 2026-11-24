@@ -2,11 +2,13 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
+/vraxter
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+bin/*
 
 # Test binary, built with `go test -c`
 *.test
@@ -24,18 +26,24 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
+# Secrets, keys, certificates, runtime state, and forensic artifacts
 .env
+*.key
+*.pem
+*.crt
+*.db*
+*.sqlite*
+*.working
+*.sock
+*.jsonl
+!demos/**/*.jsonl
+*.log
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# OS and Editor/IDE
+.DS_Store
+.idea/
+.vscode/
 
-*.db
-*.sqlite
-
-# Binaries
-bin/*
+# Misc build / archive artifacts
 *.rc
-output.log
 *.zip

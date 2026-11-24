@@ -11,15 +11,153 @@ package client
 import (
 	"context"
 	"fmt"
+	"net"
+	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/vraxter/vraxter/api/v1"
+	"github.com/vraxter/vraxter/internal/config"
 	"github.com/vraxter/vraxter/internal/llm"
+	"github.com/vraxter/vraxter/internal/security"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 )
+
+// ClientTLSOptions holds mTLS 1.3 client certificate paths for remote TCP connections.
+type ClientTLSOptions struct {
+	CAPath     string
+	CertPath   string
+	KeyPath    string
+	ServerName string
+}
+
+// HasPaths reports whether any TLS certificate/key path is configured.
+func (o ClientTLSOptions) HasPaths() bool {
+	return strings.TrimSpace(o.CAPath) != "" || strings.TrimSpace(o.CertPath) != "" || strings.TrimSpace(o.KeyPath) != ""
+}
+
+var (
+	transportMu        sync.RWMutex
+	defaultEndpoint    string
+	defaultTLSOptions  ClientTLSOptions
+)
+
+// ConfigureDefaultTransport sets the process-wide default gRPC endpoint and mTLS 1.3 client options.
+func ConfigureDefaultTransport(endpoint string, tlsOpts ClientTLSOptions) {
+	transportMu.Lock()
+	defer transportMu.Unlock()
+	defaultEndpoint = strings.TrimSpace(endpoint)
+	defaultTLSOptions = tlsOpts
+}
+
+// DefaultEndpoint returns the configured default gRPC endpoint, or falls back to
+// config.Load().DefaultLocalEndpoint() (unix://<AppDir>/vraxter.sock on Unix, tcp://127.0.0.1:50051 on Windows).
+func DefaultEndpoint() string {
+	transportMu.RLock()
+	ep := defaultEndpoint
+	transportMu.RUnlock()
+	if ep != "" {
+		return ep
+	}
+	cfg := config.Load()
+	return cfg.DefaultLocalEndpoint()
+}
+
+// DefaultTLSOptions returns the process-wide default mTLS 1.3 client options.
+func DefaultTLSOptions() ClientTLSOptions {
+	transportMu.RLock()
+	defer transportMu.RUnlock()
+	return defaultTLSOptions
+}
+
+func isLoopbackTCPHost(rawHost string) bool {
+	h := strings.TrimSpace(rawHost)
+	if splitH, _, err := net.SplitHostPort(h); err == nil {
+		h = splitH
+	}
+	h = strings.TrimPrefix(strings.TrimSuffix(h, "]"), "[")
+	if h == "" {
+		return false
+	}
+	if strings.EqualFold(h, "localhost") || strings.EqualFold(h, "localhost.localdomain") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+func dialDaemon(ctx context.Context, addr string, apiKey string, tlsOpts *ClientTLSOptions, block bool) (*grpc.ClientConn, error) {
+	ep := strings.TrimSpace(addr)
+	if ep == "" {
+		ep = DefaultEndpoint()
+	}
+
+	dialOpts := []grpc.DialOption{
+		grpc.WithPerRPCCredentials(NewAPICredentials(apiKey)),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: false,
+		}),
+	}
+	if block {
+		dialOpts = append(dialOpts, grpc.WithBlock())
+	}
+
+	// 1. Unix Domain Socket transport ("unix:///path/to/vraxter.sock" or "unix:/path/to/vraxter.sock")
+	if strings.HasPrefix(ep, "unix://") || strings.HasPrefix(ep, "unix:") {
+		sockPath := strings.TrimPrefix(strings.TrimPrefix(ep, "unix://"), "unix:")
+		sockPath = filepath.Clean(strings.TrimSpace(sockPath))
+		if sockPath == "" || sockPath == "." {
+			return nil, fmt.Errorf("invalid unix socket address %q", addr)
+		}
+		dialOpts = append(dialOpts,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithContextDialer(func(dialCtx context.Context, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(dialCtx, "unix", sockPath)
+			}),
+		)
+		return grpc.DialContext(ctx, "passthrough:///unix-socket", dialOpts...)
+	}
+
+	// 2. TCP transport ("tcp://host:port" or "host:port")
+	tcpAddr := strings.TrimPrefix(ep, "tcp://")
+	host, _, err := net.SplitHostPort(tcpAddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid gRPC TCP endpoint %q: %w", addr, err)
+	}
+
+	var effectiveTLS ClientTLSOptions
+	if tlsOpts != nil {
+		effectiveTLS = *tlsOpts
+	} else {
+		effectiveTLS = DefaultTLSOptions()
+	}
+
+	if effectiveTLS.HasPaths() {
+		serverName := strings.TrimSpace(effectiveTLS.ServerName)
+		if serverName == "" {
+			serverName = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+		}
+		tlsCfg, err := security.LoadClientTLSConfig(effectiveTLS.CAPath, effectiveTLS.CertPath, effectiveTLS.KeyPath, serverName)
+		if err != nil {
+			return nil, fmt.Errorf("failed configuring mTLS 1.3 client: %w", err)
+		}
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	} else if !isLoopbackTCPHost(host) {
+		return nil, fmt.Errorf("VRAXTER SHIELD: mTLS 1.3 credentials (--tls-ca, --tls-cert, --tls-key) are required for non-loopback TCP endpoint %s", tcpAddr)
+	} else {
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+
+	return grpc.DialContext(ctx, tcpAddr, dialOpts...)
+}
 
 // GRPCClient manages the connection to the Vraxter Daemon
 type GRPCClient struct {
@@ -27,21 +165,17 @@ type GRPCClient struct {
 	client v1.AgentServiceClient
 }
 
-// NewGRPCClient connects to the local daemon
+// NewGRPCClient connects to the daemon using default or configured transport credentials.
 func NewGRPCClient(addr string, apiKey string) (*GRPCClient, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	return NewGRPCClientWithTLS(addr, apiKey, nil)
+}
+
+// NewGRPCClientWithTLS connects to the daemon with explicit mTLS 1.3 options when provided.
+func NewGRPCClientWithTLS(addr string, apiKey string, tlsOpts *ClientTLSOptions) (*GRPCClient, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 
-	conn, err := grpc.DialContext(ctx, addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithPerRPCCredentials(NewAPICredentials(apiKey)),
-		grpc.WithBlock(),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                30 * time.Second,
-			Timeout:             10 * time.Second,
-			PermitWithoutStream: false,
-		}),
-	)
+	conn, err := dialDaemon(ctx, addr, apiKey, tlsOpts, true)
 	if err != nil {
 		return nil, err
 	}

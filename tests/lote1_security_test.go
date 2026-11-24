@@ -240,7 +240,7 @@ func main() { fmt.Print("EXECUTED:" + strings.Join(os.Args[1:], ",")) }
 
 	// 5. Orchestrator.ProcessRawIntent denies command injection "$" immediately without falling through to LLM
 	cryptoSvc, _ := security.NewCryptoService(filepath.Join(dir, ".masterkey"))
-	orch, err := core.NewOrchestrator(store, cryptoSvc, skills.NewRegistry(), engine.Runner, nil, nil, false, nil, false, "airgap", nil)
+	orch, err := core.NewOrchestrator(store, cryptoSvc, skills.NewRegistry(), engine.Runner, nil, false, nil, false, "airgap", nil)
 	if err != nil {
 		t.Fatalf("NewOrchestrator: %v", err)
 	}

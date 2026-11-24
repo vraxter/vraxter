@@ -51,7 +51,7 @@ func setupRealGRPCServerForScopeTests(t *testing.T) (v1.AgentServiceClient, *con
 	runner := skills.NewRunner()
 	t.Cleanup(func() { runner.Close(context.Background()) })
 
-	eng, err := core.NewEngine(store, cryptoSvc, reg, runner, nil, nil, false, t.TempDir(), false, "airgap", nil)
+	eng, err := core.NewEngine(store, cryptoSvc, reg, runner, nil, false, t.TempDir(), false, "airgap", nil)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}

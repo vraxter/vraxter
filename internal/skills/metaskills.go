@@ -9,6 +9,7 @@
 package skills
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -17,7 +18,11 @@ import (
 	"sync"
 )
 
-const maxMetaSkillReadBytes = 64000
+const (
+	maxMetaSkillReadBytes = 64000
+	// MaxMediaReadBytes caps multimedia reads for vraxter-see and vraxter-hear at 10 MB.
+	MaxMediaReadBytes int64 = 10 * 1024 * 1024
+)
 
 var (
 	workspaceRootMu sync.RWMutex
@@ -198,4 +203,90 @@ func PatchCode(path, search, replace string) string {
 	}
 
 	return fmt.Sprintf("vraxter-patch-code SUCCESS: Replaced target block in %s", path)
+}
+
+// ReadWorkspaceMediaFile reads an image or audio file strictly confined inside the active
+// workspace via os.OpenRoot, enforces MaxMediaReadBytes (10 MB) via io.LimitReader, and
+// validates real magic bytes rather than trusting file extensions.
+func ReadWorkspaceMediaFile(targetPath, expectedKind string) ([]byte, string, error) {
+	root, rel, err := openInWorkspace(targetPath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer root.Close()
+
+	f, err := root.Open(rel)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed opening workspace media file '%s': %w", targetPath, err)
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, MaxMediaReadBytes+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("failed reading workspace media file '%s': %w", targetPath, err)
+	}
+	if int64(len(data)) > MaxMediaReadBytes {
+		return nil, "", fmt.Errorf("media file '%s' exceeds maximum allowed size (%d bytes)", targetPath, MaxMediaReadBytes)
+	}
+	if len(data) == 0 {
+		return nil, "", fmt.Errorf("media file '%s' is empty", targetPath)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(expectedKind)) {
+	case "image":
+		mimeType, ok := detectImageMagicBytes(data)
+		if !ok {
+			return nil, "", fmt.Errorf("file '%s' failed image magic-byte verification (only PNG, JPEG, GIF, and WebP are permitted)", targetPath)
+		}
+		return data, mimeType, nil
+	case "audio":
+		mimeType, ok := detectAudioMagicBytes(data)
+		if !ok {
+			return nil, "", fmt.Errorf("file '%s' failed audio magic-byte verification (only WAV, OGG, FLAC, MP3, and M4A/MP4 are permitted)", targetPath)
+		}
+		return data, mimeType, nil
+	default:
+		return nil, "", fmt.Errorf("unsupported media kind '%s'", expectedKind)
+	}
+}
+
+func detectImageMagicBytes(data []byte) (string, bool) {
+	if len(data) >= 8 && bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'}) {
+		return "image/png", true
+	}
+	if len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+		return "image/jpeg", true
+	}
+	if len(data) >= 6 && (bytes.Equal(data[:6], []byte("GIF87a")) || bytes.Equal(data[:6], []byte("GIF89a"))) {
+		return "image/gif", true
+	}
+	if len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP")) {
+		return "image/webp", true
+	}
+	return "", false
+}
+
+func detectAudioMagicBytes(data []byte) (string, bool) {
+	if len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WAVE")) {
+		return "audio/wav", true
+	}
+	if len(data) >= 4 && bytes.Equal(data[:4], []byte("OggS")) {
+		return "audio/ogg", true
+	}
+	if len(data) >= 4 && bytes.Equal(data[:4], []byte("fLaC")) {
+		return "audio/flac", true
+	}
+	if len(data) >= 3 && bytes.Equal(data[:3], []byte("ID3")) {
+		return "audio/mpeg", true
+	}
+	if len(data) >= 2 && data[0] == 0xFF && (data[1]&0xE0) == 0xE0 && (data[1]&0x18) != 0x08 && (data[1]&0x06) != 0x00 {
+		return "audio/mpeg", true
+	}
+	if len(data) >= 12 && bytes.Equal(data[4:8], []byte("ftyp")) {
+		brand := string(data[8:12])
+		if brand == "M4A " || brand == "M4B " || brand == "mp42" || brand == "isom" || brand == "iso2" {
+			return "audio/mp4", true
+		}
+	}
+	return "", false
 }

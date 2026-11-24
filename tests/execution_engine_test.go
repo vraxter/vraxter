@@ -102,7 +102,6 @@ func TestDispatchToolPayload_PatchCode(t *testing.T) {
 	path := filepath.Join(dir, "code.go")
 	os.WriteFile(path, []byte("func hello() { return \"world\" }"), 0644)
 
-	out := make(chan llm.StreamEvent, 8)
 	payloadBytes, _ := json.Marshal(map[string]interface{}{
 		"skill_id": "vraxter-patch-code",
 		"params": map[string]interface{}{
@@ -112,16 +111,30 @@ func TestDispatchToolPayload_PatchCode(t *testing.T) {
 		},
 	})
 
-	result := engine.DispatchToolPayload(context.Background(), out, string(payloadBytes), "", convID)
+	// 1. Unapproved invocation must yield for HITL approval without modifying disk.
+	outUnapproved := make(chan llm.StreamEvent, 8)
+	unapprovedRes := engine.DispatchToolPayload(context.Background(), outUnapproved, string(payloadBytes), "", convID)
+	close(outUnapproved)
+	if unapprovedRes != "!YIELD_FOR_APPROVAL" {
+		t.Fatalf("expected !YIELD_FOR_APPROVAL for unapproved vraxter-patch-code, got: %q", unapprovedRes)
+	}
+	beforeContent, _ := os.ReadFile(path)
+	if strings.Contains(string(beforeContent), "Vraxter") {
+		t.Fatal("file must not be modified before HITL approval")
+	}
+
+	// 2. Explicit HITL-approved invocation applies the patch cleanly.
+	out := make(chan llm.StreamEvent, 8)
+	result := engine.DispatchToolPayload(core.WithHITLApproved(context.Background()), out, string(payloadBytes), "", convID)
 	close(out)
 
 	if !strings.Contains(result, "SUCCESS") {
-		t.Errorf("expected patch SUCCESS, got: %q", result)
+		t.Errorf("expected patch SUCCESS after HITL approval, got: %q", result)
 	}
 
 	content, _ := os.ReadFile(path)
 	if !strings.Contains(string(content), "Vraxter") {
-		t.Error("file was not actually patched")
+		t.Error("file was not actually patched after HITL approval")
 	}
 }
 

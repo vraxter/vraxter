@@ -26,6 +26,7 @@ var sessionListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List recent conversation sessions",
 	Run: func(cmd *cobra.Command, args []string) {
+		ensureLocalStore()
 		repo := db.NewChatRepository(appStore)
 		conversations, err := repo.ListConversations(20)
 		if err != nil {
@@ -52,6 +53,7 @@ var sessionClearCmd = &cobra.Command{
 	Short: "Clear a session history",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		ensureLocalStore()
 		repo := db.NewChatRepository(appStore)
 		if err := repo.DeleteConversation(args[0]); err != nil {
 			fmt.Printf("❌ Failed to clear session %s: %v\n", args[0], err)

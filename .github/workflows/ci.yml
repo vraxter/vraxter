@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - "release/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Build, Vet & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify go.mod cleanliness
+        run: go mod verify
+
+      - name: Static analysis (go vet)
+        run: go vet ./...
+
+      - name: Pure-Go reproducible build
+        run: go build -trimpath -buildvcs=false -ldflags "-X main.Version=1.0.0 -X main.Edition=community -X main.Commit=${{ github.sha }}" ./...
+
+      - name: Run full test suite (CGO_ENABLED=0)
+        run: go test -count=1 ./...
+
+      - name: Verify FIPS 140-3 pure-Go build (Linux)
+        if: runner.os == 'Linux'
+        env:
+          GOFIPS140: v1.0.0
+        run: go build -trimpath -buildvcs=false -o /tmp/vraxter-fips ./cmd/vraxter

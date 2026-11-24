@@ -1,0 +1,59 @@
+Vraxter — Sovereign Autonomous Execution Runtime
+Copyright (c) 2026 Vraxter / DARZ Industries. All rights reserved.
+
+================================================================================
+DUAL LICENSING NOTICE
+================================================================================
+
+Vraxter is distributed under a dual-licensing model:
+
+1. Open Source License:
+   GNU Affero General Public License v3.0 (AGPL-3.0). See LICENSE in the
+   repository root for full terms and conditions.
+
+2. Commercial / Enterprise License:
+   Organizations requiring proprietary modifications, closed-source embedding,
+   dedicated SLA support, or enterprise/defense deployment rights outside the
+   copyleft terms of AGPL-3.0 may obtain a commercial license from DARZ Industries.
+
+================================================================================
+THIRD-PARTY SOFTWARE NOTICES AND ATTRIBUTIONS
+================================================================================
+
+This software incorporates the following open-source components (all pure Go,
+compiled with CGO_ENABLED=0):
+
+- wazero (https://github.com/tetratelabs/wazero)
+  License: Apache License 2.0
+
+- modernc.org/sqlite (https://gitlab.com/cznic/sqlite)
+  License: BSD-3-Clause
+
+- gRPC-Go (https://google.golang.org/grpc)
+  License: Apache License 2.0
+
+- Protocol Buffers for Go (https://google.golang.org/protobuf)
+  License: BSD-3-Clause
+
+- OpenTelemetry Go (https://go.opentelemetry.io/otel)
+  License: Apache License 2.0
+
+- Cobra (https://github.com/spf13/cobra)
+  License: Apache License 2.0
+
+- Bubble Tea v2, Bubbles v2, Lip Gloss v2, Glamour v2 (https://charm.land)
+  License: MIT License
+
+- Chroma v2 (https://github.com/alecthomas/chroma)
+  License: MIT License
+
+- Google UUID (https://github.com/google/uuid)
+  License: BSD-3-Clause
+
+- Google shlex (https://github.com/google/shlex)
+  License: Apache License 2.0
+
+- Go Supplementary Packages (golang.org/x/sys, golang.org/x/net, golang.org/x/sync, golang.org/x/text)
+  License: BSD-3-Clause
+
+Full transitive dependency versions are pinned in go.mod and go.sum.

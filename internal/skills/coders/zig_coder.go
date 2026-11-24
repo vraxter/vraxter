@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 
 	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 	"github.com/vraxter/vraxter/pkg/types"
 )
@@ -58,20 +60,25 @@ func (c *ZigCoder) CompileWithManifest(name, description, paramsSchema, code str
 	defer os.RemoveAll(workDir)
 
 	srcPath := filepath.Join(workDir, "main.zig")
+	tmpWasmPath := filepath.Join(workDir, skillID+".wasm")
 	wasmPath := filepath.Join(c.SkillsDir, skillID+".wasm")
 
 	if err := os.WriteFile(srcPath, []byte(code), 0600); err != nil {
 		return err
 	}
 	zigPath := c.TM.GetZigPath()
-	cmd := exec.Command(zigPath, "build-exe", "-target", "wasm32-wasi", "-O", "ReleaseSmall", fmt.Sprintf("-femit-bin=%s", wasmPath), srcPath)
+	cmd := exec.Command(zigPath, "build-exe", "-target", "wasm32-wasi", "-O", "ReleaseSmall", fmt.Sprintf("-femit-bin=%s", tmpWasmPath), srcPath)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("zig compiler failed: %v | log: %s", err, string(output))
 	}
 
-	_ = os.Chmod(wasmPath, 0600)
+	if _, statErr := os.Stat(tmpWasmPath); statErr == nil {
+		if err := utils.AtomicCopyFileBounded(tmpWasmPath, wasmPath, skills.MaxWASMBinaryBytes, 0600); err != nil {
+			return fmt.Errorf("failed atomically installing compiled WASM binary: %w", err)
+		}
+	}
 
 	checksum := ""
 	if data, err := os.ReadFile(wasmPath); err == nil {
@@ -81,8 +88,21 @@ func (c *ZigCoder) CompileWithManifest(name, description, paramsSchema, code str
 
 	manifest := BuildAndSaveV1ManifestWithTemplate(c.SkillsDir, skillID, name, description, wasmPath, checksum, paramsSchema, "zig", permissions, manifestV1)
 
+	// 6b. Static WASM bytecode import verification against declared manifest capabilities
+	if _, statErr := os.Stat(wasmPath); statErr == nil {
+		if err := skills.VerifyWASMFile(context.Background(), wasmPath, manifest); err != nil {
+			_ = os.Remove(wasmPath)
+			_ = os.Remove(filepath.Join(c.SkillsDir, skillID+".manifest.json"))
+			return fmt.Errorf("skill failed static WASM capability verification: %w", err)
+		}
+	}
+
 	// 7. Execution Dry-Run Verification (Failsafe in zero-capability sandbox)
-	_, err = c.Runner.Execute(context.Background(), dryRunSandboxManifest(manifest), map[string]interface{}{"_vraxter_dry_run": true})
+	if dr, ok := c.Runner.(interfaces.DryRunSkillRunner); ok {
+		_, err = dr.ExecuteDryRun(context.Background(), manifest)
+	} else {
+		_, err = c.Runner.Execute(context.Background(), dryRunSandboxManifest(manifest), map[string]interface{}{"_vraxter_dry_run": true})
+	}
 	if err != nil {
 		_ = os.Remove(wasmPath) // Purge corrupted binary
 		_ = os.Remove(filepath.Join(c.SkillsDir, skillID+".manifest.json"))

@@ -21,6 +21,8 @@ import (
 	"strings"
 
 	"github.com/vraxter/vraxter/internal/db"
+	"github.com/vraxter/vraxter/internal/skills"
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/interfaces"
 	"github.com/vraxter/vraxter/pkg/types"
 )
@@ -92,6 +94,7 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	defer os.RemoveAll(workDir)
 
 	srcPath := filepath.Join(workDir, "main.go")
+	tmpWasmPath := filepath.Join(workDir, skillID+".wasm")
 	wasmPath := filepath.Join(c.SkillsDir, skillID+".wasm")
 
 	code = strings.TrimSpace(code)
@@ -141,6 +144,7 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	goPath := c.TM.GetGoPath()
 	modCmd := exec.Command(goPath, "mod", "init", skillID)
 	modCmd.Dir = workDir
+	modCmd.Env = SanitizedGoBuildEnv()
 	if out, err := modCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go mod init failed: %v | log: %s", err, string(out))
 	}
@@ -156,13 +160,13 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	var isTinyGo bool
 	if c.TM.IsReady("tinygo") {
 		tinyGoPath := c.TM.GetTinyGoPath()
-		cmd = exec.Command(tinyGoPath, "build", "-o", wasmPath, "-target=wasi", ".")
-		cmd.Env = append(os.Environ(), "GOPROXY=off", "GOSUMDB=off")
+		cmd = exec.Command(tinyGoPath, "build", "-o", tmpWasmPath, "-target=wasi", ".")
+		cmd.Env = SanitizedGoBuildEnv()
 		isTinyGo = true
 	} else {
 		goPath := c.TM.GetGoPath()
-		cmd = exec.Command(goPath, "build", "-o", wasmPath, ".")
-		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm", "GOPROXY=off", "GOSUMDB=off")
+		cmd = exec.Command(goPath, "build", "-o", tmpWasmPath, ".")
+		cmd.Env = SanitizedGoBuildEnv("GOOS=wasip1", "GOARCH=wasm")
 	}
 
 	cmd.Dir = workDir
@@ -172,8 +176,8 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	if err != nil && isTinyGo {
 		log.Printf("GoCoder: TinyGo compilation failed, falling back to standard Go compiler. Reason: %v", err)
 		goPath := c.TM.GetGoPath()
-		cmd = exec.Command(goPath, "build", "-o", wasmPath, ".")
-		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm", "GOPROXY=off", "GOSUMDB=off")
+		cmd = exec.Command(goPath, "build", "-o", tmpWasmPath, ".")
+		cmd.Env = SanitizedGoBuildEnv("GOOS=wasip1", "GOARCH=wasm")
 		cmd.Dir = workDir
 		output, err = cmd.CombinedOutput()
 	}
@@ -182,7 +186,11 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 		return fmt.Errorf("build failed: %v | log: %s", err, string(output))
 	}
 
-	_ = os.Chmod(wasmPath, 0600)
+	if _, statErr := os.Stat(tmpWasmPath); statErr == nil {
+		if err := utils.AtomicCopyFileBounded(tmpWasmPath, wasmPath, skills.MaxWASMBinaryBytes, 0600); err != nil {
+			return fmt.Errorf("failed atomically installing compiled WASM binary: %w", err)
+		}
+	}
 
 	checksum := ""
 	if data, err := os.ReadFile(wasmPath); err == nil {
@@ -192,8 +200,21 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 
 	manifest := BuildAndSaveV1ManifestWithTemplate(c.SkillsDir, skillID, name, description, wasmPath, checksum, paramsSchema, "go", permissions, manifestV1)
 
+	// 6b. Static WASM bytecode import verification against declared manifest capabilities
+	if _, statErr := os.Stat(wasmPath); statErr == nil {
+		if err := skills.VerifyWASMFile(context.Background(), wasmPath, manifest); err != nil {
+			_ = os.Remove(wasmPath)
+			_ = os.Remove(filepath.Join(c.SkillsDir, skillID+".manifest.json"))
+			return fmt.Errorf("skill failed static WASM capability verification: %w", err)
+		}
+	}
+
 	// 7. Execution Dry-Run Verification (Failsafe in zero-capability sandbox)
-	_, err = c.Runner.Execute(context.Background(), dryRunSandboxManifest(manifest), map[string]interface{}{"_vraxter_dry_run": true})
+	if dr, ok := c.Runner.(interfaces.DryRunSkillRunner); ok {
+		_, err = dr.ExecuteDryRun(context.Background(), manifest)
+	} else {
+		_, err = c.Runner.Execute(context.Background(), dryRunSandboxManifest(manifest), map[string]interface{}{"_vraxter_dry_run": true})
+	}
 	if err != nil {
 		_ = os.Remove(wasmPath) // Purge corrupted binary
 		_ = os.Remove(filepath.Join(c.SkillsDir, skillID+".manifest.json"))
@@ -204,4 +225,45 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	log.Printf("GoCoder: Skill verified! Persisting '%s' to database.", skillID)
 
 	return c.Repo.UpsertSkill(manifest)
+}
+
+// SanitizedGoBuildEnv constructs a minimal, secret-free environment for offline Go/TinyGo
+// WASM skill compilation. It strictly drops arbitrary host environment variables (API keys,
+// cloud credentials, tokens) and pins CGO_ENABLED=0, GOPROXY=off, and GOSUMDB=off.
+func SanitizedGoBuildEnv(extra ...string) []string {
+	allowedKeys := []string{
+		"PATH",
+		"HOME",
+		"USERPROFILE",
+		"HOMEDRIVE",
+		"HOMEPATH",
+		"APPDATA",
+		"LOCALAPPDATA",
+		"SYSTEMROOT",
+		"WINDIR",
+		"COMSPEC",
+		"TMP",
+		"TEMP",
+		"TMPDIR",
+		"GOROOT",
+		"GOPATH",
+		"GOCACHE",
+		"GOMODCACHE",
+		"GOTOOLCHAIN",
+	}
+
+	env := make([]string, 0, len(allowedKeys)+len(extra)+4)
+	for _, k := range allowedKeys {
+		if v, ok := os.LookupEnv(k); ok && v != "" {
+			env = append(env, k+"="+v)
+		}
+	}
+	env = append(env,
+		"CGO_ENABLED=0",
+		"GOPROXY=off",
+		"GOSUMDB=off",
+		"GOTELEMETRY=off",
+	)
+	env = append(env, extra...)
+	return env
 }

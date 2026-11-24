@@ -25,9 +25,11 @@ import (
 )
 
 type Router struct {
-	mu        sync.RWMutex
-	providers map[string]Provider // now map providerID → Provider
-	models    []types.ModelConfig
+	mu         sync.RWMutex
+	providers  map[string]Provider // now map providerID → Provider
+	models     []types.ModelConfig
+	breakers   map[string]*CircuitBreaker
+	breakerCfg CircuitBreakerConfig
 
 	// routingCfg is an optional use-case routing table (see config.RoutingConfig).
 	// The router holds it as an interface to avoid circular imports.
@@ -44,6 +46,8 @@ func NewRouter(models []types.ModelConfig) *Router {
 	return &Router{
 		providers:        make(map[string]Provider),
 		models:           models,
+		breakers:         make(map[string]*CircuitBreaker),
+		breakerCfg:       DefaultCircuitBreakerConfig(),
 		routingOverrides: make(map[string]string),
 	}
 }
@@ -53,6 +57,8 @@ func NewRouter(models []types.ModelConfig) *Router {
 func NewRouterFromEntries(entries []RouterEntry) *Router {
 	r := &Router{
 		providers:        make(map[string]Provider),
+		breakers:         make(map[string]*CircuitBreaker),
+		breakerCfg:       DefaultCircuitBreakerConfig(),
 		routingOverrides: make(map[string]string),
 	}
 	for _, e := range entries {
@@ -60,6 +66,59 @@ func NewRouterFromEntries(entries []RouterEntry) *Router {
 		r.providers[e.Config.ProviderID] = e.Provider
 	}
 	return r
+}
+
+// SetCircuitBreakerConfig updates the circuit breaker configuration for the router and resets existing breakers.
+func (r *Router) SetCircuitBreakerConfig(cfg CircuitBreakerConfig) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.breakerCfg = cfg
+	r.breakers = make(map[string]*CircuitBreaker)
+}
+
+// GetCircuitBreaker returns (or lazily creates) the CircuitBreaker for the given provider/model key.
+func (r *Router) GetCircuitBreaker(key string) *CircuitBreaker {
+	k := strings.ToLower(strings.TrimSpace(key))
+	if k == "" {
+		k = "default"
+	}
+	r.mu.RLock()
+	if cb, ok := r.breakers[k]; ok {
+		r.mu.RUnlock()
+		return cb
+	}
+	r.mu.RUnlock()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.breakers == nil {
+		r.breakers = make(map[string]*CircuitBreaker)
+	}
+	if cb, ok := r.breakers[k]; ok {
+		return cb
+	}
+	cfg := r.breakerCfg
+	if cfg.FailureThreshold <= 0 {
+		cfg = DefaultCircuitBreakerConfig()
+	}
+	cb := NewCircuitBreaker(cfg)
+	r.breakers[k] = cb
+	return cb
+}
+
+// AllowProvider checks whether the circuit breaker for the given provider/model key allows execution.
+func (r *Router) AllowProvider(key string) bool {
+	return r.GetCircuitBreaker(key).Allow()
+}
+
+// RecordProviderSuccess marks a successful execution on the provider/model circuit breaker.
+func (r *Router) RecordProviderSuccess(key string) {
+	r.GetCircuitBreaker(key).RecordSuccess()
+}
+
+// RecordProviderFailure marks a failed execution on the provider/model circuit breaker.
+func (r *Router) RecordProviderFailure(key string) {
+	r.GetCircuitBreaker(key).RecordFailure()
 }
 
 func (r *Router) Register(providerID string, p Provider) {

@@ -18,16 +18,18 @@ import (
 // Version values populated by go build -ldflags
 var (
 	Version   = "1.0.0"
+	Edition   = "community"
 	Commit    = "unknown"
 	BuildDate = "unknown"
 )
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print the Vraxter version information",
+	Short: "Print Vraxter runtime version and build metadata",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("Vraxter Sovereign Autonomous AI Engine\n")
+		fmt.Printf("Vraxter Sovereign Autonomous Execution Runtime\n")
 		fmt.Printf("Version:    %s\n", Version)
+		fmt.Printf("Edition:    %s\n", Edition)
 		fmt.Printf("Commit:     %s\n", Commit)
 		fmt.Printf("Built:      %s\n", BuildDate)
 		fmt.Printf("Go version: %s\n", runtime.Version())

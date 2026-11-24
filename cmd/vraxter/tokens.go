@@ -30,7 +30,7 @@ var createTokenCmd = &cobra.Command{
 	Short: "Generate a new scoped token",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect: %v\n", err)
 			os.Exit(1)
@@ -58,7 +58,7 @@ var listTokensCmd = &cobra.Command{
 	Use:   "ls",
 	Short: "List active API tokens",
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect: %v\n", err)
 			os.Exit(1)
@@ -92,7 +92,7 @@ var revokeTokenCmd = &cobra.Command{
 	Short: "Revoke an API token",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient("127.0.0.1:50051", daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect: %v\n", err)
 			os.Exit(1)

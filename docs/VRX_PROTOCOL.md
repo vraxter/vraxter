@@ -17,8 +17,8 @@ Directives define high-level system rules and protocols that the LLM must intern
 
 ### 2. Variables (`$Variable`)
 Variables represent categories of live system data injected during prompt assembly:
-- `$Context.Identity`: User profile and technical background (dynamically hot-swapped via `source_user`).
-- `$Context.Spatial`: Physical environment mapped by `SpatialService`, defining `Zone -> [Speakers]`.
+- `$Context.Operator`: Operator profile and technical domain context.
+- `$Context.Enclave`: Enclave isolation mode, runtime policies, and session boundaries.
 - `$Context.Specialists`: Roster of active domain specialists (`$Context.Specialists`).
 - `$Context.Models`: Priority-ordered roster of configured LLM backends.
 - `$Context.Tools`: Structured list of available WASM and Native tools.
@@ -35,8 +35,7 @@ Vraxter uses standard `{{ .Parameter }}` syntax to assemble prompts during the *
 | `{{.AvailableTools}}` | Formatted list of tool IDs, descriptions, and input schemas. |
 | `{{.ExistingSpecialists}}` | Formatted roster of registered domain specialists and expertise. |
 | `{{.AvailableModels}}` | Active model IDs and routing priority. |
-| `{{.UserProfile}}` | Consolidated user expertise and context (dynamically hot-swapped). |
-| `{{.DeviceMap}}` | Dictionary mapping physical zones to available audio targets. |
+| `{{.UserProfile}}` | Consolidated operator profile and operational notes. |
 | `{{.GitContext}}` | Directory tree, status, and active branch info. |
 | `{{.MarkerChat}}` | Conversational output delimiter (`[VRAX_CHAT]`). |
 | `{{.MarkerTool}}` | Structured tool execution signal (`[VRAX_TOOL]`). |

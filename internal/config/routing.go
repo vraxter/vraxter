@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/vraxter/vraxter/internal/utils"
 )
 
 // RoutingConfig maps use-case tags to model ID prefixes or aliases.
@@ -99,7 +101,7 @@ func parseRoutingYAML(content string) (*RoutingConfig, error) {
 	return cfg, nil
 }
 
-// SaveRoutingConfig persists the routing config back to disk.
+// SaveRoutingConfig persists the routing config back to disk atomically.
 func SaveRoutingConfig(appDir string, cfg *RoutingConfig) error {
 	path := filepath.Join(appDir, "routing.yaml")
 	var sb strings.Builder
@@ -107,7 +109,7 @@ func SaveRoutingConfig(appDir string, cfg *RoutingConfig) error {
 	for k, v := range cfg.Routes {
 		sb.WriteString(fmt.Sprintf("  %s: %s\n", k, v))
 	}
-	return os.WriteFile(path, []byte(sb.String()), 0644)
+	return utils.AtomicWriteFile(path, []byte(sb.String()), 0600)
 }
 
 // FindModelIDForUseCase looks up the best model ID for a given use-case tag.
@@ -164,5 +166,5 @@ func WriteSampleRoutingConfig(appDir string) error {
 
 routes: {}
 `
-	return os.WriteFile(path, []byte(sample), 0644)
+	return utils.AtomicWriteFile(path, []byte(sample), 0600)
 }

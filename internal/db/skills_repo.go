@@ -52,6 +52,9 @@ func (r *SkillRepository) GetAllSkills() ([]types.SkillManifest, error) {
 			continue
 		}
 
+		s.ParamsSchema = r.store.DecryptField(s.ParamsSchema)
+		manifestV1JSON = r.store.DecryptField(manifestV1JSON)
+
 		_ = json.Unmarshal([]byte(permissionsJSON), &s.Permissions)
 		_ = json.Unmarshal([]byte(keywordsJSON), &s.Keywords)
 		_ = json.Unmarshal([]byte(examplesJSON), &s.Examples)
@@ -83,8 +86,18 @@ func (r *SkillRepository) UpsertSkill(s types.SkillManifest) error {
 
 	var manifestV1JSON string
 	if s.ManifestV1 != nil {
-		b, _ := json.Marshal(s.ManifestV1)
-		manifestV1JSON = string(b)
+		b, err := json.Marshal(s.ManifestV1)
+		if err != nil {
+			return err
+		}
+		manifestV1JSON, err = r.store.EncryptField(string(b))
+		if err != nil {
+			return err
+		}
+	}
+	encParamsSchema, err := r.store.EncryptField(s.ParamsSchema)
+	if err != nil {
+		return err
 	}
 
 	query := `INSERT INTO skills (id, name, description, version, command, language, engine, tier, score, is_official, checksum, permissions, downloads, 
@@ -99,9 +112,9 @@ func (r *SkillRepository) UpsertSkill(s types.SkillManifest) error {
 	          param_regex=excluded.param_regex, params_schema=excluded.params_schema, 
 	          timeout_seconds=excluded.timeout_seconds, manifest_v1=excluded.manifest_v1, vector=excluded.vector`
 
-	_, err := r.store.Conn.Exec(query, 
+	_, err = r.store.Conn.Exec(query,
 		s.ID, s.Name, s.Description, s.Version, s.Command, s.Language, s.Engine, s.Tier, s.Score, s.IsOfficial, s.Checksum, string(permissionsJSON), s.Downloads,
-		string(keywordsJSON), string(examplesJSON), string(tagsJSON), s.ParamRegex, s.ParamsSchema, s.TimeoutSeconds, manifestV1JSON, vectorBlob,
+		string(keywordsJSON), string(examplesJSON), string(tagsJSON), s.ParamRegex, encParamsSchema, s.TimeoutSeconds, manifestV1JSON, vectorBlob,
 	)
 	return err
 }
@@ -154,6 +167,9 @@ func (r *SkillRepository) FindSkill(id string) (*types.SkillManifest, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	s.ParamsSchema = r.store.DecryptField(s.ParamsSchema)
+	manifestV1JSON = r.store.DecryptField(manifestV1JSON)
 
 	_ = json.Unmarshal([]byte(permissionsJSON), &s.Permissions)
 	_ = json.Unmarshal([]byte(keywordsJSON), &s.Keywords)

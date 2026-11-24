@@ -10,13 +10,14 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/security"
 	"github.com/vraxter/vraxter/internal/skills"
@@ -109,6 +110,19 @@ func handleCmdCoder(ctx context.Context, call types.ToolCall, codePayload, conve
 	spec, _ := call.Params["spec"].(string)
 	lang, _ := call.Params["language"].(string)
 
+	if !e.AllowRuntimeCodegen {
+		e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+			"check":        "runtime_codegen_policy",
+			"skill_id":     skillID,
+			"target_skill": name,
+			"decision":     "DENY",
+			"reason":       "allow_runtime_codegen is disabled by security policy",
+		})
+		errMsg := "\n❌ Runtime skill code generation denied: disabled by security policy (allow_runtime_codegen=false)."
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+		return "SYSTEM ERROR: Runtime skill code generation is disabled by security policy (allow_runtime_codegen=false)."
+	}
+
 	if lang == "" {
 		lang = "go"
 		if skillID == "vraxter-coder-rust" {
@@ -174,7 +188,50 @@ func handleCmdPatchCode(ctx context.Context, call types.ToolCall, codePayload, c
 	path, _ := call.Params["path"].(string)
 	search, _ := call.Params["search"].(string)
 	replace, _ := call.Params["replace"].(string)
-	return skills.PatchCode(path, search, replace)
+
+	searchSum := sha256.Sum256([]byte(search))
+	replaceSum := sha256.Sum256([]byte(replace))
+
+	if !IsHITLApproved(ctx) {
+		e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventHITLDecision, map[string]interface{}{
+			"decision":       "REQUESTED",
+			"target_type":    "patch_code",
+			"skill_id":       "vraxter-patch-code",
+			"path":           path,
+			"search_sha256":  hex.EncodeToString(searchSum[:]),
+			"replace_sha256": hex.EncodeToString(replaceSum[:]),
+		})
+		approvalPayload, _ := json.Marshal(types.ToolCall{
+			SkillID: "vraxter-patch-code",
+			Params: map[string]interface{}{
+				"path":    path,
+				"search":  search,
+				"replace": replace,
+			},
+		})
+		e.emitEvent(ctx, out, llm.StreamEvent{
+			Type:    llm.EventTypeSkillApprovalRequest,
+			Content: string(approvalPayload),
+			SkillID: "vraxter-patch-code",
+		})
+		return "!YIELD_FOR_APPROVAL"
+	}
+
+	result := skills.PatchCode(path, search, replace)
+	statusStr := "completed"
+	if strings.Contains(result, "ERROR") {
+		statusStr = "failed"
+	}
+	e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+		"check":          "workspace_patch_code",
+		"skill_id":       "vraxter-patch-code",
+		"path":           path,
+		"search_sha256":  hex.EncodeToString(searchSum[:]),
+		"replace_sha256": hex.EncodeToString(replaceSum[:]),
+		"status":         statusStr,
+		"decision":       "ALLOW",
+	})
+	return result
 }
 
 func handleCmdDeleteSpecialist(ctx context.Context, call types.ToolCall, codePayload, conversationID string, e *ExecutionEngine, out chan<- llm.StreamEvent) string {
@@ -215,11 +272,25 @@ func handleCmdSee(ctx context.Context, call types.ToolCall, codePayload, convers
 		return "ERROR: Missing required parameter 'path'."
 	}
 
-	resolvedPath := skills.ResolveMountPath(path)
-	data, err := os.ReadFile(resolvedPath)
+	data, mimeType, err := skills.ReadWorkspaceMediaFile(path, "image")
 	if err != nil {
-		return fmt.Sprintf("ERROR: Failed to read image file at '%s': %v", path, err)
+		e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+			"check":    "media_file_read",
+			"tool":     "vraxter-see",
+			"path":     path,
+			"decision": "DENY",
+			"reason":   err.Error(),
+		})
+		return fmt.Sprintf("ERROR: Access denied reading image file '%s': %v", path, err)
 	}
+	e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+		"check":     "media_file_read",
+		"tool":      "vraxter-see",
+		"path":      path,
+		"mime_type": mimeType,
+		"bytes":     len(data),
+		"decision":  "ALLOW",
+	})
 
 	if e.GetActiveModelConfigDelegate == nil {
 		return "ERROR: Active model config delegate is not initialized."
@@ -239,17 +310,6 @@ func handleCmdSee(ctx context.Context, call types.ToolCall, codePayload, convers
 	}
 	if !hasVision {
 		return fmt.Sprintf("ERROR: Active model '%s' (%s) does not support vision capabilities. Please configure or activate a vision-capable model.", activeCfg.Alias, activeCfg.Model)
-	}
-
-	mimeType := "image/jpeg"
-	ext := strings.ToLower(filepath.Ext(resolvedPath))
-	switch ext {
-	case ".png":
-		mimeType = "image/png"
-	case ".webp":
-		mimeType = "image/webp"
-	case ".gif":
-		mimeType = "image/gif"
 	}
 
 	b64Data := base64.StdEncoding.EncodeToString(data)
@@ -288,11 +348,25 @@ func handleCmdHear(ctx context.Context, call types.ToolCall, codePayload, conver
 		return "ERROR: Missing required parameter 'path'."
 	}
 
-	resolvedPath := skills.ResolveMountPath(path)
-	data, err := os.ReadFile(resolvedPath)
+	data, mimeType, err := skills.ReadWorkspaceMediaFile(path, "audio")
 	if err != nil {
-		return fmt.Sprintf("ERROR: Failed to read audio file at '%s': %v", path, err)
+		e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+			"check":    "media_file_read",
+			"tool":     "vraxter-hear",
+			"path":     path,
+			"decision": "DENY",
+			"reason":   err.Error(),
+		})
+		return fmt.Sprintf("ERROR: Access denied reading audio file '%s': %v", path, err)
 	}
+	e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+		"check":     "media_file_read",
+		"tool":      "vraxter-hear",
+		"path":      path,
+		"mime_type": mimeType,
+		"bytes":     len(data),
+		"decision":  "ALLOW",
+	})
 
 	if e.GetActiveModelConfigDelegate == nil {
 		return "ERROR: Active model config delegate is not initialized."
@@ -305,19 +379,6 @@ func handleCmdHear(ctx context.Context, call types.ToolCall, codePayload, conver
 	_, provider, err := e.CodeGen.Router.GetProviderByID(activeCfg.ID)
 	if err != nil {
 		return fmt.Sprintf("ERROR: Failed to resolve provider for model '%s': %v", activeCfg.Model, err)
-	}
-
-	mimeType := "audio/wav"
-	ext := strings.ToLower(filepath.Ext(resolvedPath))
-	switch ext {
-	case ".mp3":
-		mimeType = "audio/mp3"
-	case ".ogg":
-		mimeType = "audio/ogg"
-	case ".m4a":
-		mimeType = "audio/m4a"
-	case ".flac":
-		mimeType = "audio/flac"
 	}
 
 	if transcriber, ok := provider.(interfaces.AudioTranscriber); ok {
@@ -439,10 +500,33 @@ func handleCmdHostExec(ctx context.Context, call types.ToolCall, codePayload, co
 	// originatedFromLLM = true guarantees RequiresApproval == true for ALL commands (read_only & elevated)
 	plan, err := e.HostExecGuard.Prepare(cmdName, cmdArgs, true)
 	if err != nil {
+		e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+			"check":    "host_exec_guard",
+			"command":  cmdName,
+			"decision": "DENY",
+			"reason":   err.Error(),
+			"from_llm": true,
+		})
 		errMsg := fmt.Sprintf("\n❌ Host command denied: %v", err)
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
 		return fmt.Sprintf("SYSTEM ERROR: Host command denied: %v", err)
 	}
+
+	e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+		"check":         "host_exec_guard",
+		"command":       plan.Command,
+		"binary_sha256": plan.ExpectedSHA256,
+		"tier":          string(plan.Tier),
+		"decision":      "ALLOW",
+		"from_llm":      true,
+	})
+	e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventHITLDecision, map[string]interface{}{
+		"decision":      "REQUESTED",
+		"target_type":   "host_cmd",
+		"command":       plan.Command,
+		"binary_sha256": plan.ExpectedSHA256,
+		"from_llm":      true,
+	})
 
 	approvalPayload, _ := json.Marshal(map[string]interface{}{
 		"skill_id": "vraxter-host-exec",

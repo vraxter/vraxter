@@ -1,0 +1,137 @@
+{
+  "generated_at_utc": "2026-11-24T00:05:26Z",
+  "go_version": "go1.26.3",
+  "goos": "windows",
+  "goarch": "amd64",
+  "num_cpu": 6,
+  "bench01_zero_egress_airgap": {
+    "total_egress_attempts": 20,
+    "blocked_attempts": 20,
+    "permitted_outbound_connections": 0,
+    "perimeter_block_rate_pct": 100,
+    "otel_network_egress_count": 0,
+    "wasm_http_exfil_blocked": 5,
+    "host_exec_network_blocked": 5,
+    "imds_link_local_blocked": 5,
+    "passed": true
+  },
+  "bench02_wasm_cold_warm_start": {
+    "cold_start_latency": {
+      "samples": 15,
+      "min_us": 1994.1,
+      "p50_us": 39348.3,
+      "p95_us": 120014.7,
+      "p99_us": 120014.7,
+      "max_us": 120014.7,
+      "mean_us": 39163.59,
+      "p50_ms": 39.348,
+      "p95_ms": 120.015,
+      "p99_ms": 120.015
+    },
+    "cold_start_bytes_per_op": 898003,
+    "cold_start_allocs_per_op": 2620,
+    "warm_start_latency": {
+      "samples": 50,
+      "min_us": 996.9,
+      "p50_us": 1995,
+      "p95_us": 34458.1,
+      "p99_us": 46032.4,
+      "max_us": 46032.4,
+      "mean_us": 6486.19,
+      "p50_ms": 1.995,
+      "p95_ms": 34.458,
+      "p99_ms": 46.032
+    },
+    "warm_start_bytes_per_op": 240158,
+    "warm_start_allocs_per_op": 573,
+    "os_subprocess_baseline_latency": {
+      "samples": 10,
+      "min_us": 26289.7,
+      "p50_us": 41588.3,
+      "p95_us": 234722.7,
+      "p99_us": 234722.7,
+      "max_us": 234722.7,
+      "mean_us": 86891.72,
+      "p50_ms": 41.588,
+      "p95_ms": 234.723,
+      "p99_ms": 234.723
+    },
+    "warm_speedup_vs_os_subprocess_x": 20.85,
+    "passed": true
+  },
+  "bench03_deterministic_dos_containment": {
+    "cpu_fuel_budget": 500,
+    "cpu_fuel_consumed_on_trap": 500,
+    "cpu_infinite_loop_trap_time_ms": 313.365,
+    "memory_bomb_limit_mb": 2,
+    "memory_bomb_requested_mb": 32,
+    "memory_bomb_trap_time_ms": 407.137,
+    "disk_quota_violation_trap_time_ms": 19.702,
+    "concurrent_legit_skills_run": 12,
+    "concurrent_legit_skills_passed": 12,
+    "concurrent_legit_latency": {
+      "samples": 12,
+      "min_us": 113504.3,
+      "p50_us": 297505.5,
+      "p95_us": 398160.9,
+      "p99_us": 398160.9,
+      "max_us": 398160.9,
+      "mean_us": 283848.34,
+      "p50_ms": 297.506,
+      "p95_ms": 398.161,
+      "p99_ms": 398.161
+    },
+    "passed": true
+  },
+  "bench04_execution_determinism": {
+    "iterations": 50,
+    "unique_output_hashes": 1,
+    "unique_wasm_hashes": 1,
+    "unique_manifest_hashes": 1,
+    "unique_entry_hashes": 1,
+    "determinism_rate_pct": 100,
+    "canonical_wasm_sha256": "7521b6974e76e31a00b17cef5f45b493739c105fa633a5a22626a311e50c164d",
+    "canonical_manifest_sha256": "9e25451abdde1678bf4404aabf0b0e7653243829f5ff9aa968b7b30dec708622",
+    "canonical_output_sha256": "60a3f9fc1a2739f7727af7d6c00379f8a382abc6b66293cd25888238e6037f91",
+    "passed": true
+  },
+  "bench05_crash_safety_recovery": {
+    "kill_cycles": 25,
+    "corrupted_atomic_files": 0,
+    "orphan_tmp_files_in_target": 0,
+    "sqlite_integrity_checks_passed": 25,
+    "sealed_db_cycles_verified": 5,
+    "passed": true
+  },
+  "bench06_offline_skill_pipeline": {
+    "used_go_wasi_compiler": true,
+    "compile_time_ms": 1718.662,
+    "static_verify_time_ms": 2598.809,
+    "ed25519_sign_time_ms": 125.728,
+    "register_signed_time_ms": 2675.784,
+    "first_sandbox_exec_time_ms": 1917.282,
+    "total_end_to_end_time_ms": 9043.537,
+    "passed": true
+  },
+  "bench07_immutable_audit_overhead": {
+    "events_recorded": 1000,
+    "total_write_time_ms": 1566.879,
+    "write_throughput_ops_sec": 638.21,
+    "per_event_write_latency": {
+      "samples": 1000,
+      "min_us": 0,
+      "p50_us": 997.3,
+      "p95_us": 3881.8,
+      "p99_us": 10101.3,
+      "max_us": 135441.8,
+      "mean_us": 1566.88,
+      "p50_ms": 0.997,
+      "p95_ms": 3.882,
+      "p99_ms": 10.101
+    },
+    "verify_chain_events": 1000,
+    "verify_chain_total_time_ms": 173.518,
+    "verify_throughput_ops_sec": 5763.06,
+    "passed": true
+  }
+}

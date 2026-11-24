@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/security"
@@ -26,6 +27,26 @@ import (
 	"github.com/vraxter/vraxter/pkg/types"
 	"github.com/vraxter/vraxter/pkg/vraxerror"
 )
+
+type hitlApprovedCtxKey struct{}
+
+// WithHITLApproved marks ctx as explicitly approved by a human operator for built-in
+// guarded mutations such as vraxter-patch-code. Untrusted LLM JSON parameters can never set this.
+func WithHITLApproved(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, hitlApprovedCtxKey{}, true)
+}
+
+// IsHITLApproved reports whether ctx carries an explicit host-verified HITL approval token.
+func IsHITLApproved(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	approved, ok := ctx.Value(hitlApprovedCtxKey{}).(bool)
+	return ok && approved
+}
 
 // ExecutionEngine is responsible for running skills (both LLM-directed and fast-path),
 // logging execution events, and emitting result events to the output channel.
@@ -38,6 +59,7 @@ type ExecutionEngine struct {
 	JobManager                   *JobManager
 	CodeGen                      *CodeGenService
 	HostExecGuard                *security.HostExecGuard
+	AuditLedger                  *audit.Ledger
 	Verbose                      bool
 	SwarmDelegate                func(ctx context.Context, out chan<- llm.StreamEvent, specialistID string, task string, threadID string) string
 	ActivateModelDelegate        func(sessionID, modelID string) error
@@ -46,6 +68,7 @@ type ExecutionEngine struct {
 	GetActiveModelConfigDelegate func(sessionID string) (types.ModelConfig, error)
 	OnSpecialistChange           func()
 	RequireSkillApproval         bool
+	AllowRuntimeCodegen          bool
 }
 
 // NewExecutionEngine creates a new ExecutionEngine.
@@ -71,6 +94,7 @@ func NewExecutionEngine(
 		HostExecGuard:        security.NewHostExecGuard(security.HostExecOptions{Enabled: false, IsolationMode: "airgap"}),
 		Verbose:              verbose,
 		RequireSkillApproval: requireSkillApproval,
+		AllowRuntimeCodegen:  true,
 	}
 }
 
@@ -80,6 +104,22 @@ func (e *ExecutionEngine) emitEvent(ctx context.Context, out chan<- llm.StreamEv
 	case out <- event:
 	case <-ctx.Done():
 	}
+}
+
+func (e *ExecutionEngine) recordAudit(ctx context.Context, sessionID, actor, eventType string, payload interface{}) {
+	l := e.AuditLedger
+	if l == nil {
+		l = audit.DefaultLedger()
+	}
+	if l == nil {
+		return
+	}
+	_, _ = l.Append(ctx, audit.AuditEventInput{
+		SessionID: sessionID,
+		Actor:     actor,
+		EventType: eventType,
+		Payload:   payload,
+	})
 }
 
 // RunFastPath executes a pre-resolved skill match without consulting the LLM.
@@ -120,6 +160,11 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 		}
 
 		if manifest.RequiresApproval(e.RequireSkillApproval) {
+			e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventHITLDecision, map[string]interface{}{
+				"decision":    "REQUESTED",
+				"target_type": "skill",
+				"skill_id":    match.ID,
+			})
 			payloadBytes, _ := json.Marshal(types.ToolCall{
 				SkillID: match.ID,
 				Params:  match.Params,
@@ -145,6 +190,12 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: finalContent})
 	case types.IntentTypeCommand:
 		if e.HostExecGuard == nil {
+			e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+				"check":    "host_exec_guard",
+				"command":  match.ID,
+				"decision": "DENY",
+				"reason":   security.ErrHostExecDisabled.Error(),
+			})
 			e.emitEvent(ctx, out, llm.StreamEvent{
 				Type:    llm.EventTypeToken,
 				Content: fmt.Sprintf("\n❌ Host command denied: %v", security.ErrHostExecDisabled),
@@ -152,6 +203,12 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 			return
 		}
 		if rawPayload, ok := match.Params["_raw_payload"].(string); ok && security.ContainsShellMetacharacters(rawPayload) {
+			e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+				"check":    "host_exec_guard",
+				"command":  match.ID,
+				"decision": "DENY",
+				"reason":   security.ErrInjectionDetected.Error(),
+			})
 			e.emitEvent(ctx, out, llm.StreamEvent{
 				Type:    llm.EventTypeToken,
 				Content: fmt.Sprintf("\n❌ Host command denied: %v", security.ErrInjectionDetected),
@@ -164,6 +221,12 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 
 		plan, err := e.HostExecGuard.Prepare(match.ID, match.Args, originatedFromLLM)
 		if err != nil {
+			e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+				"check":    "host_exec_guard",
+				"command":  match.ID,
+				"decision": "DENY",
+				"reason":   err.Error(),
+			})
 			e.emitEvent(ctx, out, llm.StreamEvent{
 				Type:    llm.EventTypeToken,
 				Content: fmt.Sprintf("\n❌ Host command denied: %v", err),
@@ -171,7 +234,22 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 			return
 		}
 
+		e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+			"check":         "host_exec_guard",
+			"command":       plan.Command,
+			"binary_sha256": plan.ExpectedSHA256,
+			"tier":          string(plan.Tier),
+			"decision":      "ALLOW",
+		})
+
 		if plan.RequiresApproval && !hitlApproved {
+			e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventHITLDecision, map[string]interface{}{
+				"decision":      "REQUESTED",
+				"target_type":   "host_cmd",
+				"command":       plan.Command,
+				"binary_sha256": plan.ExpectedSHA256,
+				"from_llm":      plan.OriginatedFromLLM,
+			})
 			approvalPayload, _ := json.Marshal(map[string]interface{}{
 				"skill_id": "vraxter-host-exec",
 				"params": map[string]interface{}{
@@ -192,7 +270,32 @@ func (e *ExecutionEngine) RunFastPath(ctx context.Context, out chan<- llm.Stream
 		}
 
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeCommandCall, Content: plan.Command})
+		cmdStart := time.Now()
+		e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventHostExecStart, map[string]interface{}{
+			"command":       plan.Command,
+			"resolved_path": plan.ResolvedPath,
+			"binary_sha256": plan.ExpectedSHA256,
+			"tier":          string(plan.Tier),
+		})
 		res, err := e.HostExecGuard.ExecutePrepared(ctx, plan)
+		exitCode := 0
+		statusStr := "completed"
+		if res != nil {
+			exitCode = res.ExitCode
+		}
+		if err != nil {
+			if exitCode == 0 {
+				exitCode = -1
+			}
+			statusStr = "failed"
+		}
+		e.recordAudit(ctx, conversationID, audit.ActorFromContext(ctx), audit.EventHostExecEnd, map[string]interface{}{
+			"command":       plan.Command,
+			"binary_sha256": plan.ExpectedSHA256,
+			"exit_code":     exitCode,
+			"duration_ms":   time.Since(cmdStart).Milliseconds(),
+			"status":        statusStr,
+		})
 		if err != nil {
 			errOut := ""
 			if res != nil && res.CombinedOutput() != "" {
@@ -511,6 +614,20 @@ func (e *ExecutionEngine) HandleStandardSkillApproved(ctx context.Context, out c
 	return e.HandleStandardSkillWithBypass(ctx, out, call, skillID, true)
 }
 
+// DispatchApprovedToolPayload runs a built-in command or standard skill after explicit human HITL approval.
+func (e *ExecutionEngine) DispatchApprovedToolPayload(
+	ctx context.Context,
+	out chan<- llm.StreamEvent,
+	call types.ToolCall,
+	conversationID string,
+) string {
+	approvedCtx := WithHITLApproved(ctx)
+	if handler, exists := BuiltInCommands[call.SkillID]; exists {
+		return handler(approvedCtx, call, "", conversationID, e, out)
+	}
+	return e.HandleStandardSkillWithBypass(approvedCtx, out, call, call.SkillID, true)
+}
+
 // HandleStandardSkillWithBypass executes a standard skill with a per-invocation bypassApproval flag
 // so concurrent sessions never mutate shared ExecutionEngine configuration.
 func (e *ExecutionEngine) HandleStandardSkillWithBypass(ctx context.Context, out chan<- llm.StreamEvent, call types.ToolCall, skillID string, bypassApproval bool) string {
@@ -518,11 +635,42 @@ func (e *ExecutionEngine) HandleStandardSkillWithBypass(ctx context.Context, out
 	if err != nil {
 		return fmt.Sprintf("ERROR: Skill %s not found in registry.", skillID)
 	}
-	
+
+	// 1. Daemon capability check: reject is_daemon=true unless manifest explicitly permits background execution.
+	if call.IsDaemon && !manifest.AllowsDaemon() {
+		e.recordAudit(ctx, audit.SessionIDFromContext(ctx), audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+			"check":    "skill_daemon_policy",
+			"skill_id": skillID,
+			"decision": "DENY",
+			"reason":   "manifest does not declare agent.allow_daemon=true",
+		})
+		errMsg := fmt.Sprintf("\n❌ Skill '%s' denied: background daemon execution is not permitted by skill manifest.", skillID)
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+		return fmt.Sprintf("SYSTEM ERROR: Skill '%s' is not authorized for daemon execution (agent.allow_daemon is false).", skillID)
+	}
+
+	// 2. Mandatory HITL approval gate ALWAYS evaluated BEFORE spawning any daemon or running WASM.
+	if !bypassApproval && manifest.RequiresApproval(e.RequireSkillApproval) {
+		e.recordAudit(ctx, audit.SessionIDFromContext(ctx), audit.ActorFromContext(ctx), audit.EventHITLDecision, map[string]interface{}{
+			"decision":    "REQUESTED",
+			"target_type": "skill",
+			"skill_id":    skillID,
+			"is_daemon":   call.IsDaemon,
+		})
+		payloadBytes, _ := json.Marshal(call)
+		e.emitEvent(ctx, out, llm.StreamEvent{
+			Type:    llm.EventTypeSkillApprovalRequest,
+			Content: string(payloadBytes),
+			SkillID: skillID,
+		})
+		return "!YIELD_FOR_APPROVAL" // Magic string intercepted by the ExecutionEngine
+	}
+
+	// 3. Background daemon branch (only reached after manifest allow_daemon AND HITL checks pass).
+	// Propagate trace, session, and authenticated actor context via context.WithoutCancel(ctx).
 	if call.IsDaemon {
+		bgCtx := context.WithoutCancel(ctx)
 		jobID := e.JobManager.SpawnDaemon(fmt.Sprintf("Skill %s", skillID), func() (string, error) {
-			// Create a background context that survives the parent stream closure
-			bgCtx := context.Background()
 			res, err := e.Runner.Execute(bgCtx, *manifest, call.Params)
 			if err != nil {
 				return "", err
@@ -533,16 +681,6 @@ func (e *ExecutionEngine) HandleStandardSkillWithBypass(ctx context.Context, out
 		msg := fmt.Sprintf("\n⚡ Spawned Daemon Job for '%s' (Job ID: %s)", skillID, jobID)
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: msg})
 		return fmt.Sprintf("DAEMON SPAWNED: Skill '%s' is now running in the background with Job ID: %s. You will be notified when it completes.", skillID, jobID)
-	}
-
-	if !bypassApproval && manifest.RequiresApproval(e.RequireSkillApproval) {
-		payloadBytes, _ := json.Marshal(call)
-		e.emitEvent(ctx, out, llm.StreamEvent{
-			Type:    llm.EventTypeSkillApprovalRequest,
-			Content: string(payloadBytes),
-			SkillID: skillID,
-		})
-		return "!YIELD_FOR_APPROVAL" // Magic string intercepted by the ExecutionEngine
 	}
 
 	result, err := e.Runner.Execute(ctx, *manifest, call.Params)
