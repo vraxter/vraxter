@@ -31,8 +31,16 @@ func (r *ChatRepository) CreateConversation(c *types.Conversation) error {
 	if c.SpecialistID != "" {
 		specialistID = &c.SpecialistID
 	}
-	query := "INSERT INTO conversations (id, title, specialist_id) VALUES (?, ?, ?)"
-	_, err := r.store.Conn.Exec(query, c.ID, c.Title, specialistID)
+	encTitle, err := r.store.EncryptField(c.Title)
+	if err != nil {
+		return fmt.Errorf("failed encrypting conversation title: %w", err)
+	}
+	encSummary, err := r.store.EncryptField(c.Summary)
+	if err != nil {
+		return fmt.Errorf("failed encrypting conversation summary: %w", err)
+	}
+	query := "INSERT INTO conversations (id, title, summary, specialist_id) VALUES (?, ?, ?, ?)"
+	_, err = r.store.Conn.Exec(query, c.ID, encTitle, encSummary, specialistID)
 	return err
 }
 
@@ -51,8 +59,9 @@ func (r *ChatRepository) FindConversation(id string) (*types.Conversation, error
 		return nil, fmt.Errorf("failed fetching conversation: %w", err)
 	}
 
+	c.Title = r.store.DecryptField(c.Title)
 	if sum.Valid {
-		c.Summary = sum.String
+		c.Summary = r.store.DecryptField(sum.String)
 	}
 	if sID.Valid {
 		c.SpecialistID = sID.String
@@ -75,19 +84,24 @@ func (r *ChatRepository) FindLatestConversationBySpecialist(specialistID string)
 		return nil, fmt.Errorf("failed fetching specialist chat: %w", err)
 	}
 
+	c.Title = r.store.DecryptField(c.Title)
 	if sID.Valid {
 		c.SpecialistID = sID.String
 	}
 	if sum.Valid {
-		c.Summary = sum.String
+		c.Summary = r.store.DecryptField(sum.String)
 	}
 	return &c, nil
 }
 
 // SaveMessage writes a single conversational turn attached to a specific Conversation ID
 func (r *ChatRepository) SaveMessage(m *types.Message) error {
+	encContent, err := r.store.EncryptField(m.Content)
+	if err != nil {
+		return fmt.Errorf("failed encrypting message content: %w", err)
+	}
 	query := "INSERT INTO messages (id, conversation_id, role, content, tokens_used) VALUES (?, ?, ?, ?, ?)"
-	_, err := r.store.Conn.Exec(query, m.ID, m.ConversationID, m.Role, m.Content, m.TokensUsed)
+	_, err = r.store.Conn.Exec(query, m.ID, m.ConversationID, m.Role, encContent, m.TokensUsed)
 	return err
 }
 
@@ -116,6 +130,7 @@ func (r *ChatRepository) GetMessagesByConversation(conversationID string, limit 
 		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.TokensUsed, &m.Timestamp); err != nil {
 			return nil, err
 		}
+		m.Content = r.store.DecryptField(m.Content)
 		msgs = append(msgs, m)
 	}
 	return msgs, nil
@@ -123,8 +138,12 @@ func (r *ChatRepository) GetMessagesByConversation(conversationID string, limit 
 
 // UpdateConversationSummary overwrites the background memory block
 func (r *ChatRepository) UpdateConversationSummary(conversationID string, summary string) error {
+	encSummary, err := r.store.EncryptField(summary)
+	if err != nil {
+		return fmt.Errorf("failed encrypting conversation summary: %w", err)
+	}
 	query := "UPDATE conversations SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-	_, err := r.store.Conn.Exec(query, summary, conversationID)
+	_, err = r.store.Conn.Exec(query, encSummary, conversationID)
 	return err
 }
 
@@ -163,6 +182,8 @@ func (r *ChatRepository) ListConversations(limit int) ([]types.Conversation, err
 		if err := rows.Scan(&c.ID, &c.Title, &c.Summary, &c.SpecialistID, &c.CreatedAt, &c.UpdatedAt, &msgCount); err != nil {
 			return nil, err
 		}
+		c.Title = r.store.DecryptField(c.Title)
+		c.Summary = r.store.DecryptField(c.Summary)
 		c.MessageCount = msgCount
 		convs = append(convs, c)
 	}
@@ -189,6 +210,7 @@ func (r *ChatRepository) GetFullConversation(conversationID string) ([]types.Mes
 		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.TokensUsed, &m.Timestamp); err != nil {
 			return nil, err
 		}
+		m.Content = r.store.DecryptField(m.Content)
 		msgs = append(msgs, m)
 	}
 	return msgs, nil

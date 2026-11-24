@@ -45,25 +45,25 @@ type UserWizardModel struct {
 
 func NewUserWizardModel() *UserWizardModel {
 	inputs := make([]textinput.Model, 4)
-	
+
 	inputs[0] = textinput.New()
-	inputs[0].Placeholder = "What's your name?"
+	inputs[0].Placeholder = "Operator callsign or name (e.g. ops-lead-01)"
 	inputs[0].Focus()
 	inputs[0].CharLimit = 32
-	inputs[0].SetWidth(32)
+	inputs[0].SetWidth(40)
 
 	inputs[1] = textinput.New()
-	inputs[1].Placeholder = "Level of expertise (e.g. Senior Go Dev, Beginner)"
+	inputs[1].Placeholder = "Role / Domain (e.g. Systems Architect, SOC Analyst)"
 	inputs[1].CharLimit = 64
 	inputs[1].SetWidth(64)
 
 	inputs[2] = textinput.New()
-	inputs[2].Placeholder = "Interests (e.g. NATS, Kubernetes, Fitness)"
+	inputs[2].Placeholder = "Operational Focus (e.g. Air-Gap Telemetry, Incident Triage)"
 	inputs[2].CharLimit = 128
 	inputs[2].SetWidth(64)
 
 	inputs[3] = textinput.New()
-	inputs[3].Placeholder = "Bio (Tell Vraxter a bit about yourself)"
+	inputs[3].Placeholder = "Operational Notes (optional enclave context)"
 	inputs[3].CharLimit = 256
 	inputs[3].SetWidth(64)
 
@@ -127,7 +127,7 @@ func (m *UserWizardModel) View() tea.View {
 
 	var s strings.Builder
 
-	headerLeft := setupTitleStyle.Render("◈ USER PROFILE")
+	headerLeft := setupTitleStyle.Render("◈ OPERATOR PROFILE")
 	headerRight := setupFaintStyle.Render(fmt.Sprintf("%d / %d", m.step+1, len(m.inputs)))
 
 	pad := width - 6 - lipgloss.Width(headerLeft) - lipgloss.Width(headerRight)
@@ -139,7 +139,7 @@ func (m *UserWizardModel) View() tea.View {
 	if ruleWidth < 0 { ruleWidth = 0 }
 	s.WriteString(setupFaintStyle.Render(strings.Repeat("─", ruleWidth)) + "\n\n")
 
-	steps := []string{"Name", "Expertise", "Interests", "Bio"}
+	steps := []string{"Operator", "Role/Domain", "Focus", "Notes"}
 
 	// Progress indicator
 	for i := 0; i < len(steps); i++ {

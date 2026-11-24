@@ -12,7 +12,9 @@ package core
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/security"
@@ -47,7 +49,6 @@ func NewEngine(
 	reg *skills.Registry,
 	run *skills.Runner,
 	coder *services.CoderService,
-	spatialSvc *services.SpatialService,
 	verbose bool,
 	appDir string, // needed to load routing.yaml
 	requireSkillApproval bool,
@@ -63,10 +64,16 @@ func NewEngine(
 	// Ensure a documented sample is written on first run
 	_ = appcfg.WriteSampleRoutingConfig(appDir)
 
-	orch, err := NewOrchestrator(store, crypto, reg, run, coder, spatialSvc, verbose, routingCfg.Routes, requireSkillApproval, isolationMode, whitelistedIPs)
+	orch, err := NewOrchestrator(store, crypto, reg, run, coder, verbose, routingCfg.Routes, requireSkillApproval, isolationMode, whitelistedIPs)
 	if err != nil {
 		return nil, err
 	}
+	ledger, lErr := audit.NewLedger(store, appDir, "")
+	if lErr != nil {
+		return nil, fmt.Errorf("failed initializing forensic audit ledger: %w", lErr)
+	}
+	orch.SetAuditLedger(ledger)
+	audit.SetDefaultLedger(ledger)
 	return &Engine{
 		orch:           orch,
 		SpecialistRepo: orch.SpecialistRepo,
@@ -74,6 +81,21 @@ func NewEngine(
 		ChatRepo:       orch.ChatRepo,
 		Verbose:        orch.Verbose,
 	}, nil
+}
+
+// SetAuditLedger attaches a forensic audit ledger to the engine.
+func (e *Engine) SetAuditLedger(l *audit.Ledger) {
+	if e != nil && e.orch != nil {
+		e.orch.SetAuditLedger(l)
+	}
+}
+
+// AuditLedger returns the engine's active forensic audit ledger.
+func (e *Engine) AuditLedger() *audit.Ledger {
+	if e != nil && e.orch != nil {
+		return e.orch.AuditLedger
+	}
+	return audit.DefaultLedger()
 }
 
 // JobManager returns the underlying JobManager for handling global events
@@ -121,6 +143,20 @@ func (e *Engine) UnregisterSkill(id string) {
 func (e *Engine) SetHostExecGuard(guard *security.HostExecGuard) {
 	if e != nil && e.orch != nil && e.orch.ExecEngine != nil {
 		e.orch.ExecEngine.HostExecGuard = guard
+	}
+}
+
+// SetAllowRuntimeCodegen toggles whether LLM-initiated runtime WASM code generation is permitted.
+func (e *Engine) SetAllowRuntimeCodegen(allow bool) {
+	if e != nil && e.orch != nil {
+		e.orch.SetAllowRuntimeCodegen(allow)
+	}
+}
+
+// SetInferenceDefaults configures deterministic LLM inference parameters (Temperature, Seed, MaxTokens).
+func (e *Engine) SetInferenceDefaults(temp *float64, seed *int64, maxTokens int) {
+	if e != nil && e.orch != nil {
+		e.orch.SetInferenceDefaults(temp, seed, maxTokens)
 	}
 }
 

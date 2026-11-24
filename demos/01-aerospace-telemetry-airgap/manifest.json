@@ -1,0 +1,50 @@
+{
+  "$schema": "https://vraxter.io/schemas/skill-manifest.v1.json",
+  "manifest_version": "skill-manifest/1",
+  "id": "vrx-telemetry-analyzer",
+  "name": "Aerospace Turbine Telemetry Analyzer",
+  "version": "1.0.0",
+  "description": "Deterministic read-only WASI analyzer for aircraft turbine thermal/vibrational telemetry with adversarial prompt-injection quarantine.",
+  "agent": {
+    "risk": "low",
+    "approval": "never"
+  },
+  "module": {
+    "file": "vrx-telemetry-analyzer.wasm",
+    "abi": "wasip1"
+  },
+  "routing": {
+    "keywords": ["telemetry", "turbine", "vibration", "egt", "flight", "anomaly"],
+    "tags": ["aerospace", "airgap", "deterministic"]
+  },
+  "io": {
+    "input": {
+      "via": "stdin",
+      "format": "json"
+    },
+    "output": {
+      "via": "stdout",
+      "format": "json"
+    }
+  },
+  "capabilities": {
+    "fs": {
+      "mounts": [
+        {
+          "guest": "/input",
+          "source": "input",
+          "mode": "ro",
+          "allow_extensions": [".jsonl", ".json"]
+        }
+      ]
+    },
+    "network": {
+      "mode": "none"
+    }
+  },
+  "limits": {
+    "memory_mb": 64,
+    "max_runtime_ms": 5000,
+    "max_cpu_fuel": 25000000
+  }
+}

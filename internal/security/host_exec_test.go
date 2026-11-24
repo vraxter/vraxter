@@ -278,8 +278,24 @@ func TestHostExecGuard_EnforcesNetworkPerimeterInAirgapAndLocalLAN(t *testing.T)
 		}{
 			{"ping", []string{"-c", "1", "127.0.0.1"}},
 			{"ping", []string{"localhost"}},
+		}
+		lanCases := []struct {
+			cmd  string
+			args []string
+		}{
 			{"ping", []string{"192.168.1.10"}},
 			{"nmap", []string{"-p", "80,443", "192.168.1.0/24"}},
+		}
+
+		if mode == "local_lan" {
+			allowedCases = append(allowedCases, lanCases...)
+		} else {
+			// Strict airgap permits only loopback + explicit whitelisted_ips; unwhitelisted RFC 1918 LAN targets must be blocked.
+			for _, tc := range lanCases {
+				if _, err := guard.Prepare(tc.cmd, tc.args, false); !errors.Is(err, ErrNetworkTargetBlocked) {
+					t.Errorf("[%s] expected ErrNetworkTargetBlocked for unwhitelisted LAN target %s %v, got: %v", mode, tc.cmd, tc.args, err)
+				}
+			}
 		}
 
 		for _, tc := range allowedCases {

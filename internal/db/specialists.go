@@ -26,12 +26,21 @@ func NewSpecialistRepository(store *Store) *SpecialistRepository {
 func (r *SpecialistRepository) CreateSpecialist(s types.Specialist) error {
 	query := `INSERT INTO specialists (id, name, expertise, model_id, system_prompt, created_at)
 			  VALUES (?, ?, ?, ?, ?, ?)`
-	
+
 	if s.CreatedAt.IsZero() {
 		s.CreatedAt = time.Now()
 	}
 
-	_, err := r.Store.Conn.Exec(query, s.ID, s.Name, s.Expertise, s.ModelID, s.SystemPrompt, s.CreatedAt)
+	encExpertise, err := r.Store.EncryptField(s.Expertise)
+	if err != nil {
+		return fmt.Errorf("failed encrypting specialist expertise: %w", err)
+	}
+	encPrompt, err := r.Store.EncryptField(s.SystemPrompt)
+	if err != nil {
+		return fmt.Errorf("failed encrypting specialist system prompt: %w", err)
+	}
+
+	_, err = r.Store.Conn.Exec(query, s.ID, s.Name, encExpertise, s.ModelID, encPrompt, s.CreatedAt)
 	return err
 }
 
@@ -44,6 +53,8 @@ func (r *SpecialistRepository) GetSpecialist(id string) (*types.Specialist, erro
 	if err != nil {
 		return nil, fmt.Errorf("specialist not found: %w", err)
 	}
+	s.Expertise = r.Store.DecryptField(s.Expertise)
+	s.SystemPrompt = r.Store.DecryptField(s.SystemPrompt)
 
 	return &s, nil
 }
@@ -62,6 +73,8 @@ func (r *SpecialistRepository) GetAllSpecialists() ([]types.Specialist, error) {
 		if err := rows.Scan(&s.ID, &s.Name, &s.Expertise, &s.ModelID, &s.SystemPrompt, &s.CreatedAt); err != nil {
 			return nil, err
 		}
+		s.Expertise = r.Store.DecryptField(s.Expertise)
+		s.SystemPrompt = r.Store.DecryptField(s.SystemPrompt)
 		list = append(list, s)
 	}
 

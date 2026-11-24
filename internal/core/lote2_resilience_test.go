@@ -95,7 +95,7 @@ func newStubOrchestrator(t *testing.T, reply string, requireSkillApproval bool) 
 	runner := skills.NewRunner()
 	t.Cleanup(func() { runner.Close(context.Background()) })
 
-	orch, err := NewOrchestrator(store, cryptoSvc, reg, runner, nil, nil, false, nil, requireSkillApproval, "airgap", nil)
+	orch, err := NewOrchestrator(store, cryptoSvc, reg, runner, nil, false, nil, requireSkillApproval, "airgap", nil)
 	if err != nil {
 		t.Fatalf("NewOrchestrator: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestOrchestrator_RefreshCacheNeverReinjectsCloudModelsInAirgapOrLocalLAN(t 
 			runner := skills.NewRunner()
 			defer runner.Close(context.Background())
 
-			orch, err := NewOrchestrator(store, cryptoSvc, reg, runner, nil, nil, false, nil, false, mode, nil)
+			orch, err := NewOrchestrator(store, cryptoSvc, reg, runner, nil, false, nil, false, mode, nil)
 			if err != nil {
 				t.Fatalf("NewOrchestrator(%s): %v", mode, err)
 			}

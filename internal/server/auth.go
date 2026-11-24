@@ -12,21 +12,121 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"net/http"
+	"fmt"
 	"strings"
 	"sync"
 
+	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/security"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
 type contextKey string
 
-const scopesCtxKey = contextKey("scopes")
+const (
+	scopesCtxKey    = contextKey("scopes")
+	principalCtxKey = contextKey("principal")
+)
+
+// Principal represents the cryptographically authenticated identity of a gRPC caller,
+// derived exclusively from verified mTLS client certificates and/or authenticated API tokens.
+type Principal struct {
+	AuthMethod string   // "mtls+root_key", "mtls+api_key", "root_key", "api_key"
+	Subject    string   // Verified mTLS Subject CommonName or primary SAN
+	SANs       []string // Verified mTLS SANs (DNS, Email, URI, IP)
+	TokenID    string   // Authenticated api_keys.id or "root"
+	TokenName  string   // Authenticated api_keys.name or "daemon-root"
+	Scopes     []string
+}
+
+// AuditActor returns the canonical verified actor identifier recorded in audit_ledger.
+func (p Principal) AuditActor() string {
+	subject := strings.TrimSpace(p.Subject)
+	tokenID := strings.TrimSpace(p.TokenID)
+	if subject != "" {
+		if tokenID != "" && tokenID != "root" {
+			return fmt.Sprintf("mtls:%s|api_key:%s", subject, tokenID)
+		}
+		return "mtls:" + subject
+	}
+	if tokenID != "" && tokenID != "root" {
+		return "api_key:" + tokenID
+	}
+	if tokenID == "root" {
+		return "root:daemon"
+	}
+	return "system"
+}
+
+// WithPrincipal attaches a verified Principal and its authenticated audit actor to ctx.
+func WithPrincipal(ctx context.Context, p Principal) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithValue(ctx, principalCtxKey, p)
+	ctx = audit.WithAuthenticatedActor(ctx, p.AuditActor())
+	return ctx
+}
+
+// PrincipalFromContext retrieves the authenticated Principal attached to ctx.
+func PrincipalFromContext(ctx context.Context) (Principal, bool) {
+	if ctx == nil {
+		return Principal{}, false
+	}
+	p, ok := ctx.Value(principalCtxKey).(Principal)
+	return p, ok
+}
+
+func extractVerifiedMTLSPeer(ctx context.Context) (subject string, sans []string, ok bool) {
+	p, hasPeer := peer.FromContext(ctx)
+	if !hasPeer || p == nil || p.AuthInfo == nil {
+		return "", nil, false
+	}
+	tlsInfo, isTLS := p.AuthInfo.(credentials.TLSInfo)
+	if !isTLS {
+		return "", nil, false
+	}
+	// Trust ONLY certificates that passed CA chain verification.
+	if len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.VerifiedChains[0]) == 0 {
+		return "", nil, false
+	}
+	cert := tlsInfo.State.VerifiedChains[0][0]
+	for _, dns := range cert.DNSNames {
+		if d := strings.TrimSpace(dns); d != "" {
+			sans = append(sans, "dns:"+d)
+		}
+	}
+	for _, email := range cert.EmailAddresses {
+		if em := strings.TrimSpace(email); em != "" {
+			sans = append(sans, "email:"+em)
+		}
+	}
+	for _, u := range cert.URIs {
+		if u != nil && strings.TrimSpace(u.String()) != "" {
+			sans = append(sans, "uri:"+strings.TrimSpace(u.String()))
+		}
+	}
+	for _, ip := range cert.IPAddresses {
+		if ip != nil {
+			sans = append(sans, "ip:"+ip.String())
+		}
+	}
+
+	subject = strings.TrimSpace(cert.Subject.CommonName)
+	if subject == "" && len(sans) > 0 {
+		subject = sans[0]
+	}
+	if subject == "" {
+		subject = cert.SerialNumber.String()
+	}
+	return subject, sans, true
+}
 
 var (
 	globalAPIKeyRepoMu sync.RWMutex
@@ -105,11 +205,27 @@ func authorize(ctx context.Context, expectedKey string) (context.Context, error)
 		return ctx, status.Errorf(codes.Unauthenticated, "authorization token is not provided")
 	}
 
+	mtlsSubject, mtlsSANs, hasMTLS := extractVerifiedMTLSPeer(ctx)
+
 	provided := values[0]
 	// 1. Check Root Key
 	if err := security.ValidateAPIKey(expectedKey, provided); err == nil {
 		// Root key gets wildcards
-		return context.WithValue(ctx, scopesCtxKey, []string{"*"}), nil
+		authMethod := "root_key"
+		if hasMTLS {
+			authMethod = "mtls+root_key"
+		}
+		scopes := []string{"*"}
+		principal := Principal{
+			AuthMethod: authMethod,
+			Subject:    mtlsSubject,
+			SANs:       mtlsSANs,
+			TokenID:    "root",
+			TokenName:  "daemon-root",
+			Scopes:     scopes,
+		}
+		authCtx := context.WithValue(ctx, scopesCtxKey, scopes)
+		return WithPrincipal(authCtx, principal), nil
 	}
 
 	// 2. Check Scoped Tokens
@@ -129,7 +245,20 @@ func authorize(ctx context.Context, expectedKey string) (context.Context, error)
 					scopes = append(scopes, trimmed)
 				}
 			}
-			return context.WithValue(ctx, scopesCtxKey, scopes), nil
+			authMethod := "api_key"
+			if hasMTLS {
+				authMethod = "mtls+api_key"
+			}
+			principal := Principal{
+				AuthMethod: authMethod,
+				Subject:    mtlsSubject,
+				SANs:       mtlsSANs,
+				TokenID:    key.ID,
+				TokenName:  key.Name,
+				Scopes:     scopes,
+			}
+			authCtx := context.WithValue(ctx, scopesCtxKey, scopes)
+			return WithPrincipal(authCtx, principal), nil
 		}
 	}
 
@@ -185,22 +314,4 @@ func EnforceAnyScope(ctx context.Context, allowed ...string) error {
 	}
 
 	return status.Errorf(codes.PermissionDenied, "missing required scope (need one of: %s)", strings.Join(allowed, ", "))
-}
-
-// HTTPAuthMiddleware wraps an http.Handler and enforces the Authorization header.
-func HTTPAuthMiddleware(expectedKey string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		if err := security.ValidateAPIKey(expectedKey, authHeader); err != nil {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }

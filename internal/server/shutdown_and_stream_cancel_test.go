@@ -45,7 +45,7 @@ func TestAgentHandler_SystemShutdownSignalsGracefulChannel(t *testing.T) {
 	runner := skills.NewRunner()
 	defer runner.Close(context.Background())
 
-	eng, err := core.NewEngine(store, cryptoSvc, reg, runner, nil, nil, false, t.TempDir(), false, "airgap", nil)
+	eng, err := core.NewEngine(store, cryptoSvc, reg, runner, nil, false, t.TempDir(), false, "airgap", nil)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestGRPCClient_StreamCancelNoGoroutineLeak(t *testing.T) {
 	runner := skills.NewRunner()
 	defer runner.Close(context.Background())
 
-	eng, err := core.NewEngine(store, cryptoSvc, reg, runner, nil, nil, false, t.TempDir(), false, "airgap", nil)
+	eng, err := core.NewEngine(store, cryptoSvc, reg, runner, nil, false, t.TempDir(), false, "airgap", nil)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}

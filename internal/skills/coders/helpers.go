@@ -10,10 +10,10 @@ package coders
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/vraxter/vraxter/internal/utils"
 	"github.com/vraxter/vraxter/pkg/types"
 )
 
@@ -209,7 +209,7 @@ func BuildAndSaveV1ManifestWithTemplate(
 
 	manifestPath := filepath.Join(skillsDir, skillID+".manifest.json")
 	if data, err := json.MarshalIndent(v1, "", "  "); err == nil {
-		_ = os.WriteFile(manifestPath, data, 0600)
+		_ = utils.AtomicWriteFile(manifestPath, data, 0600)
 	}
 
 	return manifest

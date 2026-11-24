@@ -1,88 +1,84 @@
-# Vraxter Architecture Guide
+# Vraxter Architecture Guide (`v1.0.0`)
 
-Vraxter is engineered as a **distributed, headless autonomous engine** consisting of a persistent background daemon and a high-performance terminal interface.
+Vraxter is a **headless, pure-Go (`CGO_ENABLED=0`) Sovereign Autonomous Execution Runtime** structured as a hardened daemon (`vraxter server` / `vraxter daemon start`) with decoupled thin clients (CLI, Operator TUI, and external gRPC integrations).
 
+---
 
-## System Overview
+## 1. System Components
 
-The system follows a headless Client-Server architecture over **gRPC (HTTP/2)** on `127.0.0.1:50051` (with an experimental Connect RPC HTTP endpoint on `127.0.0.1:8080` currently serving the `EnvService` skeleton), ensuring that the "brain" (state, memory, execution) remains decoupled from any specific frontend (TUI, web dashboard, or external client).
+### 1.1 The Daemon (`vraxter server` / `vraxter daemon`)
+The daemon is the sole owner of encrypted runtime state and the policy enforcement point:
+- **Transport Control Plane**:
+  - **Unix/POSIX default**: Local Unix Domain Socket at `unix://<AppDir>/vraxter.sock` with strict `0600` permissions.
+  - **Windows default**: Loopback gRPC on `tcp://127.0.0.1:50051`.
+  - **Network TCP (`--listen-tcp`)**: Enforces mandatory **mTLS 1.3** (`TLS 1.3` minimum, `RequireAndVerifyClientCert`). Auto-generates local ECDSA/Ed25519 PKI (`ca.crt`, `server.crt/key`, `client.crt/key`) when `--listen-tcp` is enabled without custom certificates.
+- **Authentication & Principal Attribution**:
+  - Dual-mode constant-time authentication: local root daemon key (`.daemon_key`, `0600`) and granular scoped API keys (`vraxter tokens create`) stored in SQLite (`api_keys`) and enforced across both unary and streaming RPCs (`wrappedServerStream`).
+  - Authenticated peer identity (mTLS certificate CN/SAN + verified `api_keys.id`) is attached to request context as `Principal` and recorded directly in `audit_ledger`, ignoring client-supplied `SourceUser` spoofing.
+- **Persistence & Locking (`internal/db`)**:
+  - SQLite (`modernc.org/sqlite`, zero CGO) in WAL mode with `PRAGMA synchronous=FULL`, `PRAGMA foreign_keys=ON`, `PRAGMA busy_timeout=5000`, and `VACUUM INTO` snapshots.
+  - Exclusive OS-level file lock (`vraxter.db.lock`) prevents concurrent processes from corrupting state or working files.
+  - Pure-Go **AES-256-GCM** encryption at rest (`encrypt_db_at_rest=true`, `<AppDir>/db_master.key` `0600`) encrypting sensitive columns (`vraxter-enc-v1:...`), encrypted `.db.enc` snapshots, and full-file sealed `.db.enc` lifecycle with fail-closed error propagation.
+- **Forensic Audit Ledger & Local OTel (`internal/audit`, `internal/telemetry`)**:
+  - Append-only SQLite table `audit_ledger` guarded by `BEFORE UPDATE` and `BEFORE DELETE` SQLite `RAISE(ABORT)` triggers.
+  - Sequential SHA-256 hash chaining (`prev_hash` -> `entry_hash`) signed by the daemon's Ed25519 identity key (`audit_identity.key`, `0600`), with secret redaction, optional live JSONL mirroring (`audit_jsonl_path`), and zero-egress in-memory OpenTelemetry spans (`LocalTracerProvider`).
+  - Fail-closed startup: if `audit_identity.key` or the audit ledger fails to initialize, the daemon refuses to start.
+- **WASM/WASI Execution Sandbox (`internal/skills`)**:
+  - Wazero runtime enforcing `skill-manifest/1` (`schemas/manifest.schema.json`), Ed25519 signature verification (`trusted_signers/`), JSON Schema Draft-07 validation of `io.input.schema`, mandatory deterministic **WASM CPU Fuel** instrumentation (`limits.max_cpu_fuel`), bounded linear memory (`limits.memory_mb`), concurrency semaphore, and `QuotaFS` per-mount byte/file/extension/delete quotas.
+  - Native workspace tools (`vraxter-read-file`, `vraxter-list-dir`, `vraxter-patch-code`) and sensory inputs (`vraxter-see`, `vraxter-hear`) are confined to the workspace root via Go's `os.OpenRoot` with size and magic-byte validation.
+- **Guarded Host Exec (`internal/security/host_exec.go`)**:
+  - Disabled by default (`host_exec.enabled=false`); toggleable only locally (`--enable-host-exec` or local `settings.json`, never over gRPC).
+  - Enforces `host:exec` scope, SHA-256 binary allowlist (`host_commands.json`), shell/metacharacter rejection, sanitized environment, network destination perimeter checks, 2 MB output cap, and HITL approval for elevated/LLM commands.
+- **LLM Multi-Router & Resilience (`internal/llm`, `internal/core`)**:
+  - Priority-based routing across Ollama, OpenAI-compatible local servers (vLLM/llama.cpp), OpenAI, Anthropic, and Google.
+  - Native Tool Calling (`tools` / `EventTypeNativeToolCall`), deterministic inference parameters (`temperature=0`, `seed`, `max_tokens`), DDIL HTTP timeouts, and per-provider Circuit Breakers with automatic failover.
 
-### 1. The Daemon (`vraxter server`)
-The daemon is the primary source of truth. It manages:
-- **Persistence**: SQLite-backed history, specialists, and model configurations in WAL mode (`synchronous=FULL`, `foreign_keys=ON`, `VACUUM INTO` backups) with AES-256-GCM encryption for `providers.api_key`.
-- **Environmental Context Engine**: A thread-safe `StateManager` that manages dynamic `ModeConfig` templates (e.g. ambient lighting, music).
-- **Orchestration**: The request lifecycle from intent resolution to multi-phase execution and graceful shutdown (`SYSTEM_SHUTDOWN` / OS signals).
-- **Skill Runner & HostExecGuard**: The Wazero-powered WASM sandbox supporting Go, Rust, and Zig, strictly bounded by Skill Manifest V1 capability declarations, `Tier3Unverified` fail-closed defaults, scoped storage pools (`workspace`, `input`, `output`, `skill_data`, `ephemeral`), `os.OpenRoot` confinement, and optional allowlisted host command execution (`--enable-host-exec`).
-- **Intelligence**: Model routing and multi-provider coordination with DDIL HTTP timeouts.
-- **Perimeter & Isolation (Vraxter Shield)**: Real-time network boundary enforcement (`airgap`, `local_lan`, `hybrid`), in-memory DNS inspection, IMDS link-local blocking, CIDR whitelist support, transport-level socket blocking (`NewAirgapDialer`), and anti-downgrade runtime locking.
-- **Auth Pipeline**: Unary and streaming scoped-token enforcement (`wrappedServerStream`) and master key dual-authentication (`daemon.key`).
+---
 
-### 2. The gRPC & Connect RPC Layer
-- **Protobuf-Defined**: Every interaction is type-safe and defined in `api/v1`.
-- **Primary gRPC (HTTP/2 on `:50051`)**: Serves `AgentService`, `ProviderService`, `ModelService`, `SkillService`, `ConfigService`, and `AuthService` for the TUI, CLI, and external thin clients.
-- **Experimental Connect RPC (`:8080`)**: Currently serves the `EnvService` HTTP skeleton with `HTTPAuthMiddleware` and hardened HTTP timeouts.
-- **Streaming**: Supports server streaming for real-time LLM token delivery, tool progress, and interactive human-in-the-loop approvals.
+## 2. Request & Execution Pipeline
 
-### 3. The Global Event Bus
-Vraxter implements a centralized, asynchronous event streaming pipeline. The Event Bus emits standardized events (`SKILL_APPROVAL_REQUEST`, `TOOL_CALL`, `SPECIALIST_RESULT`, system statuses) ensuring all connected clients react in real-time without polling.
+1. **Ingress & Auth**: gRPC unary/stream interceptor verifies bearer key + RPC scope + mTLS peer cert and extracts immutable `Principal`.
+2. **Audit Ingestion**: `REQUEST_RECEIVED` is appended and signed in `audit_ledger` with `trace_id`, `session_id`, and verified `actor`.
+3. **Intent Resolution**:
+   - `/` slash commands (control plane / session operations)
+   - `@<specialist>` direct delegation to domain specialist
+   - `!<skill>` direct WASM skill invocation
+   - `$ <cmd>` guarded host execution (`HostExecGuard`)
+   - Natural language prompt -> Planner / Orchestrator loop
+4. **Context Assembly (`internal/prompts`)**: Assembles operator profile (`$Context.Operator`), enclave state (`$Context.Enclave`), RAG memories, workspace git context, specialist roster, and structured tool schemas.
+5. **Network Perimeter Enforcement (`internal/utils/airgap.go`)**:
+   - `airgap`: strictly loopback-only (`127.0.0.1`, `::1`, `localhost`) + explicit `whitelisted_ips`; all WAN, private RFC 1918 LAN, public DNS, and IMDS endpoints drop with `syscall.EPERM`.
+   - `local_lan`: allows loopback and RFC 1918 private intranet / `.local` / `.lan` endpoints; drops all public WAN egress.
+   - `hybrid`: permits configured cloud endpoints while maintaining IMDS and SSRF redirect guards.
+6. **Pre-Execution Policy & Sandbox**:
+   - HITL approval gate (`require_skill_approval`, `agent.approval`, `vraxter-patch-code`, `agent.allow_daemon`, elevated `$`).
+   - Parameter guard (rejects untrusted host mount overrides) + `io.input.schema` Draft-07 validation.
+   - Binary SHA-256 & Ed25519 signature verification against `trusted_signers/`.
+   - Fuel-instrumented WASM execution inside `QuotaFS`-wrapped mounts.
+   - `WASM_EXEC_START` / `POLICY_EVALUATED` / `WASM_EXEC_END` / `RESPONSE_EMITTED` recorded in `audit_ledger`.
 
-### 4. Spatial & Identity Concurrency
-The engine natively supports serving multiple physical rooms simultaneously.
-- **Spatial Isolation**: Requests containing a `source_zone` (e.g. "living_room") instantiate separate conversation memory streams.
-- **Unified Device Mapping**: The `SpatialService` loads internal `spatial.json` room-to-device mappings. *(Google Home API integration is currently a mock stub when `enable_google_home` is toggled.)*
-- **Voice Recognition**: Requests can pass a `source_user`. The Orchestrator automatically fetches that exact User Profile from the database, instantly hot-swapping the AI's identity context even during concurrent multi-user conversations.
+---
 
-### 5. Terminal Workstation (TUI)
-Built with Bubble Tea and Lip Gloss following the **Anodized Titanium & Burnished Copper** design system:
-- **Double-Rail Command Deck**: Top rail monitors session ID, active provider/model, and live isolation status capsule (`[ 🛡️ AIRGAP LOCKED ]`, `[ 🌐 LAN ONLY ]`, `[ ⚡ HYBRID ]`); bottom rail hosts the primary interaction shelf.
-- **Decision Bridge**: Modal approval shelf for human-in-the-loop authorization (`[Y] Execute (WASM Sandbox)` / `[N] Deny Request`).
-- **Specialist Swarm UI**: Real-time `@<name>` autocomplete overlays, left-accent specialist message blocks, and dynamic supervisor handoffs.
-
-
-## The Intelligence Pipeline
-
-Every user request goes through the following stages:
-
-### A. Intent Resolution
-Vraxter first determines if the input is:
-- **Explicit Command**: Starts with `/` (e.g., `/airgap`, `/plan`, `/specialists`, `/models`).
-- **Direct Specialist Delegation**: Starts with `@` (e.g., `@security-auditor audit this`).
-- **Direct Skill Call**: Starts with `!` (e.g., `!textstats`).
-- **Neural Reasoning**: Natural language query requiring LLM planning or execution.
-
-### B. Planning (Pro-Mode)
-For complex queries, the **Planner** breaks the task into a series of **Phases**. Each phase is an atomic goal assigned to either the supervisor or a specific **Specialist**.
-
-### C. Context Assembly
-Vraxter dynamically builds a system prompt using:
-- **User Profile**: Expertise and interests.
-- **Semantic Memory**: RAG-based context from conversation history.
-- **Project Structure**: Automated Git context and file tree analysis.
-- **Capabilities Matrix**: Listing available WASM tools and active models.
-
-### D. Perimeter Shielding & Execution
-Before outbound network calls are made:
-- If `isolation_mode: "airgap"` is active, public WAN IP connections are blocked with `syscall.EPERM` by `NewAirgapDialer`. Private LAN endpoints (RFC 1918: `192.168.x.x`, `10.x.x.x`, `172.16.x.x`, `.local`, `.lan`) remain accessible for local Ollama/vLLM servers.
-
-
-## Data Flow Diagram
+## 3. Data Flow Diagram
 
 ```mermaid
 graph TD
-    User([User Input]) --> Client[TUI / Web UI / Thin Client]
-    Client --> ConnectRPC["gRPC :50051 / Connect Env :8080"]
-    ConnectRPC --> Daemon["vraxter server"]
-    Daemon --> Orchestrator{Orchestrator}
-    Orchestrator --> StateMgr[State Manager]
-    Orchestrator --> SpatialSvc[Spatial Service]
-    Orchestrator --> SQL["SQLite WAL + AES-256 Keys"]
-    Orchestrator --> Runner[WASM Skill Runner]
-    Orchestrator --> Router[LLM Multi-Router]
-    
-    Router --> Shield{Vraxter Shield}
-    Shield -- "Hybrid / Permitted" --> Cloud[Public Cloud APIs]
-    Shield -- "Airgap / Private LAN" --> Local[Local / Intranet Ollama / vLLM]
-    Shield -- "Blocked WAN (Airgap)" --> Block[EPERM Drop]
-    
-    Runner --> Sandbox((WASM Manifest V1 Sandbox))
+    Op(["Operator / Thin Client"]) --> Transport["gRPC over UDS (0600) or mTLS 1.3 TCP"]
+    Transport --> Auth["Auth Interceptor (Token Scopes + mTLS Principal)"]
+    Auth --> Daemon["vraxter daemon / server"]
+    Daemon --> Audit["Immutable Audit Ledger (SQLite + SHA-256 Chain + Ed25519)"]
+    Daemon --> Orch{"Orchestrator & Native Tool Loop"}
+    Orch --> DB["Encrypted SQLite (AES-256-GCM + vraxter.db.lock + WAL FULL)"]
+    Orch --> Router["LLM Router + Per-Provider Circuit Breakers"]
+    Orch --> HITL{"HITL Decision Bridge"}
+
+    Router --> Shield{"Vraxter Network Shield"}
+    Shield -- "airgap (loopback)" --> Loopback["127.0.0.1 Ollama / vLLM"]
+    Shield -- "local_lan (RFC 1918)" --> LAN["Intranet GPU Cluster"]
+    Shield -- "hybrid (explicit)" --> Cloud["Configured External API"]
+    Shield -- "Blocked Egress / IMDS / DNS" --> Drop["syscall.EPERM Drop"]
+
+    HITL -- "Approved" --> Policy["Ed25519 + io.input.schema + Trust Policy"]
+    Policy --> Sandbox(("Wazero WASI Sandbox: CPU Fuel + Memory Cap + QuotaFS"))
+    HITL -- "Allowed $" --> HostGuard["HostExecGuard (SHA-256 Allowlist, No Shell)"]
 ```

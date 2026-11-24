@@ -152,3 +152,70 @@ func TestRegisterFromWASM_InvalidFiles(t *testing.T) {
 	}
 }
 
+// buildMinimalWASMWithImport encodes a valid minimal WebAssembly binary that imports
+// one zero-arg function (modName.fnName) so registration-time static verification can be tested directly.
+func buildMinimalWASMWithImport(modName, fnName string) []byte {
+	var out []byte
+	// Magic + version 1
+	out = append(out, 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00)
+	// Type section (id=1): 1 func type () -> ()
+	typeSec := []byte{0x01, 0x60, 0x00, 0x00}
+	out = append(out, 0x01, byte(len(typeSec)))
+	out = append(out, typeSec...)
+	// Import section (id=2): 1 func import using type index 0
+	var impSec []byte
+	impSec = append(impSec, 0x01) // 1 import
+	impSec = append(impSec, byte(len(modName)))
+	impSec = append(impSec, []byte(modName)...)
+	impSec = append(impSec, byte(len(fnName)))
+	impSec = append(impSec, []byte(fnName)...)
+	impSec = append(impSec, 0x00, 0x00) // kind=func, typeidx=0
+	out = append(out, 0x02, byte(len(impSec)))
+	out = append(out, impSec...)
+	return out
+}
+
+func TestRegisterFromWASM_RejectsOverPrivilegedImports(t *testing.T) {
+	tmpDir := t.TempDir()
+	store, err := db.NewStore(":memory:")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	skillsStorage := filepath.Join(tmpDir, "internal_skills")
+	svc := NewSkillService(db.NewSkillRepository(store), skillsStorage)
+
+	srcDir := filepath.Join(tmpDir, "overpriv")
+	if err := os.MkdirAll(srcDir, 0700); err != nil {
+		t.Fatalf("mkdir srcDir: %v", err)
+	}
+
+	// Binary imports vrax_sandbox.http_get, but manifest declares NO network capability.
+	wasmBytes := buildMinimalWASMWithImport("vrax_sandbox", "http_get")
+	wasmPath := filepath.Join(srcDir, "sneaky.wasm")
+	if err := os.WriteFile(wasmPath, wasmBytes, 0600); err != nil {
+		t.Fatalf("write wasm: %v", err)
+	}
+	manifestJSON := `{
+		"manifest_version": "skill-manifest/1",
+		"id": "sneaky",
+		"name": "Sneaky",
+		"version": "1.0.0",
+		"description": "Claims no network but imports http_get",
+		"module": {"file": "sneaky.wasm", "abi": "wasip1"}
+	}`
+	if err := os.WriteFile(filepath.Join(srcDir, "manifest.json"), []byte(manifestJSON), 0600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	if _, err := svc.RegisterFromWASM(wasmPath, ""); err == nil || !strings.Contains(err.Error(), "vrax_sandbox.http_get") {
+		t.Fatalf("expected RegisterFromWASM to reject undeclared http_get import, got: %v", err)
+	}
+
+	// Binary MUST NOT have been copied into internal skills storage.
+	if _, err := os.Stat(filepath.Join(skillsStorage, "sneaky.wasm")); !os.IsNotExist(err) {
+		t.Fatalf("rejected over-privileged WASM binary must not be persisted into skills storage")
+	}
+}
+

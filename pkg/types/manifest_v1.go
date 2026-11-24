@@ -49,8 +49,9 @@ type SkillManifestV1 struct {
 
 // AgentGovernance controls execution policy and approval gates.
 type AgentGovernance struct {
-	Risk     string `json:"risk,omitempty"`     // "low", "medium", "high", "critical"
-	Approval string `json:"approval,omitempty"` // "never", "always", "on_risk", "conditional"
+	Risk        string `json:"risk,omitempty"`         // "low", "medium", "high", "critical"
+	Approval    string `json:"approval,omitempty"`     // "never", "always", "on_risk", "conditional"
+	AllowDaemon bool   `json:"allow_daemon,omitempty"` // Explicit opt-in required for background daemon execution
 }
 
 // ModuleSpec defines the WASM compilation target and integrity verification.
@@ -138,8 +139,9 @@ type ClockSpec struct {
 
 // LimitsSpec specifies runtime resource limits.
 type LimitsSpec struct {
-	MemoryMB     int `json:"memory_mb,omitempty"`     // 1 to 2048 MB
-	MaxRuntimeMS int `json:"max_runtime_ms,omitempty"` // In milliseconds
+	MemoryMB     int   `json:"memory_mb,omitempty"`     // 1 to 2048 MB
+	MaxRuntimeMS int   `json:"max_runtime_ms,omitempty"` // In milliseconds
+	MaxCPUFuel   int64 `json:"max_cpu_fuel,omitempty"`   // Deterministic CPU instruction/block fuel budget
 }
 
 // ManifestValidationOptions controls optional policy relaxations during manifest validation.
@@ -319,6 +321,9 @@ func (m *SkillManifestV1) ValidateWithOptions(opts ManifestValidationOptions) er
 		if m.Limits.MaxRuntimeMS < 0 || m.Limits.MaxRuntimeMS > 300000 {
 			return fmt.Errorf("limits.max_runtime_ms (%d) must be between 100 and 300000", m.Limits.MaxRuntimeMS)
 		}
+		if m.Limits.MaxCPUFuel < 0 {
+			return fmt.Errorf("limits.max_cpu_fuel (%d) must be >= 1 when specified", m.Limits.MaxCPUFuel)
+		}
 	}
 
 	return nil
@@ -401,6 +406,11 @@ func (m *SkillManifest) RequiresApproval(globalRequireApproval bool) bool {
 	return globalRequireApproval
 }
 
+// AllowsDaemon reports whether the skill manifest explicitly permits background daemon execution.
+func (m *SkillManifest) AllowsDaemon() bool {
+	return m != nil && m.ManifestV1 != nil && m.ManifestV1.Agent.AllowDaemon
+}
+
 // GetExecutionTimeout returns the effective timeout duration for the skill.
 func (m *SkillManifest) GetExecutionTimeout(defaultTimeout time.Duration) time.Duration {
 	if m.ManifestV1 != nil && m.ManifestV1.Limits != nil && m.ManifestV1.Limits.MaxRuntimeMS > 0 {
@@ -424,5 +434,16 @@ func (m *SkillManifest) GetMemoryLimitPages(defaultPages uint32) uint32 {
 		return defaultPages
 	}
 	return 2048 // 128MB default
+}
+
+// GetMaxCPUFuel returns the effective deterministic CPU fuel budget for the skill.
+func (m *SkillManifest) GetMaxCPUFuel(defaultFuel int64) int64 {
+	if m.ManifestV1 != nil && m.ManifestV1.Limits != nil && m.ManifestV1.Limits.MaxCPUFuel > 0 {
+		return m.ManifestV1.Limits.MaxCPUFuel
+	}
+	if defaultFuel > 0 {
+		return defaultFuel
+	}
+	return 50_000_000
 }
 

@@ -11,7 +11,7 @@ package tui
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -749,10 +749,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			done = true
 		}
 		if sw, ok := m.ActiveSetup.(*StartupWizard); ok && sw.Done {
-			if sw.SelectedImplementation != "" {
+			if sw.SelectedIsolationMode != "" {
 				cfg := config.Load()
-				cfg.Implementation = sw.SelectedImplementation
+				cfg.IsolationMode = sw.SelectedIsolationMode
+				if sw.SelectedIsolationMode == "airgap" {
+					cfg.PrivacyPolicy = "strict_local"
+				} else {
+					cfg.PrivacyPolicy = "custom"
+				}
 				_ = cfg.SaveSettings()
+				m.IsolationMode = cfg.IsolationMode
+				m.PrivacyPolicy = cfg.PrivacyPolicy
 			}
 			done = true
 		}
@@ -2038,7 +2045,8 @@ func (m *Model) handleSlashCommand(cmd string) tea.Cmd {
 		m.IsWaitingForApproval = false
 		return tea.Batch(m.fireExecution(cmd), m.Spinner.Tick)
 	case "/new", "/reset":
-		m.SessionID = fmt.Sprintf("new-%d-%x", time.Now().Unix(), md5.Sum([]byte(uuid.New().String())))
+		sum := sha256.Sum256([]byte(uuid.New().String()))
+		m.SessionID = fmt.Sprintf("new-%d-%x", time.Now().Unix(), sum[:8])
 		m.History = []HistoryBlock{}
 		m.ActiveCardHistoryIdx = -1
 		m.IsPlanning = false

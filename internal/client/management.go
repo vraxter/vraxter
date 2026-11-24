@@ -10,9 +10,9 @@ package client
 
 import (
 	"context"
+
 	v1 "github.com/vraxter/vraxter/api/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // ManagementClient provides a high-level wrapper over the gRPC Management RPCs
@@ -22,10 +22,11 @@ type ManagementClient struct {
 }
 
 func NewManagementClient(addr string, apiKey string) (*ManagementClient, error) {
-	conn, err := grpc.Dial(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithPerRPCCredentials(NewAPICredentials(apiKey)),
-	)
+	return NewManagementClientWithTLS(addr, apiKey, nil)
+}
+
+func NewManagementClientWithTLS(addr string, apiKey string, tlsOpts *ClientTLSOptions) (*ManagementClient, error) {
+	conn, err := dialDaemon(context.Background(), addr, apiKey, tlsOpts, false)
 	if err != nil {
 		return nil, err
 	}

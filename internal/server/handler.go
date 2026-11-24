@@ -16,10 +16,12 @@ import (
 	"time"
 
 	v1 "github.com/vraxter/vraxter/api/v1"
+	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/config"
 	"github.com/vraxter/vraxter/internal/core"
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/services"
+	"github.com/vraxter/vraxter/internal/telemetry"
 	"github.com/vraxter/vraxter/pkg/types"
 	"google.golang.org/grpc/metadata"
 )
@@ -73,9 +75,28 @@ func (h *AgentHandler) triggerGracefulShutdown() {
 // Execute handles the gRPC stream for a natural language intent
 func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_ExecuteServer) error {
 	ctx := stream.Context()
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if tids := md.Get("x-vraxter-trace-id"); len(tids) > 0 && strings.TrimSpace(tids[0]) != "" {
+			ctx = telemetry.WithTraceID(ctx, tids[0])
+		}
+	}
+	ctx, _, span := telemetry.EnsureTraceID(ctx, "server.Execute")
+	defer span.End()
+	ctx = audit.WithOrigin(ctx, "grpc")
+	verifiedActor := audit.ActorFromContext(ctx)
 
 	if req.Query == "SYSTEM_SHUTDOWN" {
 		if err := EnforceScope(ctx, "*"); err != nil {
+			_, _ = audit.Record(ctx, audit.AuditEventInput{
+				SessionID: req.ConversationId,
+				Actor:     verifiedActor,
+				EventType: audit.EventPolicyEvaluated,
+				Payload: map[string]interface{}{
+					"check":          "grpc_scope",
+					"required_scope": "*",
+					"decision":       "DENY",
+				},
+			})
 			return err
 		}
 		fmt.Println("🛑 Received Remote Shutdown Signal. Initiating graceful shutdown...")
@@ -88,12 +109,32 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 	}
 
 	if err := EnforceScope(ctx, "chat:write"); err != nil {
+		_, _ = audit.Record(ctx, audit.AuditEventInput{
+			SessionID: req.ConversationId,
+			Actor:     verifiedActor,
+			EventType: audit.EventPolicyEvaluated,
+			Payload: map[string]interface{}{
+				"check":          "grpc_scope",
+				"required_scope": "chat:write",
+				"decision":       "DENY",
+			},
+		})
 		return err
 	}
 
 	trimmedQuery := strings.TrimSpace(req.Query)
 	if strings.HasPrefix(trimmedQuery, types.CommandExecutionPrefix) || strings.HasPrefix(trimmedQuery, "!APPROVE_HOST_CMD") {
 		if err := EnforceScope(ctx, "host:exec"); err != nil {
+			_, _ = audit.Record(ctx, audit.AuditEventInput{
+				SessionID: req.ConversationId,
+				Actor:     verifiedActor,
+				EventType: audit.EventPolicyEvaluated,
+				Payload: map[string]interface{}{
+					"check":          "grpc_scope",
+					"required_scope": "host:exec",
+					"decision":       "DENY",
+				},
+			})
 			return err
 		}
 	}
@@ -116,8 +157,12 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 		}
 	}
 
-	// 2. Process intent via Engine (Returns a channel of events)
-	events, err := h.engine.ProcessRawIntent(ctx, sessionID, req.Query, specID, req.ModelId, req.SourceZone, req.SourceUser)
+	// 2. Process intent via Engine (Ignore unverified client SourceUser when cryptographically authenticated)
+	effectiveSourceUser := req.SourceUser
+	if _, hasPrincipal := PrincipalFromContext(ctx); hasPrincipal {
+		effectiveSourceUser = ""
+	}
+	events, err := h.engine.ProcessRawIntent(ctx, sessionID, req.Query, specID, req.ModelId, req.SourceZone, effectiveSourceUser)
 	if err != nil {
 		return fmt.Errorf("engine failed to initialize stream: %w", err)
 	}
@@ -232,7 +277,10 @@ func (h *AgentHandler) GetInfo(ctx context.Context, req *v1.GetInfoRequest) (*v1
 	if err := EnforceAnyScope(ctx, "chat:read", "chat:write", "system:read"); err != nil {
 		return nil, err
 	}
-	modelID := h.engine.GetActiveModelID("")
+	modelID := ""
+	if h.engine != nil {
+		modelID = h.engine.GetActiveModelID("")
+	}
 	return &v1.GetInfoResponse{
 		ModelId: modelID,
 		Version: "v1.0.0",
