@@ -117,8 +117,12 @@ func ParseAndLookup(urlStr string) ([]net.IP, string, error) {
 }
 
 // IsAllowedHost validates whether a destination host is permitted under the given isolation mode.
-//   - "airgap" / "strict_local" / "local_lan": blocks public IPs, external WAN FQDNs (with zero DNS),
-//     and link-local/IMDS (169.254.0.0/16, fe80::/10) unless explicitly whitelisted (exact or CIDR).
+//   - "airgap" / "strict_local": strictly loopback-only (127.0.0.1, ::1, localhost) plus explicit
+//     whitelisted_ips (exact host/IP or CIDR). Blocks public WAN IPs, external FQDNs (with zero DNS),
+//     unwhitelisted RFC 1918 private LAN subnets, and link-local/IMDS (169.254.0.0/16, fe80::/10).
+//   - "local_lan": allows loopback, RFC 1918 private LAN subnets, .local/.lan/single-label internal
+//     hostnames, and explicit whitelisted_ips, while blocking public WAN IPs, external WAN FQDNs
+//     (with zero DNS), and link-local/IMDS.
 //   - "hybrid": permits public IPs and WAN hostnames while still blocking link-local/IMDS by default
 //     unless explicitly whitelisted.
 func IsAllowedHost(rawHost string, mode string, whitelist []string) (bool, error) {
@@ -155,7 +159,18 @@ func IsAllowedHost(rawHost string, mode string, whitelist []string) (bool, error
 		}
 
 		switch normMode {
-		case "airgap", "strict_local", "local_lan":
+		case "airgap", "strict_local":
+			if parsedIP.IsLoopback() {
+				return true, nil
+			}
+			if IsPublicIP(parsedIP) {
+				return false, fmt.Errorf("public IP %s is blocked under %s isolation perimeter (zero-egress to WAN)", parsedIP.String(), normMode)
+			}
+			if parsedIP.IsPrivate() {
+				return false, fmt.Errorf("private LAN IP %s is blocked under strict %s perimeter (loopback and explicit whitelisted_ips only; use local_lan for RFC 1918 subnets)", parsedIP.String(), normMode)
+			}
+			return false, fmt.Errorf("IP %s blocked in %s mode", parsedIP.String(), normMode)
+		case "local_lan":
 			if IsPublicIP(parsedIP) {
 				return false, fmt.Errorf("public IP %s is blocked under %s isolation perimeter (zero-egress to WAN)", parsedIP.String(), normMode)
 			}
@@ -173,7 +188,10 @@ func IsAllowedHost(rawHost string, mode string, whitelist []string) (bool, error
 
 	// Host is a non-IP hostname / FQDN
 	switch normMode {
-	case "airgap", "strict_local", "local_lan":
+	case "airgap", "strict_local":
+		// DETERMINISTIC ZERO-EGRESS: Strict airgap forbids all non-loopback, non-whitelisted hostnames with zero DNS queries.
+		return false, fmt.Errorf("DNS resolution blocked: strict %s perimeter permits only loopback and explicit whitelisted_ips (blocked host '%s')", normMode, host)
+	case "local_lan":
 		// Allow .local, .lan, or internal single-label hostnames only if they resolve solely to allowed private/loopback IPs
 		lower := strings.ToLower(host)
 		if strings.HasSuffix(lower, ".local") || strings.HasSuffix(lower, ".lan") || !strings.Contains(host, ".") {
@@ -422,7 +440,18 @@ func ResolveAndValidateHost(ctx context.Context, rawHost, mode string, whitelist
 			return nil, fmt.Errorf("unspecified IP %s is blocked", parsedIP.String())
 		}
 		switch normMode {
-		case "airgap", "strict_local", "local_lan":
+		case "airgap", "strict_local":
+			if parsedIP.IsLoopback() {
+				return []net.IP{parsedIP}, nil
+			}
+			if IsPublicIP(parsedIP) {
+				return nil, fmt.Errorf("public IP %s is blocked under %s isolation perimeter (zero-egress to WAN)", parsedIP.String(), normMode)
+			}
+			if parsedIP.IsPrivate() {
+				return nil, fmt.Errorf("private LAN IP %s is blocked under strict %s perimeter (loopback and explicit whitelisted_ips only; use local_lan for RFC 1918 subnets)", parsedIP.String(), normMode)
+			}
+			return nil, fmt.Errorf("IP %s blocked in %s mode", parsedIP.String(), normMode)
+		case "local_lan":
 			if IsPublicIP(parsedIP) {
 				return nil, fmt.Errorf("public IP %s is blocked under %s isolation perimeter (zero-egress to WAN)", parsedIP.String(), normMode)
 			}
@@ -445,7 +474,32 @@ func ResolveAndValidateHost(ctx context.Context, rawHost, mode string, whitelist
 
 	// 4. Non-IP hostname / FQDN under active isolation mode
 	switch normMode {
-	case "airgap", "strict_local", "local_lan":
+	case "airgap", "strict_local":
+		if !explicitlyWhitelistedHost {
+			// Deterministic zero-egress: strict airgap permits only loopback and explicit whitelisted_ips.
+			return nil, fmt.Errorf("DNS resolution blocked: strict %s perimeter permits only loopback and explicit whitelisted_ips (blocked host '%s')", normMode, host)
+		}
+		ips, err := lookupFn(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("whitelisted host resolution failed for '%s': %w", host, err)
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("DNS resolution returned no addresses for '%s'", host)
+		}
+		for _, ip := range ips {
+			if isWhitelistedHostOrIP(ip.String(), ip, whitelist) {
+				continue
+			}
+			if IsLinkLocalIP(ip) {
+				return nil, fmt.Errorf("host '%s' resolved to link-local / IMDS IP %s (blocked in %s)", host, ip.String(), normMode)
+			}
+			if ip.IsUnspecified() {
+				return nil, fmt.Errorf("host '%s' resolved to unspecified IP %s (blocked)", host, ip.String())
+			}
+		}
+		return ips, nil
+
+	case "local_lan":
 		lower := strings.ToLower(host)
 		isLocalName := strings.HasSuffix(lower, ".local") || strings.HasSuffix(lower, ".lan") || !strings.Contains(host, ".")
 		if !isLocalName && !explicitlyWhitelistedHost {

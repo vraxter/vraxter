@@ -65,6 +65,7 @@ const (
 	EventTypeError                StreamEventType = "error"
 	EventTypeDone                 StreamEventType = "done"
 	EventTypeSkillCall            StreamEventType = "skill_call"
+	EventTypeNativeToolCall       StreamEventType = "native_tool_call"
 	EventTypeCommandCall          StreamEventType = "command_call"
 	EventTypePlanProposal         StreamEventType = "plan_proposal"
 	EventTypeStatus               StreamEventType = "status"

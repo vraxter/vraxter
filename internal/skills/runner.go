@@ -53,6 +53,46 @@ const (
 	DefaultMaxConcurrentExecs = 6
 )
 
+type sessionDirsCtxKey struct{}
+
+// SessionDirs holds host-verified directory mounts injected exclusively by trusted
+// runtime callers via WithSessionDirs. Untrusted LLM/user parameters can never set
+// or override these paths.
+type SessionDirs struct {
+	InputDir  string
+	OutputDir string
+}
+
+// WithSessionDirs attaches trusted host input/output mount directories to ctx.
+func WithSessionDirs(ctx context.Context, dirs SessionDirs) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, sessionDirsCtxKey{}, SessionDirs{
+		InputDir:  strings.TrimSpace(dirs.InputDir),
+		OutputDir: strings.TrimSpace(dirs.OutputDir),
+	})
+}
+
+// SessionDirsFromContext retrieves trusted host session mount directories from ctx.
+func SessionDirsFromContext(ctx context.Context) (SessionDirs, bool) {
+	if ctx == nil {
+		return SessionDirs{}, false
+	}
+	dirs, ok := ctx.Value(sessionDirsCtxKey{}).(SessionDirs)
+	return dirs, ok
+}
+
+func findForbiddenMountParam(params map[string]interface{}) (string, bool) {
+	for k := range params {
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "input_dir", "_input_dir", "output_dir", "_output_dir":
+			return k, true
+		}
+	}
+	return "", false
+}
+
 // limitedBuffer captures up to limit bytes in memory without erroring or OOMing on overflow.
 type limitedBuffer struct {
 	buf       bytes.Buffer
@@ -110,6 +150,7 @@ type Runner struct {
 	MaxBinaryBytes      int64
 	MaxMemoryPages      uint32
 	DefaultCPUFuel      int64
+	FuelInstrumentFn    func([]byte, int64) ([]byte, error)
 	compilationCache    wazero.CompilationCache
 	runtimes            map[uint32]wazero.Runtime       // keyed by memoryLimitPages
 	cache               map[moduleCacheKey]*cachedModule // indexed by (SHA-256, memoryLimitPages)
@@ -659,9 +700,18 @@ func (rn *Runner) getOrCompileModule(ctx context.Context, wasmPath, expectedHash
 		return nil, fmt.Errorf("WASM binary changed concurrently on disk (expected %s, got %s)", expectedHash, actualHash)
 	}
 
-	if instrumented, fuelErr := InstrumentWASMWithFuel(wasmBytes, rn.defaultMaxCPUFuel()); fuelErr == nil && len(instrumented) > 0 {
-		wasmBytes = instrumented
+	instrumentFn := rn.FuelInstrumentFn
+	if instrumentFn == nil {
+		instrumentFn = InstrumentWASMWithFuel
 	}
+	instrumented, fuelErr := instrumentFn(wasmBytes, rn.defaultMaxCPUFuel())
+	if fuelErr != nil || len(instrumented) == 0 {
+		if fuelErr == nil {
+			fuelErr = fmt.Errorf("fuel instrumentor produced empty bytecode")
+		}
+		return nil, fmt.Errorf("VRAXTER SHIELD: mandatory WASM CPU fuel instrumentation failed for %s: %w", wasmPath, fuelErr)
+	}
+	wasmBytes = instrumented
 
 	compiled, err := rt.CompileModule(ctx, wasmBytes)
 	if err != nil {
@@ -710,6 +760,29 @@ func (rn *Runner) getOrCompileModule(ctx context.Context, wasmPath, expectedHash
 }
 
 func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillManifest, params map[string]interface{}, isDryRun bool) (*types.ExecutionResult, error) {
+	// Reject any untrusted LLM/user parameter attempting to inject or override host mount paths.
+	if !isDryRun {
+		if badKey, found := findForbiddenMountParam(params); found {
+			rn.recordAudit(ctx, audit.EventPolicyEvaluated, map[string]interface{}{
+				"check":    "wasm_mount_param_guard",
+				"skill_id": manifest.ID,
+				"param":    badKey,
+				"decision": "DENY",
+				"reason":   "untrusted parameter attempted to override host mount directory",
+			})
+			return nil, fmt.Errorf("VRAXTER SHIELD: parameter %q is forbidden; host mount directories may only be supplied by trusted runtime context", badKey)
+		}
+		if schemaErr := ValidateSkillInputParams(manifest, params); schemaErr != nil {
+			rn.recordAudit(ctx, audit.EventPolicyEvaluated, map[string]interface{}{
+				"check":    "wasm_input_schema",
+				"skill_id": manifest.ID,
+				"decision": "DENY",
+				"reason":   schemaErr.Error(),
+			})
+			return nil, fmt.Errorf("VRAXTER SHIELD: input parameters failed io.input.schema validation for skill '%s': %w", manifest.ID, schemaErr)
+		}
+	}
+
 	reqPayload := types.SkillRequest{
 		JSONRPC: "2.0",
 		Method:  "execute",
@@ -794,13 +867,15 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 			return nil, sigErr
 		}
 
+		// Sovereign trust policy: authorization is determined strictly by cryptographic Ed25519
+		// signer trust (Tier1Official / Tier2CommunityVerified) or zero-privilege sandboxing —
+		// never by app-store ratings or download counts.
 		isOfficial := manifest.IsOfficial
-		hasHighReputation := manifest.Score >= 4.0 && manifest.Downloads > 100
 		isSandboxSafe := len(manifest.Permissions) == 0 && !hasPrivilegedCapabilities(manifest.ManifestV1)
 
-		isAuthorized := isOfficial || hasHighReputation || isSandboxSafe || manifest.Tier == types.Tier1Official || manifest.Tier == types.Tier2CommunityVerified
+		isAuthorized := isOfficial || isSandboxSafe || manifest.Tier == types.Tier1Official || manifest.Tier == types.Tier2CommunityVerified
 
-		// Fail-closed: unset Tier (0) or Tier3Unverified require explicit trust for any privileged skill.
+		// Fail-closed: unset Tier (0) or Tier3Unverified require explicit cryptographic signer trust or local trust policy for any privileged skill.
 		if !isAuthorized && (manifest.Tier == 0 || manifest.Tier >= types.Tier3Unverified) {
 			rn.recordAudit(execCtx, audit.EventPolicyEvaluated, map[string]interface{}{
 				"check":       "wasm_trust_tier",
@@ -811,8 +886,8 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 				"reason":      "untrusted_privileged_skill",
 			})
 			return nil, fmt.Errorf(
-				"VRAXTER SHIELD: Skill '%s' requires specialized permissions and lacks community trust. "+
-					"To allow this skill, run 'vraxter skills trust %s'", manifest.ID, manifest.ID)
+				"VRAXTER SHIELD: Skill '%s' requires specialized permissions and lacks cryptographic signer trust. "+
+					"Register its Ed25519 signer via 'vraxter skill trust add --pub <signer.pub>' or authorize locally via 'vraxter skill trust %s'", manifest.ID, manifest.ID)
 		}
 
 		rn.recordAudit(execCtx, audit.EventPolicyEvaluated, map[string]interface{}{
@@ -857,16 +932,14 @@ func (rn *Runner) executeWasmInternal(ctx context.Context, manifest types.SkillM
 						hostBase, _ = os.Getwd()
 					}
 				case "input":
-					if inDir, ok := params["_input_dir"].(string); ok && inDir != "" {
-						hostBase = inDir
-					} else if inDir, ok := params["input_dir"].(string); ok && inDir != "" {
-						hostBase = inDir
+					if sessDirs, ok := SessionDirsFromContext(ctx); ok && sessDirs.InputDir != "" {
+						hostBase = sessDirs.InputDir
 					} else {
 						hostBase = filepath.Join(runTempDir, "input")
 					}
 				case "output":
-					if outDir, ok := params["_output_dir"].(string); ok && outDir != "" {
-						hostBase = outDir
+					if sessDirs, ok := SessionDirsFromContext(ctx); ok && sessDirs.OutputDir != "" {
+						hostBase = sessDirs.OutputDir
 					} else {
 						userHome, _ := os.UserHomeDir()
 						hostBase = filepath.Join(userHome, ".vraxter", "artifacts", "skills", manifest.ID)

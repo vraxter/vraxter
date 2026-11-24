@@ -31,10 +31,16 @@ func (r *ChatRepository) CreateConversation(c *types.Conversation) error {
 	if c.SpecialistID != "" {
 		specialistID = &c.SpecialistID
 	}
-	encTitle := r.store.EncryptField(c.Title)
-	encSummary := r.store.EncryptField(c.Summary)
+	encTitle, err := r.store.EncryptField(c.Title)
+	if err != nil {
+		return fmt.Errorf("failed encrypting conversation title: %w", err)
+	}
+	encSummary, err := r.store.EncryptField(c.Summary)
+	if err != nil {
+		return fmt.Errorf("failed encrypting conversation summary: %w", err)
+	}
 	query := "INSERT INTO conversations (id, title, summary, specialist_id) VALUES (?, ?, ?, ?)"
-	_, err := r.store.Conn.Exec(query, c.ID, encTitle, encSummary, specialistID)
+	_, err = r.store.Conn.Exec(query, c.ID, encTitle, encSummary, specialistID)
 	return err
 }
 
@@ -90,9 +96,12 @@ func (r *ChatRepository) FindLatestConversationBySpecialist(specialistID string)
 
 // SaveMessage writes a single conversational turn attached to a specific Conversation ID
 func (r *ChatRepository) SaveMessage(m *types.Message) error {
-	encContent := r.store.EncryptField(m.Content)
+	encContent, err := r.store.EncryptField(m.Content)
+	if err != nil {
+		return fmt.Errorf("failed encrypting message content: %w", err)
+	}
 	query := "INSERT INTO messages (id, conversation_id, role, content, tokens_used) VALUES (?, ?, ?, ?, ?)"
-	_, err := r.store.Conn.Exec(query, m.ID, m.ConversationID, m.Role, encContent, m.TokensUsed)
+	_, err = r.store.Conn.Exec(query, m.ID, m.ConversationID, m.Role, encContent, m.TokensUsed)
 	return err
 }
 
@@ -129,9 +138,12 @@ func (r *ChatRepository) GetMessagesByConversation(conversationID string, limit 
 
 // UpdateConversationSummary overwrites the background memory block
 func (r *ChatRepository) UpdateConversationSummary(conversationID string, summary string) error {
-	encSummary := r.store.EncryptField(summary)
+	encSummary, err := r.store.EncryptField(summary)
+	if err != nil {
+		return fmt.Errorf("failed encrypting conversation summary: %w", err)
+	}
 	query := "UPDATE conversations SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-	_, err := r.store.Conn.Exec(query, encSummary, conversationID)
+	_, err = r.store.Conn.Exec(query, encSummary, conversationID)
 	return err
 }
 

@@ -29,6 +29,7 @@ var specialistsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all available specialists",
 	Run: func(cmd *cobra.Command, args []string) {
+		bootstrap()
 		repo := appEngine.SpecialistRepo
 		list, err := repo.GetAllSpecialists()
 		if err != nil {
@@ -56,6 +57,7 @@ var specialistsCreateCmd = &cobra.Command{
 	Short: "Manually create a specialist profile",
 	Args:  cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
+		bootstrap()
 		repo := appEngine.SpecialistRepo
 		name := args[0]
 		expertise := args[1]
@@ -131,6 +133,7 @@ var specialistsDeleteCmd = &cobra.Command{
 	Short: "Delete a specialist profile (ID or Name)",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		bootstrap()
 		identifier := args[0]
 
 		if appEngine.GetResolver() == nil {

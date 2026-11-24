@@ -49,8 +49,9 @@ type SkillManifestV1 struct {
 
 // AgentGovernance controls execution policy and approval gates.
 type AgentGovernance struct {
-	Risk     string `json:"risk,omitempty"`     // "low", "medium", "high", "critical"
-	Approval string `json:"approval,omitempty"` // "never", "always", "on_risk", "conditional"
+	Risk        string `json:"risk,omitempty"`         // "low", "medium", "high", "critical"
+	Approval    string `json:"approval,omitempty"`     // "never", "always", "on_risk", "conditional"
+	AllowDaemon bool   `json:"allow_daemon,omitempty"` // Explicit opt-in required for background daemon execution
 }
 
 // ModuleSpec defines the WASM compilation target and integrity verification.
@@ -320,6 +321,9 @@ func (m *SkillManifestV1) ValidateWithOptions(opts ManifestValidationOptions) er
 		if m.Limits.MaxRuntimeMS < 0 || m.Limits.MaxRuntimeMS > 300000 {
 			return fmt.Errorf("limits.max_runtime_ms (%d) must be between 100 and 300000", m.Limits.MaxRuntimeMS)
 		}
+		if m.Limits.MaxCPUFuel < 0 {
+			return fmt.Errorf("limits.max_cpu_fuel (%d) must be >= 1 when specified", m.Limits.MaxCPUFuel)
+		}
 	}
 
 	return nil
@@ -400,6 +404,11 @@ func (m *SkillManifest) RequiresApproval(globalRequireApproval bool) bool {
 		}
 	}
 	return globalRequireApproval
+}
+
+// AllowsDaemon reports whether the skill manifest explicitly permits background daemon execution.
+func (m *SkillManifest) AllowsDaemon() bool {
+	return m != nil && m.ManifestV1 != nil && m.ManifestV1.Agent.AllowDaemon
 }
 
 // GetExecutionTimeout returns the effective timeout duration for the skill.

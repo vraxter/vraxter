@@ -28,14 +28,15 @@ var (
 )
 
 const (
-	EventTypeToken       = interfaces.EventTypeToken
-	EventTypeError       = interfaces.EventTypeError
-	EventTypeDone        = interfaces.EventTypeDone
-	EventTypeSkillCall   = interfaces.EventTypeSkillCall
-	EventTypeCommandCall = interfaces.EventTypeCommandCall
-	EventTypePlanProposal = interfaces.EventTypePlanProposal
-	EventTypeStatus       = interfaces.EventTypeStatus
-	EventTypeSpecialistResult = interfaces.EventTypeSpecialistResult
+	EventTypeToken                = interfaces.EventTypeToken
+	EventTypeError                = interfaces.EventTypeError
+	EventTypeDone                 = interfaces.EventTypeDone
+	EventTypeSkillCall            = interfaces.EventTypeSkillCall
+	EventTypeNativeToolCall       = interfaces.EventTypeNativeToolCall
+	EventTypeCommandCall          = interfaces.EventTypeCommandCall
+	EventTypePlanProposal         = interfaces.EventTypePlanProposal
+	EventTypeStatus               = interfaces.EventTypeStatus
+	EventTypeSpecialistResult     = interfaces.EventTypeSpecialistResult
 	EventTypeSkillApprovalRequest = interfaces.EventTypeSkillApprovalRequest
 )
 

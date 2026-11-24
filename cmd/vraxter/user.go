@@ -19,42 +19,45 @@ import (
 )
 
 var userCmd = &cobra.Command{
-	Use:   "user",
-	Short: "Manage user profile and personalization",
+	Use:     "user",
+	Aliases: []string{"operator"},
+	Short:   "Manage local operator profile and enclave context",
 }
 
 var userProfileCmd = &cobra.Command{
 	Use:   "profile",
-	Short: "Display your current identity and preferences",
+	Short: "Display the active operator profile",
 	Run: func(cmd *cobra.Command, args []string) {
+		ensureLocalStore()
 		repo := db.NewUserRepository(appStore)
 		user, err := repo.GetDefaultUser(context.Background())
 		if err != nil {
-			fmt.Printf("❌ Error fetching user: %v\n", err)
+			fmt.Printf("❌ Error fetching operator profile: %v\n", err)
 			return
 		}
 		if user == nil {
-			fmt.Println("❌ No user profile found. Vraxter is running in anonymous mode.")
+			fmt.Println("No operator profile configured. Run 'vraxter user setup' or 'vraxter user update --name <callsign>'.")
 			return
 		}
 
-		fmt.Println("\n👤 Vraxter User Profile")
-		fmt.Println("────────────────────────────────────────")
-		fmt.Printf("  Name:      %s\n", user.Name)
-		fmt.Printf("  Expertise: %s\n", user.Expertise)
-		fmt.Printf("  Interests: %s\n", user.Interests)
-		fmt.Printf("  Bio:       %s\n", user.Bio)
-		fmt.Printf("  Language:  %s\n", user.Language)
-		fmt.Printf("  Theme:     %s\n", user.ThemePreference)
-		fmt.Println("────────────────────────────────────────")
-		fmt.Println("\nTip: Use 'vraxter user update' to change these settings.")
+		fmt.Println("\n◈ VRAXTER OPERATOR PROFILE")
+		fmt.Println("────────────────────────────────────────────")
+		fmt.Printf("  Operator:     %s\n", user.Name)
+		fmt.Printf("  Role/Domain:  %s\n", user.Expertise)
+		fmt.Printf("  Focus Areas:  %s\n", user.Interests)
+		fmt.Printf("  Notes:        %s\n", user.Bio)
+		fmt.Printf("  Language:     %s\n", user.Language)
+		fmt.Printf("  Theme:        %s\n", user.ThemePreference)
+		fmt.Println("────────────────────────────────────────────")
+		fmt.Println("\nTip: Use 'vraxter user update' to modify operator metadata.")
 	},
 }
 
 var userUpdateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Update your profile information",
+	Short: "Update operator profile metadata",
 	Run: func(cmd *cobra.Command, args []string) {
+		ensureLocalStore()
 		ctx := context.Background()
 		repo := db.NewUserRepository(appStore)
 		user, err := repo.GetDefaultUser(ctx)
@@ -70,7 +73,7 @@ var userUpdateCmd = &cobra.Command{
 
 		if user == nil {
 			if name == "" {
-				fmt.Println("❌ No user profile found. Pass --name or run 'vraxter user setup' first.")
+				fmt.Println("❌ No operator profile found. Pass --name or run 'vraxter user setup' first.")
 				return
 			}
 			user = &db.UserProfile{
@@ -83,10 +86,10 @@ var userUpdateCmd = &cobra.Command{
 				Bio:             bio,
 			}
 			if err := repo.CreateUser(ctx, user); err != nil {
-				fmt.Printf("❌ Failed to create profile: %v\n", err)
+				fmt.Printf("❌ Failed to create operator profile: %v\n", err)
 				os.Exit(1)
 			}
-			fmt.Println("✅ Profile created successfully!")
+			fmt.Println("✅ Operator profile created.")
 			return
 		}
 
@@ -104,40 +107,41 @@ var userUpdateCmd = &cobra.Command{
 		}
 
 		if err := repo.UpdateUser(ctx, user); err != nil {
-			fmt.Printf("❌ Failed to update profile: %v\n", err)
+			fmt.Printf("❌ Failed to update operator profile: %v\n", err)
 			os.Exit(1)
 		}
 
-		fmt.Println("✅ Profile updated successfully!")
+		fmt.Println("✅ Operator profile updated.")
 	},
 }
 
 var userSetupCmd = &cobra.Command{
 	Use:   "setup",
-	Short: "Interactive profile setup",
+	Short: "Interactive operator profile initialization",
 	Run: func(cmd *cobra.Command, args []string) {
 		var name, expertise, interests, bio string
 
-		fmt.Println("\n◈ VRAXTER USER SETUP")
+		fmt.Println("\n◈ VRAXTER OPERATOR PROFILE SETUP")
 		fmt.Println("--------------------------------------------------------------------------------")
 
-		fmt.Print("1. What's your name? ")
+		fmt.Print("1. Operator Callsign / Name: ")
 		fmt.Scanln(&name)
 
-		fmt.Print("2. Level of expertise (e.g. Senior Go Dev): ")
+		fmt.Print("2. Role / Engineering Domain (e.g. SRE, SecOps, Telemetry Lead): ")
 		fmt.Scanln(&expertise)
 
-		fmt.Print("3. Interests (e.g. NATS, Kubernetes): ")
+		fmt.Print("3. Operational Focus (e.g. Incident Response, Air-Gapped Systems): ")
 		fmt.Scanln(&interests)
 
-		fmt.Print("4. Bio (Tell Vraxter about yourself): ")
+		fmt.Print("4. Operational Context / Notes (Optional): ")
 		fmt.Scanln(&bio)
 
 		if name == "" {
-			fmt.Println("❌ Error: Name is mandatory.")
+			fmt.Println("❌ Error: Operator name is required.")
 			return
 		}
 
+		ensureLocalStore()
 		ctx := context.Background()
 		repo := db.NewUserRepository(appStore)
 		user, err := repo.GetDefaultUser(ctx)
@@ -157,7 +161,7 @@ var userSetupCmd = &cobra.Command{
 				Bio:             bio,
 			}
 			if err := repo.CreateUser(ctx, user); err != nil {
-				fmt.Printf("❌ Failed to save profile: %v\n", err)
+				fmt.Printf("❌ Failed to save operator profile: %v\n", err)
 				os.Exit(1)
 			}
 		} else {
@@ -167,12 +171,12 @@ var userSetupCmd = &cobra.Command{
 			user.Bio = bio
 
 			if err := repo.UpdateUser(ctx, user); err != nil {
-				fmt.Printf("❌ Failed to save profile: %v\n", err)
+				fmt.Printf("❌ Failed to save operator profile: %v\n", err)
 				os.Exit(1)
 			}
 		}
 
-		fmt.Println("\n✨ Profile saved! Vraxter is now personalized to your needs.")
+		fmt.Println("\n✅ Operator profile persisted to encrypted local store.")
 	},
 }
 
@@ -181,10 +185,10 @@ func init() {
 	userCmd.AddCommand(userUpdateCmd)
 	userCmd.AddCommand(userSetupCmd)
 
-	userUpdateCmd.Flags().String("name", "", "Your display name")
-	userUpdateCmd.Flags().String("expertise", "", "Your technical expertise (coding styles, languages)")
-	userUpdateCmd.Flags().String("interests", "", "Topics you are interested in")
-	userUpdateCmd.Flags().String("bio", "", "A short biography for context injection")
+	userUpdateCmd.Flags().String("name", "", "Operator callsign or display name")
+	userUpdateCmd.Flags().String("expertise", "", "Operator role or engineering domain")
+	userUpdateCmd.Flags().String("interests", "", "Operational focus areas (e.g. SecOps, telemetry, forensics)")
+	userUpdateCmd.Flags().String("bio", "", "Operational context notes for local prompt assembly")
 
 	rootCmd.AddCommand(userCmd)
 }

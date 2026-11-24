@@ -144,6 +144,7 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	goPath := c.TM.GetGoPath()
 	modCmd := exec.Command(goPath, "mod", "init", skillID)
 	modCmd.Dir = workDir
+	modCmd.Env = SanitizedGoBuildEnv()
 	if out, err := modCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go mod init failed: %v | log: %s", err, string(out))
 	}
@@ -160,12 +161,12 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	if c.TM.IsReady("tinygo") {
 		tinyGoPath := c.TM.GetTinyGoPath()
 		cmd = exec.Command(tinyGoPath, "build", "-o", tmpWasmPath, "-target=wasi", ".")
-		cmd.Env = append(os.Environ(), "GOPROXY=off", "GOSUMDB=off")
+		cmd.Env = SanitizedGoBuildEnv()
 		isTinyGo = true
 	} else {
 		goPath := c.TM.GetGoPath()
 		cmd = exec.Command(goPath, "build", "-o", tmpWasmPath, ".")
-		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm", "GOPROXY=off", "GOSUMDB=off")
+		cmd.Env = SanitizedGoBuildEnv("GOOS=wasip1", "GOARCH=wasm")
 	}
 
 	cmd.Dir = workDir
@@ -176,7 +177,7 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 		log.Printf("GoCoder: TinyGo compilation failed, falling back to standard Go compiler. Reason: %v", err)
 		goPath := c.TM.GetGoPath()
 		cmd = exec.Command(goPath, "build", "-o", tmpWasmPath, ".")
-		cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm", "GOPROXY=off", "GOSUMDB=off")
+		cmd.Env = SanitizedGoBuildEnv("GOOS=wasip1", "GOARCH=wasm")
 		cmd.Dir = workDir
 		output, err = cmd.CombinedOutput()
 	}
@@ -224,4 +225,45 @@ func (c *GoCoder) CompileWithManifest(name, description, paramsSchema, code stri
 	log.Printf("GoCoder: Skill verified! Persisting '%s' to database.", skillID)
 
 	return c.Repo.UpsertSkill(manifest)
+}
+
+// SanitizedGoBuildEnv constructs a minimal, secret-free environment for offline Go/TinyGo
+// WASM skill compilation. It strictly drops arbitrary host environment variables (API keys,
+// cloud credentials, tokens) and pins CGO_ENABLED=0, GOPROXY=off, and GOSUMDB=off.
+func SanitizedGoBuildEnv(extra ...string) []string {
+	allowedKeys := []string{
+		"PATH",
+		"HOME",
+		"USERPROFILE",
+		"HOMEDRIVE",
+		"HOMEPATH",
+		"APPDATA",
+		"LOCALAPPDATA",
+		"SYSTEMROOT",
+		"WINDIR",
+		"COMSPEC",
+		"TMP",
+		"TEMP",
+		"TMPDIR",
+		"GOROOT",
+		"GOPATH",
+		"GOCACHE",
+		"GOMODCACHE",
+		"GOTOOLCHAIN",
+	}
+
+	env := make([]string, 0, len(allowedKeys)+len(extra)+4)
+	for _, k := range allowedKeys {
+		if v, ok := os.LookupEnv(k); ok && v != "" {
+			env = append(env, k+"="+v)
+		}
+	}
+	env = append(env,
+		"CGO_ENABLED=0",
+		"GOPROXY=off",
+		"GOSUMDB=off",
+		"GOTELEMETRY=off",
+	)
+	env = append(env, extra...)
+	return env
 }

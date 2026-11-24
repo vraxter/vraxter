@@ -66,8 +66,14 @@ func (r *MemoryRepository) SaveEmbedding(conversationID, text string, vector []f
 		return fmt.Errorf("failed to encode vector: %w", err)
 	}
 
-	encText := r.Store.EncryptField(text)
-	encBlob := r.Store.EncryptBlob(blob)
+	encText, err := r.Store.EncryptField(text)
+	if err != nil {
+		return fmt.Errorf("failed encrypting memory text: %w", err)
+	}
+	encBlob, err := r.Store.EncryptBlob(blob)
+	if err != nil {
+		return fmt.Errorf("failed encrypting memory vector blob: %w", err)
+	}
 
 	id := uuid.New().String()
 	_, err = r.Store.Conn.Exec(

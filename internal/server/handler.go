@@ -83,12 +83,13 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 	ctx, _, span := telemetry.EnsureTraceID(ctx, "server.Execute")
 	defer span.End()
 	ctx = audit.WithOrigin(ctx, "grpc")
+	verifiedActor := audit.ActorFromContext(ctx)
 
 	if req.Query == "SYSTEM_SHUTDOWN" {
 		if err := EnforceScope(ctx, "*"); err != nil {
 			_, _ = audit.Record(ctx, audit.AuditEventInput{
 				SessionID: req.ConversationId,
-				Actor:     "user",
+				Actor:     verifiedActor,
 				EventType: audit.EventPolicyEvaluated,
 				Payload: map[string]interface{}{
 					"check":          "grpc_scope",
@@ -110,7 +111,7 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 	if err := EnforceScope(ctx, "chat:write"); err != nil {
 		_, _ = audit.Record(ctx, audit.AuditEventInput{
 			SessionID: req.ConversationId,
-			Actor:     "user",
+			Actor:     verifiedActor,
 			EventType: audit.EventPolicyEvaluated,
 			Payload: map[string]interface{}{
 				"check":          "grpc_scope",
@@ -126,7 +127,7 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 		if err := EnforceScope(ctx, "host:exec"); err != nil {
 			_, _ = audit.Record(ctx, audit.AuditEventInput{
 				SessionID: req.ConversationId,
-				Actor:     "user",
+				Actor:     verifiedActor,
 				EventType: audit.EventPolicyEvaluated,
 				Payload: map[string]interface{}{
 					"check":          "grpc_scope",
@@ -156,8 +157,12 @@ func (h *AgentHandler) Execute(req *v1.ExecuteRequest, stream v1.AgentService_Ex
 		}
 	}
 
-	// 2. Process intent via Engine (Returns a channel of events)
-	events, err := h.engine.ProcessRawIntent(ctx, sessionID, req.Query, specID, req.ModelId, req.SourceZone, req.SourceUser)
+	// 2. Process intent via Engine (Ignore unverified client SourceUser when cryptographically authenticated)
+	effectiveSourceUser := req.SourceUser
+	if _, hasPrincipal := PrincipalFromContext(ctx); hasPrincipal {
+		effectiveSourceUser = ""
+	}
+	events, err := h.engine.ProcessRawIntent(ctx, sessionID, req.Query, specID, req.ModelId, req.SourceZone, effectiveSourceUser)
 	if err != nil {
 		return fmt.Errorf("engine failed to initialize stream: %w", err)
 	}

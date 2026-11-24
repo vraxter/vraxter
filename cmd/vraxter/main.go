@@ -10,12 +10,11 @@ package main
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,8 +30,6 @@ import (
 	"github.com/vraxter/vraxter/internal/config"
 	"github.com/vraxter/vraxter/internal/core"
 	"github.com/vraxter/vraxter/internal/db"
-	"github.com/vraxter/vraxter/internal/env"
-	"github.com/vraxter/vraxter/internal/features"
 	"github.com/vraxter/vraxter/internal/llm"
 	"github.com/vraxter/vraxter/internal/security"
 	"github.com/vraxter/vraxter/internal/server"
@@ -53,8 +50,6 @@ var (
 	appProviderManager *services.ProviderManager
 	appModelManager    *services.ModelManager
 	appSkillService    *services.SkillService
-	appStateManager    *env.StateManager
-	appPipeline        *env.ExecutionPipeline
 	agentFlag          string
 	sessionFlag        string
 	modelFlag          string
@@ -70,12 +65,16 @@ var (
 	tlsKeyFlag         string
 	daemonKey          string
 
-	bootstrapOnce sync.Once
+	clientEnvOnce  sync.Once
+	localStoreOnce sync.Once
+	bootstrapOnce  sync.Once
 )
 
-func bootstrap() {
-	bootstrapOnce.Do(func() {
-		appConfig = config.Load()
+// initClientEnv loads configuration, applies CLI transport/isolation flags, and installs
+// the network perimeter WITHOUT opening SQLite, generating master keys, or booting Wazero.
+func initClientEnv() {
+	clientEnvOnce.Do(func() {
+		appConfig = config.LoadReadOnly()
 		if airgapFlag {
 			appConfig.IsolationMode = "airgap"
 			appConfig.IsAirgapLocked = true
@@ -86,6 +85,9 @@ func bootstrap() {
 		}
 		if requireSignedSkillsFlag {
 			appConfig.RequireSignedSkills = true
+			if strings.TrimSpace(os.Getenv("VRAXTER_ALLOW_RUNTIME_CODEGEN")) == "" {
+				appConfig.AllowRuntimeCodegen = false
+			}
 		}
 		if strings.TrimSpace(listenTCPFlag) != "" {
 			ep := strings.TrimSpace(listenTCPFlag)
@@ -107,10 +109,74 @@ func bootstrap() {
 
 		// Enforce zero-egress network perimeter on all HTTP dials
 		utils.InstallAirgapPerimeter(appConfig.IsolationMode, appConfig.WhitelistedIPs)
+	})
+}
+
+// ensureDaemonKey loads (or creates on first run) the local daemon API key for authenticated gRPC calls.
+func ensureDaemonKey() string {
+	initClientEnv()
+	if daemonKey != "" {
+		return daemonKey
+	}
+	appConfig.EnsureDirs()
+	var err error
+	daemonKey, err = security.GetOrCreateDaemonKey(appConfig.AppDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Fatal: Error securing Daemon API Key: %v\n", err)
+		os.Exit(1)
+	}
+	return daemonKey
+}
+
+// ensureLocalStore opens the local SQLite store (acquiring vraxter.db.lock) and AES crypto service
+// ONLY for explicit offline local-DB CLI commands when no daemon is active.
+func ensureLocalStore() {
+	initClientEnv()
+	localStoreOnce.Do(func() {
+		appConfig.EnsureDirs()
+		if appStore == nil {
+			var err error
+			appStore, err = db.NewStoreWithOptions(appConfig.DBPath, db.StoreOptions{
+				EncryptAtRest: appConfig.EncryptDBAtRest,
+				MasterKeyPath: appConfig.DBMasterKeyPath,
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Fatal: Error connecting to database: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		if appCrypto == nil {
+			var err error
+			appCrypto, err = security.NewCryptoService(appConfig.KeyPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Fatal: Error generating or securing AES Keys: %v\n", err)
+				os.Exit(1)
+			}
+		}
+	})
+}
+
+// shouldSkipClientEnvInit reports whether cmd is a pure read-only/meta command that should
+// run with zero filesystem side effects.
+func shouldSkipClientEnvInit(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	switch cmd.Name() {
+	case "version", "help", "__complete", "__completeNoDesc":
+		return true
+	}
+	return false
+}
+
+func bootstrap() {
+	initClientEnv()
+	bootstrapOnce.Do(func() {
+		appConfig.EnsureDirs()
 		_, _ = telemetry.Configure(telemetry.Config{
 			IsolationMode: appConfig.IsolationMode,
 		})
-		
+
 		// Setup logging: Redirect all background service logs to a file with restricted permissions (0600)
 		logFile, err := os.OpenFile(filepath.Join(appConfig.AppDir, "vraxter.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err == nil {
@@ -118,28 +184,10 @@ func bootstrap() {
 			log.Println("--- Vraxter Engine Started ---")
 		}
 
-		daemonKey, err = security.GetOrCreateDaemonKey(appConfig.AppDir)
-		if err != nil {
-			fmt.Printf("Fatal: Error securing Daemon API Key: %v\n", err)
-			os.Exit(1)
-		}
-
-		appStore, err = db.NewStoreWithOptions(appConfig.DBPath, db.StoreOptions{
-			EncryptAtRest: appConfig.EncryptDBAtRest,
-			MasterKeyPath: appConfig.DBMasterKeyPath,
-		})
-		if err != nil {
-			fmt.Printf("Fatal: Error connecting to database: %v\n", err)
-			os.Exit(1)
-		}
+		ensureDaemonKey()
+		ensureLocalStore()
 
 		server.SetAPIKeyRepo(db.NewAPIKeyRepository(appStore))
-
-		appCrypto, err = security.NewCryptoService(appConfig.KeyPath)
-		if err != nil {
-			fmt.Printf("Fatal: Error generating or securing AES Keys: %v\n", err)
-			os.Exit(1)
-		}
 
 		registry := skills.NewRegistry()
 		runner := skills.NewRunner()
@@ -157,13 +205,15 @@ func bootstrap() {
 
 		tm := services.NewToolchainManager(appConfig.SDKDir, appConfig.IsAirgap())
 		coder := services.NewCoderService(skillRepo, tm, appConfig.SkillsDir, runner)
-		spatialSvc := services.NewSpatialService(appConfig.EnableGoogleHome, appConfig.SpatialConfigPath)
 
-		appEngine, err = core.NewEngine(appStore, appCrypto, registry, runner, coder, spatialSvc, verboseFlag, appConfig.AppDir, appConfig.RequireSkillApproval, appConfig.IsolationMode, appConfig.WhitelistedIPs)
+		appEngine, err = core.NewEngine(appStore, appCrypto, registry, runner, coder, verboseFlag, appConfig.AppDir, appConfig.RequireSkillApproval, appConfig.IsolationMode, appConfig.WhitelistedIPs)
 		if err != nil {
-			fmt.Printf("Fatal: Core Engine initialization failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Fatal: Core Engine initialization failed: %v\n", err)
+			_ = appStore.Close()
 			os.Exit(1)
 		}
+		appEngine.SetAllowRuntimeCodegen(appConfig.AllowRuntimeCodegen)
+		appEngine.SetInferenceDefaults(appConfig.Inference.Temperature, appConfig.Inference.Seed, appConfig.Inference.MaxTokens)
 		appEngine.SetHostExecGuard(security.NewHostExecGuard(security.HostExecOptions{
 			Enabled:        appConfig.HostExec.Enabled,
 			CommandsFile:   appConfig.HostExec.CommandsFile,
@@ -171,10 +221,16 @@ func bootstrap() {
 			IsolationMode:  appConfig.IsolationMode,
 			WhitelistedIPs: appConfig.WhitelistedIPs,
 		}))
-		if auditLedger, aErr := audit.NewLedger(appStore, appConfig.AppDir, appConfig.AuditJSONLPath); aErr == nil {
-			appEngine.SetAuditLedger(auditLedger)
-			audit.SetDefaultLedger(auditLedger)
+
+		// Fail-closed: the daemon must never run without an intact forensic audit ledger.
+		auditLedger, aErr := audit.NewLedger(appStore, appConfig.AppDir, appConfig.AuditJSONLPath)
+		if aErr != nil {
+			fmt.Fprintf(os.Stderr, "Fatal: Forensic audit ledger initialization failed: %v\n", aErr)
+			_ = appStore.Close()
+			os.Exit(1)
 		}
+		appEngine.SetAuditLedger(auditLedger)
+		audit.SetDefaultLedger(auditLedger)
 
 		providerRepo := db.NewProviderRepository(appStore, appCrypto)
 		modelRepo := db.NewModelRepository(appStore, appCrypto)
@@ -182,20 +238,10 @@ func bootstrap() {
 		appProviderManager = services.NewProviderManager(providerRepo, appConfig.PrivacyPolicy, appConfig.WhitelistedIPs, appConfig.IsolationMode)
 		appModelManager = services.NewModelManager(modelRepo, providerRepo)
 
-		appStateManager, err = env.NewStateManager(appConfig.AppDir)
-		if err != nil {
-			fmt.Printf("Fatal: State Manager initialization failed: %v\n", err)
-			os.Exit(1)
-		}
-		appPipeline = env.NewExecutionPipeline()
-
-		// 3. Automigrations
+		// Automigrations
 		if err := db.RenameProviderType(appStore, "gemini", "google"); err != nil {
 			log.Printf("Warning: gemini->google migration failed: %v", err)
 		}
-
-		// 4. Activate World Powers
-		features.ActivateForWorld(appConfig.Implementation)
 	})
 }
 
@@ -251,7 +297,8 @@ func getActiveOverride() string {
 // Otherwise, it hashes the current working directory to group commands by project folder.
 func resolveSession() string {
 	if newFlag {
-		return fmt.Sprintf("new-%d-%x", time.Now().Unix(), md5.Sum([]byte(uuid.New().String())))
+		sum := sha256.Sum256([]byte(uuid.New().String()))
+		return fmt.Sprintf("new-%d-%x", time.Now().Unix(), sum[:8])
 	}
 	if sessionFlag != "" {
 		return sessionFlag
@@ -260,22 +307,35 @@ func resolveSession() string {
 	if err != nil {
 		return "cli-default"
 	}
-	return fmt.Sprintf("workspace-%x", md5.Sum([]byte(cwd)))
+	sum := sha256.Sum256([]byte(cwd))
+	return fmt.Sprintf("workspace-%x", sum[:8])
 }
 
 var rootCmd = &cobra.Command{
 	Use:   "vraxter",
-	Short: "Vraxter - Local-first AI agent engine",
-	Args:  cobra.ArbitraryArgs,
+	Short: "Vraxter - Sovereign Autonomous Execution Runtime",
+	Long: `Vraxter is a zero-egress, pure-Go Sovereign Autonomous Execution Runtime for
+critical infrastructure, defense, and enterprise enclaves.
+
+Core security guarantees:
+  • Capability-bounded WASM/WASI sandboxing (CPU Fuel, QuotaFS, memory caps)
+  • Cryptographic Ed25519 skill supply-chain signing and verification
+  • Immutable hash-chained & Ed25519-signed forensic audit ledger
+  • AES-256-GCM encryption at rest for SQLite state and snapshots
+  • Local UDS (0600) and mTLS 1.3 authenticated gRPC control plane`,
+	Args: cobra.ArbitraryArgs,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		bootstrap()
+		if shouldSkipClientEnvInit(cmd) {
+			return
+		}
+		initClientEnv()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
 		sessionID := resolveSession()
 
 		if len(args) == 0 {
-			// 1. REPL Mode over gRPC
+			// 1. REPL Mode over gRPC (connect to running daemon without opening SQLite, or spawn ephemeral embedded daemon)
 			gClient, err := connectOrSpawn(ctx)
 			if err != nil {
 				fmt.Printf("❌ Fatal: %v\n", err)
@@ -283,9 +343,11 @@ var rootCmd = &cobra.Command{
 			}
 
 			userName := "YOU"
-			userRepo := db.NewUserRepository(appStore)
-			if user, err := userRepo.GetDefaultUser(ctx); err == nil && user != nil && user.Name != "" {
-				userName = user.Name
+			if appStore != nil {
+				userRepo := db.NewUserRepository(appStore)
+				if user, err := userRepo.GetDefaultUser(ctx); err == nil && user != nil && user.Name != "" {
+					userName = user.Name
+				}
 			}
 
 			defer gClient.Close()
@@ -306,7 +368,8 @@ var rootCmd = &cobra.Command{
 		// 2. Strict Remote Mode (gRPC Daemon)
 		fmt.Printf("🔍 Connecting to Vraxter Daemon...")
 		ep := client.DefaultEndpoint()
-		gClient, err := client.NewGRPCClient(ep, daemonKey)
+		key := ensureDaemonKey()
+		gClient, err := client.NewGRPCClient(ep, key)
 		if err != nil {
 			fmt.Println(" [SPAWNING BACKGROUND DAEMON]")
 			spawnEphemeralDaemon()
@@ -509,6 +572,11 @@ var serverCmd = &cobra.Command{
 		}
 		defer lis.Close()
 
+		if err := writeDaemonPIDFile(appConfig.AppDir, os.Getpid()); err != nil {
+			log.Printf("Warning: failed writing daemon PID file: %v", err)
+		}
+		defer removeDaemonPIDFile(appConfig.AppDir)
+
 		shutdownCh := make(chan struct{}, 1)
 		grpcServer := server.BuildServerWithShutdown(appEngine, appProviderManager, appModelManager, appSkillService, &appConfig, daemonKey, shutdownCh, credOpt)
 
@@ -518,27 +586,7 @@ var serverCmd = &cobra.Command{
 			}
 		}()
 
-		fmt.Printf("🚀 Vraxter Engine (gRPC) is Online on %s\n", endpoint)
-
-		// Start Connect RPC Server with hardened DDIL HTTP timeouts
-		mux := http.NewServeMux()
-		server.RegisterEnvService(mux, appStateManager, appPipeline)
-
-		httpServer := &http.Server{
-			Addr:              "127.0.0.1:8080",
-			Handler:           server.HTTPAuthMiddleware(daemonKey, mux),
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       30 * time.Second,
-			WriteTimeout:      60 * time.Second,
-			IdleTimeout:       120 * time.Second,
-		}
-
-		fmt.Println("🌍 Connect RPC API listening on 127.0.0.1:8080 (HTTP)")
-		go func() {
-			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				fmt.Printf("Fatal: HTTP server error: %v\n", err)
-			}
-		}()
+		fmt.Printf("🚀 Vraxter Sovereign Runtime (gRPC) is Online on %s [isolation=%s]\n", endpoint, appConfig.IsolationMode)
 
 		// Graceful Shutdown Trapping (OS signal OR authenticated SYSTEM_SHUTDOWN RPC)
 		stop := make(chan os.Signal, 1)
@@ -550,62 +598,23 @@ var serverCmd = &cobra.Command{
 
 		fmt.Println("\n🛑 Shutting down Vraxter Daemon gracefully...")
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := httpServer.Shutdown(ctx); err != nil {
-			fmt.Printf("HTTP Server shutdown error: %v\n", err)
-		}
-
 		grpcServer.GracefulStop()
+		_ = lis.Close()
 		appStore.Close()
 		fmt.Println("✅ Vraxter stopped successfully.")
 	},
 }
 
-var daemonCmd = &cobra.Command{
-	Use:   "daemon",
-	Short: "Manage the Vraxter gRPC background server",
-}
-
-var daemonStopCmd = &cobra.Command{
-	Use:   "stop",
-	Short: "Gracefully shuts down the background daemon",
-	Run: func(cmd *cobra.Command, args []string) {
-		ctx := context.Background()
-		gClient, err := client.NewGRPCClient(client.DefaultEndpoint(), daemonKey)
-		if err != nil {
-			fmt.Println("❌ Daemon is not running or unreachable.")
-			return
-		}
-		defer gClient.Close()
-
-		fmt.Printf("🛑 Sending shutdown signal... ")
-		_, _ = gClient.ExecuteStream(ctx, "SYSTEM_SHUTDOWN", "internal-mgmt", "", "")
-		fmt.Println("[SENT]")
-	},
-}
-
-var daemonRestartCmd = &cobra.Command{
-	Use:   "restart",
-	Short: "Restart the Vraxter background daemon",
-	Run: func(cmd *cobra.Command, args []string) {
-		daemonStopCmd.Run(cmd, args)
-		fmt.Println("♻️  Restarting daemon...")
-		spawnEphemeralDaemon()
-		fmt.Println("🚀 Daemon restarted.")
-	},
-}
-
 func init() {
-	daemonCmd.AddCommand(daemonStopCmd, daemonRestartCmd)
-	rootCmd.AddCommand(serverCmd, daemonCmd)
+	rootCmd.AddCommand(serverCmd)
 }
 
-// connectOrSpawn attempts to connect to a daemon, spawning one if invisible
+// connectOrSpawn attempts to connect to an active daemon without opening SQLite locally,
+// spawning an embedded daemon only if no external daemon is reachable.
 func connectOrSpawn(ctx context.Context) (*client.GRPCClient, error) {
 	ep := client.DefaultEndpoint()
-	gClient, err := client.NewGRPCClient(ep, daemonKey)
+	key := ensureDaemonKey()
+	gClient, err := client.NewGRPCClient(ep, key)
 	if err == nil {
 		return gClient, nil
 	}

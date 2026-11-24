@@ -28,8 +28,9 @@ func TestIsAllowedNetwork(t *testing.T) {
 	}{
 		{"Airgap Localhost Allowed", "airgap", "http://localhost:11434", nil, true},
 		{"Airgap Local IP Allowed", "airgap", "http://127.0.0.1:8080", nil, true},
-		{"Airgap Private LAN Allowed", "airgap", "http://192.168.1.100", nil, true},
-		{"Airgap Private Class A Allowed", "airgap", "http://10.0.0.5", nil, true},
+		{"Airgap Unwhitelisted Private LAN Blocked", "airgap", "http://192.168.1.100", nil, false},
+		{"Airgap Unwhitelisted Private Class A Blocked", "airgap", "http://10.0.0.5", nil, false},
+		{"Airgap Whitelisted Private LAN CIDR Allowed", "airgap", "http://10.0.0.5", []string{"10.0.0.0/24"}, true},
 		{"Airgap Public Cloud Blocked (Zero DNS)", "airgap", "https://api.openai.com", nil, false},
 		{"Airgap Public Search Blocked (Zero DNS)", "airgap", "https://google.com", nil, false},
 		{"Airgap Public IP Blocked", "airgap", "http://8.8.8.8", nil, false},

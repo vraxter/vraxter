@@ -53,14 +53,21 @@ var (
 var skillsCmd = &cobra.Command{
 	Use:     "skills",
 	Aliases: []string{"skill"},
-	Short:   "Manage Vraxter capabilities and AI-enabled tools",
+	Short:   "Manage signed WASM/WASI skills, Ed25519 PKI keys, and trusted signers",
+	Long: `Manage capability-bounded WASM/WASI skills and cryptographic supply-chain trust.
+
+Trust is determined exclusively by Ed25519 signatures verified against local
+trusted_signers/ keys and enclave policy — never by external reputation scores.
+
+Offline PKI commands (keygen, sign, verify, trust add) run directly without
+opening the runtime database or starting a daemon.`,
 }
 
 var listSkillsCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all installed skills with their Vraxter Shield trust status",
+	Short: "List all registered WASM skills and their Ed25519 trust tier",
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -74,23 +81,23 @@ var listSkillsCmd = &cobra.Command{
 		}
 
 		if len(res.Skills) == 0 {
-			fmt.Println("\n📭 No skills installed yet. Let Vraxter create one for you!")
+			fmt.Println("\nNo WASM skills registered. Inject a signed artifact with 'vraxter skill inject <skill.wasm> --manifest <manifest.json>'.")
 			return
 		}
 
-		fmt.Println("\n◈ VRAXTER SKILLS")
-		fmt.Println("------------------------------------------------------------------------------------------------")
-		fmt.Printf("%-20s %-30s %-15s %-10s %-8s\n", "ID", "NAME", "TRUST", "ENGINE", "PARAMS")
-		fmt.Println("------------------------------------------------------------------------------------------------")
+		fmt.Println("\n◈ VRAXTER REGISTERED SKILLS")
+		fmt.Println("----------------------------------------------------------------------------------------------------")
+		fmt.Printf("%-20s %-30s %-20s %-10s %-8s\n", "ID", "NAME", "TRUST TIER", "ENGINE", "PARAMS")
+		fmt.Println("----------------------------------------------------------------------------------------------------")
 
 		for _, s := range res.Skills {
-			trust := "Community"
-			if s.IsOfficial {
-				trust = "🟢 Official"
-			} else if s.Score >= 4.0 && s.Downloads > 100 {
-				trust = "💎 High Rep."
+			trust := "Untrusted (Tier 3)"
+			if s.IsOfficial || s.Tier == int32(types.Tier1Official) {
+				trust = "Tier 1 (Official)"
+			} else if s.Tier == int32(types.Tier2CommunityVerified) {
+				trust = "Tier 2 (Verified)"
 			} else if len(s.Permissions) > 0 {
-				trust = "⚠️ Restricted"
+				trust = "Restricted (Tier 3)"
 			}
 
 			params := "No"
@@ -98,10 +105,10 @@ var listSkillsCmd = &cobra.Command{
 				params = "Yes"
 			}
 
-			fmt.Printf("%-20s %-30s %-15s %-10s %-8s\n",
+			fmt.Printf("%-20s %-30s %-20s %-10s %-8s\n",
 				s.Id, s.Name, trust, s.Engine, params)
 		}
-		fmt.Println("------------------------------------------------------------------------------------------------")
+		fmt.Println("----------------------------------------------------------------------------------------------------")
 	},
 }
 
@@ -111,7 +118,7 @@ var infoSkillCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		id := args[0]
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -150,11 +157,11 @@ var infoSkillCmd = &cobra.Command{
 }
 
 var installSkillCmd = &cobra.Command{
-	Use:   "install <hub_id>",
-	Short: "Install a skill from the Vraxter Hub",
+	Use:   "install <artifact_id>",
+	Short: "Install a skill from a configured private enterprise registry (blocked in airgap mode)",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -176,11 +183,11 @@ var installSkillCmd = &cobra.Command{
 }
 
 var downloadSkillCmd = &cobra.Command{
-	Use:   "download <hub_id>",
-	Short: "Download a skill without installing it",
+	Use:   "download <artifact_id>",
+	Short: "Download a skill from a configured private enterprise registry (blocked in airgap mode)",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -210,7 +217,7 @@ var injectSkillCmd = &cobra.Command{
 	Short: "Locally inject an offline .wasm skill file into the engine",
 	Args:  cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -250,7 +257,7 @@ var inspectSkillCmd = &cobra.Command{
 	Short: "Verify the cryptographic hash of an installed skill",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -277,7 +284,7 @@ var deleteSkillCmd = &cobra.Command{
 	Short: "Delete an installed skill",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)
@@ -300,10 +307,10 @@ var deleteSkillCmd = &cobra.Command{
 
 var trustSkillCmd = &cobra.Command{
 	Use:   "trust <id>",
-	Short: "Manually elevate a skill's tier to Community Verified",
+	Short: "Manage trusted Ed25519 signers (trust add) or locally elevate a skill to Verified Tier 2",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err != nil {
 			fmt.Printf("❌ Failed to connect to engine: %v\n", err)
 			os.Exit(1)

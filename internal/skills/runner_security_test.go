@@ -175,7 +175,7 @@ func TestRunner_Tier3UnverifiedBlocksPrivilegedSkills(t *testing.T) {
 		Permissions: []string{"network"},
 	}
 	_, err := runner.Execute(context.Background(), manifest, nil)
-	if err == nil || !strings.Contains(err.Error(), "lacks community trust") {
+	if err == nil || !strings.Contains(err.Error(), "lacks cryptographic signer trust") {
 		t.Fatalf("expected Tier3Unverified trust block, got: %v", err)
 	}
 
@@ -183,7 +183,7 @@ func TestRunner_Tier3UnverifiedBlocksPrivilegedSkills(t *testing.T) {
 	manifestZero := manifest
 	manifestZero.Tier = 0
 	_, err = runner.Execute(context.Background(), manifestZero, nil)
-	if err == nil || !strings.Contains(err.Error(), "lacks community trust") {
+	if err == nil || !strings.Contains(err.Error(), "lacks cryptographic signer trust") {
 		t.Fatalf("expected unset Tier (0) to fail closed, got: %v", err)
 	}
 }
@@ -716,10 +716,19 @@ func TestHTTPGetFn_PortsWildcardsCIDRAndAntiTOCTOUPinning(t *testing.T) {
 				},
 			},
 		}
-		if _, err := resolveAndValidateHTTPGetTarget(context.Background(), "http://10.10.5.42/status", cidrManifest, networkPolicy{isolationMode: "airgap"}, nil, false, false); err != nil {
-			t.Fatalf("expected 10.10.5.42 to match 10.10.0.0/16, got: %v", err)
+		// Strict airgap rejects unwhitelisted RFC 1918 LAN IPs even when in manifest allowed_hosts
+		if _, err := resolveAndValidateHTTPGetTarget(context.Background(), "http://10.10.5.42/status", cidrManifest, networkPolicy{isolationMode: "airgap"}, nil, false, false); err == nil {
+			t.Fatal("expected unwhitelisted private IP 10.10.5.42 to be blocked under strict airgap")
 		}
-		if _, err := resolveAndValidateHTTPGetTarget(context.Background(), "http://10.20.5.42/status", cidrManifest, networkPolicy{isolationMode: "airgap"}, nil, false, false); err == nil {
+		// Explicitly whitelisted CIDR permits 10.10.5.42 under strict airgap while rejecting 10.20.5.42
+		if _, err := resolveAndValidateHTTPGetTarget(context.Background(), "http://10.10.5.42/status", cidrManifest, networkPolicy{isolationMode: "airgap", whitelistedIPs: []string{"10.10.0.0/16"}}, nil, false, false); err != nil {
+			t.Fatalf("expected whitelisted 10.10.5.42 to match 10.10.0.0/16 under airgap, got: %v", err)
+		}
+		// local_lan permits RFC 1918 CIDR match and rejects IPs outside manifest allowed_hosts
+		if _, err := resolveAndValidateHTTPGetTarget(context.Background(), "http://10.10.5.42/status", cidrManifest, networkPolicy{isolationMode: "local_lan"}, nil, false, false); err != nil {
+			t.Fatalf("expected 10.10.5.42 to match 10.10.0.0/16 under local_lan, got: %v", err)
+		}
+		if _, err := resolveAndValidateHTTPGetTarget(context.Background(), "http://10.20.5.42/status", cidrManifest, networkPolicy{isolationMode: "local_lan"}, nil, false, false); err == nil {
 			t.Fatal("expected 10.20.5.42 to be rejected outside 10.10.0.0/16")
 		}
 	})
@@ -972,15 +981,16 @@ func main() {
 	// 1. allow_extensions: .json allowed, .sh blocked
 	t.Run("allow_extensions", func(t *testing.T) {
 		outDir := t.TempDir()
+		ctx := WithSessionDirs(context.Background(), SessionDirs{OutputDir: outDir})
 		m := makeManifest(types.MountSpec{
 			Guest: "/output", Source: "output", Mode: "rw",
 			AllowExtensions: []string{".json", ".txt"},
 		})
-		res, err := runner.Execute(context.Background(), m, map[string]interface{}{"_output_dir": outDir, "action": "write_ok"})
+		res, err := runner.Execute(ctx, m, map[string]interface{}{"action": "write_ok"})
 		if err != nil || res.Output != "OK" {
 			t.Fatalf("expected allowed .json write to succeed, got res=%+v err=%v", res, err)
 		}
-		if _, err := runner.Execute(context.Background(), m, map[string]interface{}{"_output_dir": outDir, "action": "write_bad_ext"}); err == nil || !strings.Contains(err.Error(), "allow_extensions") {
+		if _, err := runner.Execute(ctx, m, map[string]interface{}{"action": "write_bad_ext"}); err == nil || !strings.Contains(err.Error(), "allow_extensions") {
 			t.Fatalf("expected .sh drop to be blocked by allow_extensions, got: %v", err)
 		}
 		if _, statErr := os.Stat(filepath.Join(outDir, "payload.sh")); !os.IsNotExist(statErr) {
@@ -991,11 +1001,12 @@ func main() {
 	// 2. max_file_mb: 0.002 MB (~2097 bytes) blocks 4096-byte file write
 	t.Run("max_file_mb", func(t *testing.T) {
 		outDir := t.TempDir()
+		ctx := WithSessionDirs(context.Background(), SessionDirs{OutputDir: outDir})
 		m := makeManifest(types.MountSpec{
 			Guest: "/output", Source: "output", Mode: "rw",
 			MaxFileMB: 0.002,
 		})
-		if _, err := runner.Execute(context.Background(), m, map[string]interface{}{"_output_dir": outDir, "action": "write_oversized"}); err == nil || !strings.Contains(err.Error(), "max_file_mb") {
+		if _, err := runner.Execute(ctx, m, map[string]interface{}{"action": "write_oversized"}); err == nil || !strings.Contains(err.Error(), "max_file_mb") {
 			t.Fatalf("expected 4096-byte write to fail max_file_mb quota, got: %v", err)
 		}
 		if fi, statErr := os.Stat(filepath.Join(outDir, "big.txt")); statErr == nil && fi.Size() > 2097 {
@@ -1006,12 +1017,13 @@ func main() {
 	// 3. max_total_mb: cumulative bytes across multiple files capped at ~2097 bytes
 	t.Run("max_total_mb", func(t *testing.T) {
 		outDir := t.TempDir()
+		ctx := WithSessionDirs(context.Background(), SessionDirs{OutputDir: outDir})
 		m := makeManifest(types.MountSpec{
 			Guest: "/output", Source: "output", Mode: "rw",
 			MaxFileMB:  0.002,
 			MaxTotalMB: 0.002,
 		})
-		if _, err := runner.Execute(context.Background(), m, map[string]interface{}{"_output_dir": outDir, "action": "write_two_files_total"}); err == nil || !strings.Contains(err.Error(), "max_total_mb") {
+		if _, err := runner.Execute(ctx, m, map[string]interface{}{"action": "write_two_files_total"}); err == nil || !strings.Contains(err.Error(), "max_total_mb") {
 			t.Fatalf("expected cumulative writes to fail max_total_mb quota, got: %v", err)
 		}
 	})
@@ -1019,11 +1031,12 @@ func main() {
 	// 4. max_files: limit 2 files blocks creation of 3rd file
 	t.Run("max_files", func(t *testing.T) {
 		outDir := t.TempDir()
+		ctx := WithSessionDirs(context.Background(), SessionDirs{OutputDir: outDir})
 		m := makeManifest(types.MountSpec{
 			Guest: "/output", Source: "output", Mode: "rw",
 			MaxFiles: 2,
 		})
-		if _, err := runner.Execute(context.Background(), m, map[string]interface{}{"_output_dir": outDir, "action": "write_three_files"}); err == nil || !strings.Contains(err.Error(), "max_files") {
+		if _, err := runner.Execute(ctx, m, map[string]interface{}{"action": "write_three_files"}); err == nil || !strings.Contains(err.Error(), "max_files") {
 			t.Fatalf("expected 3rd file to fail max_files=2 quota, got: %v", err)
 		}
 		entries, _ := os.ReadDir(outDir)
@@ -1035,6 +1048,7 @@ func main() {
 	// 5. allow_delete: false blocks Unlink and destructive Truncate; true allows deletion
 	t.Run("allow_delete", func(t *testing.T) {
 		outDir := t.TempDir()
+		ctx := WithSessionDirs(context.Background(), SessionDirs{OutputDir: outDir})
 		keepPath := filepath.Join(outDir, "keep.txt")
 		if err := os.WriteFile(keepPath, []byte("IMPORTANT_DATA"), 0600); err != nil {
 			t.Fatalf("seed keep.txt: %v", err)
@@ -1044,10 +1058,10 @@ func main() {
 			Guest: "/output", Source: "output", Mode: "rw",
 			AllowDelete: false,
 		})
-		if _, err := runner.Execute(context.Background(), noDelManifest, map[string]interface{}{"_output_dir": outDir, "action": "unlink_keep"}); err == nil || !strings.Contains(err.Error(), "allow_delete") {
+		if _, err := runner.Execute(ctx, noDelManifest, map[string]interface{}{"action": "unlink_keep"}); err == nil || !strings.Contains(err.Error(), "allow_delete") {
 			t.Fatalf("expected Unlink to be blocked when allow_delete=false, got: %v", err)
 		}
-		if _, err := runner.Execute(context.Background(), noDelManifest, map[string]interface{}{"_output_dir": outDir, "action": "truncate_keep"}); err == nil || !strings.Contains(err.Error(), "allow_delete") {
+		if _, err := runner.Execute(ctx, noDelManifest, map[string]interface{}{"action": "truncate_keep"}); err == nil || !strings.Contains(err.Error(), "allow_delete") {
 			t.Fatalf("expected destructive Truncate to be blocked when allow_delete=false, got: %v", err)
 		}
 		stillThere, err := os.ReadFile(keepPath)
@@ -1060,7 +1074,7 @@ func main() {
 			Guest: "/output", Source: "output", Mode: "rw",
 			AllowDelete: true,
 		})
-		res, err := runner.Execute(context.Background(), delManifest, map[string]interface{}{"_output_dir": outDir, "action": "unlink_keep"})
+		res, err := runner.Execute(ctx, delManifest, map[string]interface{}{"action": "unlink_keep"})
 		if err != nil || res.Output != "OK" {
 			t.Fatalf("expected Unlink to succeed when allow_delete=true, got res=%+v err=%v", res, err)
 		}

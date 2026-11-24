@@ -95,7 +95,6 @@ type Orchestrator struct {
 	MemoryRepo     *db.MemoryRepository
 	ContextMgr     *ContextManager
 	JobManager     *JobManager
-	SpatialSvc     *services.SpatialService
 
 	// Sub-controllers
 	Resolver    *IntentResolver
@@ -122,6 +121,11 @@ type Orchestrator struct {
 	IsolationMode  string
 	WhitelistedIPs []string
 
+	// Deterministic Inference Defaults (wired into every CompletionRequest)
+	DefaultTemperature *float64
+	DefaultSeed        *int64
+	DefaultMaxTokens   int
+
 	Verbose bool
 }
 
@@ -132,7 +136,6 @@ func NewOrchestrator(
 	reg *skills.Registry,
 	run *skills.Runner,
 	coder *services.CoderService,
-	spatialSvc *services.SpatialService,
 	verbose bool,
 	routingOverrides map[string]string, // from routing.yaml: useCase → modelID
 	requireSkillApproval bool,
@@ -184,19 +187,20 @@ func NewOrchestrator(
 		ChatRepo:         chatRepo,
 		SpecialistRepo:   specRepo,
 		MemoryRepo:       memoryRepo,
-		ContextMgr:       NewContextManager(chatRepo),
-		JobManager:       jobMgr,
-		SpatialSvc:       spatialSvc,
-		UserRepo:         db.NewUserRepository(store),
+		ContextMgr:         NewContextManager(chatRepo),
+		JobManager:         jobMgr,
+		UserRepo:           db.NewUserRepository(store),
 		Resolver:         NewIntentResolver(reg, router, skillRepo, specRepo),
 		ExecEngine:       NewExecutionEngine(reg, run, coder, chatRepo, specRepo, jobMgr, codegen, verbose, requireSkillApproval),
 		StreamCoord:      NewStreamCoordinator(router, verbose),
 		Planner:          NewPlanner(chatRepo, router),
 		MemorySvc:        services.NewMemoryService(memoryRepo, router),
-		IsolationMode:    isolationMode,
-		WhitelistedIPs:   whitelistedIPs,
-		Verbose:          verbose,
-		sessionOverrides: make(map[string]string),
+		IsolationMode:      isolationMode,
+		WhitelistedIPs:     whitelistedIPs,
+		DefaultTemperature: llm.Float64Ptr(0.0),
+		DefaultMaxTokens:   4096,
+		Verbose:            verbose,
+		sessionOverrides:   make(map[string]string),
 	}
 
 	o.ExecEngine.GetActiveModelConfigDelegate = o.GetActiveModelConfig
@@ -827,14 +831,18 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 		}
 
 		actor := "user"
-		if specialistID != "" {
+		if authActor, ok := audit.AuthenticatedActorFromContext(ctx); ok {
+			actor = authActor
+		} else if specialistID != "" {
 			actor = "specialist:" + specialistID
 		} else if strings.TrimSpace(sourceUser) != "" {
 			actor = strings.TrimSpace(sourceUser)
 		}
 
 		ctx = audit.WithSessionID(ctx, conversationID)
-		ctx = audit.WithActor(ctx, actor)
+		if _, hasAuth := audit.AuthenticatedActorFromContext(ctx); !hasAuth {
+			ctx = audit.WithActor(ctx, actor)
+		}
 
 		o.mu.RLock()
 		isoMode := o.IsolationMode
@@ -903,7 +911,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 					}
 				}
 			}
-			o.recordAudit(ctx, conversationID, "user", audit.EventHITLDecision, map[string]interface{}{
+			o.recordAudit(ctx, conversationID, actor, audit.EventHITLDecision, map[string]interface{}{
 				"decision":    "APPROVED",
 				"target_type": "host_cmd",
 				"command":     cmdName,
@@ -978,7 +986,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 			payloadStr := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!APPROVE_SKILL"))
 			var call types.ToolCall
 			if err := json.Unmarshal([]byte(payloadStr), &call); err == nil {
-				o.recordAudit(ctx, conversationID, "user", audit.EventHITLDecision, map[string]interface{}{
+				o.recordAudit(ctx, conversationID, actor, audit.EventHITLDecision, map[string]interface{}{
 					"decision":    "APPROVED",
 					"target_type": "skill",
 					"skill_id":    call.SkillID,
@@ -986,8 +994,13 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 				if !sendEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: fmt.Sprintf("\n✅ **Skill Execution Approved:** `%s`\n", call.SkillID)}) {
 					return
 				}
-				// Execute with per-invocation bypassApproval=true (zero shared mutation)
-				result := o.ExecEngine.HandleStandardSkillWithBypass(ctx, out, call, call.SkillID, true)
+				// Execute with per-invocation HITL approval (handles both built-in guarded mutations and WASM skills)
+				var result string
+				if _, isBuiltIn := BuiltInCommands[call.SkillID]; isBuiltIn {
+					result = o.ExecEngine.DispatchApprovedToolPayload(ctx, out, call, conversationID)
+				} else {
+					result = o.ExecEngine.HandleStandardSkillWithBypass(ctx, out, call, call.SkillID, true)
+				}
 
 				// Save the tool output so the LLM context is updated
 				o.ChatRepo.SaveMessage(&types.Message{
@@ -1011,7 +1024,7 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 			payloadStr := strings.TrimSpace(strings.TrimPrefix(trimmedText, "!REJECT_SKILL"))
 			var call types.ToolCall
 			if err := json.Unmarshal([]byte(payloadStr), &call); err == nil {
-				o.recordAudit(ctx, conversationID, "user", audit.EventHITLDecision, map[string]interface{}{
+				o.recordAudit(ctx, conversationID, actor, audit.EventHITLDecision, map[string]interface{}{
 					"decision":    "REJECTED",
 					"target_type": "skill",
 					"skill_id":    call.SkillID,
@@ -1280,7 +1293,24 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 				msgs = append(msgs, llm.Message{Role: h.Role, Content: content})
 			}
 
-			req := llm.CompletionRequest{Model: modelCfg.Model, Messages: msgs}
+			o.mu.RLock()
+			temp := o.DefaultTemperature
+			seed := o.DefaultSeed
+			maxTokens := o.DefaultMaxTokens
+			o.mu.RUnlock()
+			if temp == nil {
+				temp = llm.Float64Ptr(0.0)
+			}
+			nativeTools := o.buildNativeToolDefinitions(specialistID)
+
+			req := llm.CompletionRequest{
+				Model:       modelCfg.Model,
+				Messages:    msgs,
+				Temperature: temp,
+				Seed:        seed,
+				MaxTokens:   maxTokens,
+				Tools:       nativeTools,
+			}
 			queue := make(chan types.Event, 100)
 			go func() {
 				_ = o.StreamCoord.Run(ctx, out, queue, req, markerChat, markerTool, markerCode)
@@ -1309,6 +1339,97 @@ func (o *Orchestrator) ProcessRawIntent(ctx context.Context, conversationID, tex
 	return out, nil
 }
 
+// SetInferenceDefaults configures the default deterministic LLM inference parameters
+// (Temperature, Seed, MaxTokens) injected into CompletionRequest.
+func (o *Orchestrator) SetInferenceDefaults(temp *float64, seed *int64, maxTokens int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if temp != nil {
+		v := *temp
+		o.DefaultTemperature = &v
+	}
+	if seed != nil {
+		s := *seed
+		o.DefaultSeed = &s
+	}
+	if maxTokens > 0 {
+		o.DefaultMaxTokens = maxTokens
+	}
+}
+
+// SetAllowRuntimeCodegen toggles whether LLM-initiated runtime WASM code generation
+// (vraxter-coder / vraxter-coder-rust) is authorized by policy.
+func (o *Orchestrator) SetAllowRuntimeCodegen(allow bool) {
+	if o != nil && o.ExecEngine != nil {
+		o.ExecEngine.AllowRuntimeCodegen = allow
+	}
+}
+
+// buildNativeToolDefinitions assembles structured native ToolDefinitions for the active
+// authorized built-in tools and installed WASM skills so providers use native function calling.
+func (o *Orchestrator) buildNativeToolDefinitions(specialistID string) []llm.ToolDefinition {
+	defaultObjSchema := json.RawMessage(`{"type":"object","properties":{}}`)
+	seen := make(map[string]bool)
+	var tools []llm.ToolDefinition
+
+	addTool := func(name, desc string, schema json.RawMessage) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		if len(schema) == 0 || !json.Valid(schema) {
+			schema = defaultObjSchema
+		}
+		tools = append(tools, llm.ToolDefinition{
+			Name:             name,
+			Description:      desc,
+			ParametersSchema: schema,
+		})
+	}
+
+	if o.ExecEngine == nil || o.ExecEngine.AllowRuntimeCodegen {
+		addTool("vraxter-coder", "Compile and install a new sandboxed WASM skill.", json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"description":{"type":"string"},"spec":{"type":"string"},"language":{"type":"string"}},"required":["name","description"]}`))
+	}
+
+	if specialistID == "" {
+		addTool("vraxter-create-specialist", "Register a domain specialist sub-agent.", json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"expertise":{"type":"string"},"model_id":{"type":"string"},"system_prompt":{"type":"string"}},"required":["name","expertise"]}`))
+		addTool("vraxter-delete-specialist", "Delete an existing specialist sub-agent.", json.RawMessage(`{"type":"object","properties":{"identifier":{"type":"string"}},"required":["identifier"]}`))
+		addTool("vraxter-delegate", "Delegate a task to a specialist sub-agent.", json.RawMessage(`{"type":"object","properties":{"specialist_id":{"type":"string"},"task":{"type":"string"}},"required":["specialist_id","task"]}`))
+	} else {
+		addTool("vraxter-return-control", "Return execution control to the primary orchestrator.", defaultObjSchema)
+	}
+
+	addTool("vraxter-activate-model", "Lock a specific LLM model for the current session.", json.RawMessage(`{"type":"object","properties":{"model_id":{"type":"string"}},"required":["model_id"]}`))
+	addTool("vraxter-restore-model", "Restore automatic model routing.", defaultObjSchema)
+	addTool("vraxter-read-file", "Read a file inside the confined workspace.", json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`))
+	addTool("vraxter-list-dir", "List files inside the confined workspace directory.", json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`))
+	addTool("vraxter-patch-code", "Apply a HITL-approved search-and-replace patch to a workspace file.", json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"search":{"type":"string"},"replace":{"type":"string"}},"required":["path","search","replace"]}`))
+
+	if o.ExecEngine != nil && o.ExecEngine.Registry != nil {
+		for _, sl := range o.ExecEngine.Registry.GetAll() {
+			if seen[sl.ID] {
+				continue
+			}
+			var schema json.RawMessage
+			if sl.ManifestV1 != nil && sl.ManifestV1.IO != nil && len(sl.ManifestV1.IO.Input.Schema) > 0 && json.Valid(sl.ManifestV1.IO.Input.Schema) {
+				trimmed := strings.TrimSpace(string(sl.ManifestV1.IO.Input.Schema))
+				if strings.HasPrefix(trimmed, "{") {
+					schema = json.RawMessage(trimmed)
+				}
+			}
+			if len(schema) == 0 && strings.TrimSpace(sl.ParamsSchema) != "" {
+				trimmed := strings.TrimSpace(sl.ParamsSchema)
+				if strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
+					schema = json.RawMessage(trimmed)
+				}
+			}
+			addTool(sl.ID, sl.Description, schema)
+		}
+	}
+
+	return tools
+}
+
 // buildToolsContext assembles the tool listing string injected into the system prompt.
 func (o *Orchestrator) buildToolsContext(specialistID string) string {
 	allSkills := o.ExecEngine.Registry.GetAll()
@@ -1322,7 +1443,12 @@ func (o *Orchestrator) buildToolsContext(specialistID string) string {
 		addedOfficial[id] = true
 	}
 
-	addOfficial("vraxter-coder", "CREATE NEW SKILLS. Use this when the user needs to create a new skill or executable plugin. Params: name (string, required), description (string, required), spec (string, required: natural language description of what the skill should do, its inputs and outputs), language (string, optional: 'go' or 'rust'), run_params (object, optional: parameters to immediately execute the skill after creation). Vraxter will auto-generate and compile the code to WASM.")
+	if o.ExecEngine == nil || o.ExecEngine.AllowRuntimeCodegen {
+		addOfficial("vraxter-coder", "CREATE NEW SKILLS. Use this when the user needs to create a new skill or executable plugin. Params: name (string, required), description (string, required), spec (string, required: natural language description of what the skill should do, its inputs and outputs), language (string, optional: 'go' or 'rust'), run_params (object, optional: parameters to immediately execute the skill after creation). Vraxter will auto-generate and compile the code to WASM.")
+	} else {
+		addedOfficial["vraxter-coder"] = true
+		addedOfficial["vraxter-coder-rust"] = true
+	}
 
 	if specialistID == "" {
 		addOfficial("vraxter-create-specialist", "CREATE NEW SPECIALISTS. Use this when the user asks to create or register a new domain specialist sub-agent. Params: name (string, required: unique identifier e.g. 'Security_Auditor'), expertise (string, required: detailed domain skills and responsibilities), model_id (string, optional: specific LLM model ID), system_prompt (string, optional: customized behavioral rules). Example: {\"skill_id\": \"vraxter-create-specialist\", \"params\": {\"name\": \"Security_Auditor\", \"expertise\": \"Vulnerability assessments, security audits, and system hardening\", \"system_prompt\": \"Act as a senior cybersecurity analyst...\"}}")
@@ -1374,10 +1500,6 @@ func (o *Orchestrator) buildSystemPrompt(
 		markerChat, markerTool, markerCode, markerTool)
 
 	gitCtx := utils.CaptureGitContext("")
-	var deviceMap map[string][]string
-	if o.SpatialSvc != nil {
-		deviceMap = o.SpatialSvc.GetDeviceMap()
-	}
 
 	if specialistID != "" {
 		spec, err := o.SpecialistRepo.GetSpecialist(specialistID)
@@ -1399,7 +1521,6 @@ func (o *Orchestrator) buildSystemPrompt(
 				MarkerTool:          markerTool,
 				MarkerCode:          markerCode,
 				SourceZone:          sourceZone,
-				DeviceMap:           deviceMap,
 			})
 			if err == nil {
 				return out, enforcementSuffix
@@ -1419,7 +1540,6 @@ func (o *Orchestrator) buildSystemPrompt(
 		UserProfile:         userProfile,
 		SemanticMemory:      memoryContext,
 		SourceZone:          sourceZone,
-		DeviceMap:           deviceMap,
 	})
 	if err == nil {
 		return out, enforcementSuffix

@@ -28,6 +28,26 @@ import (
 	"github.com/vraxter/vraxter/pkg/vraxerror"
 )
 
+type hitlApprovedCtxKey struct{}
+
+// WithHITLApproved marks ctx as explicitly approved by a human operator for built-in
+// guarded mutations such as vraxter-patch-code. Untrusted LLM JSON parameters can never set this.
+func WithHITLApproved(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, hitlApprovedCtxKey{}, true)
+}
+
+// IsHITLApproved reports whether ctx carries an explicit host-verified HITL approval token.
+func IsHITLApproved(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	approved, ok := ctx.Value(hitlApprovedCtxKey{}).(bool)
+	return ok && approved
+}
+
 // ExecutionEngine is responsible for running skills (both LLM-directed and fast-path),
 // logging execution events, and emitting result events to the output channel.
 type ExecutionEngine struct {
@@ -48,6 +68,7 @@ type ExecutionEngine struct {
 	GetActiveModelConfigDelegate func(sessionID string) (types.ModelConfig, error)
 	OnSpecialistChange           func()
 	RequireSkillApproval         bool
+	AllowRuntimeCodegen          bool
 }
 
 // NewExecutionEngine creates a new ExecutionEngine.
@@ -73,6 +94,7 @@ func NewExecutionEngine(
 		HostExecGuard:        security.NewHostExecGuard(security.HostExecOptions{Enabled: false, IsolationMode: "airgap"}),
 		Verbose:              verbose,
 		RequireSkillApproval: requireSkillApproval,
+		AllowRuntimeCodegen:  true,
 	}
 }
 
@@ -592,6 +614,20 @@ func (e *ExecutionEngine) HandleStandardSkillApproved(ctx context.Context, out c
 	return e.HandleStandardSkillWithBypass(ctx, out, call, skillID, true)
 }
 
+// DispatchApprovedToolPayload runs a built-in command or standard skill after explicit human HITL approval.
+func (e *ExecutionEngine) DispatchApprovedToolPayload(
+	ctx context.Context,
+	out chan<- llm.StreamEvent,
+	call types.ToolCall,
+	conversationID string,
+) string {
+	approvedCtx := WithHITLApproved(ctx)
+	if handler, exists := BuiltInCommands[call.SkillID]; exists {
+		return handler(approvedCtx, call, "", conversationID, e, out)
+	}
+	return e.HandleStandardSkillWithBypass(approvedCtx, out, call, call.SkillID, true)
+}
+
 // HandleStandardSkillWithBypass executes a standard skill with a per-invocation bypassApproval flag
 // so concurrent sessions never mutate shared ExecutionEngine configuration.
 func (e *ExecutionEngine) HandleStandardSkillWithBypass(ctx context.Context, out chan<- llm.StreamEvent, call types.ToolCall, skillID string, bypassApproval bool) string {
@@ -599,11 +635,42 @@ func (e *ExecutionEngine) HandleStandardSkillWithBypass(ctx context.Context, out
 	if err != nil {
 		return fmt.Sprintf("ERROR: Skill %s not found in registry.", skillID)
 	}
-	
+
+	// 1. Daemon capability check: reject is_daemon=true unless manifest explicitly permits background execution.
+	if call.IsDaemon && !manifest.AllowsDaemon() {
+		e.recordAudit(ctx, audit.SessionIDFromContext(ctx), audit.ActorFromContext(ctx), audit.EventPolicyEvaluated, map[string]interface{}{
+			"check":    "skill_daemon_policy",
+			"skill_id": skillID,
+			"decision": "DENY",
+			"reason":   "manifest does not declare agent.allow_daemon=true",
+		})
+		errMsg := fmt.Sprintf("\n❌ Skill '%s' denied: background daemon execution is not permitted by skill manifest.", skillID)
+		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: errMsg})
+		return fmt.Sprintf("SYSTEM ERROR: Skill '%s' is not authorized for daemon execution (agent.allow_daemon is false).", skillID)
+	}
+
+	// 2. Mandatory HITL approval gate ALWAYS evaluated BEFORE spawning any daemon or running WASM.
+	if !bypassApproval && manifest.RequiresApproval(e.RequireSkillApproval) {
+		e.recordAudit(ctx, audit.SessionIDFromContext(ctx), audit.ActorFromContext(ctx), audit.EventHITLDecision, map[string]interface{}{
+			"decision":    "REQUESTED",
+			"target_type": "skill",
+			"skill_id":    skillID,
+			"is_daemon":   call.IsDaemon,
+		})
+		payloadBytes, _ := json.Marshal(call)
+		e.emitEvent(ctx, out, llm.StreamEvent{
+			Type:    llm.EventTypeSkillApprovalRequest,
+			Content: string(payloadBytes),
+			SkillID: skillID,
+		})
+		return "!YIELD_FOR_APPROVAL" // Magic string intercepted by the ExecutionEngine
+	}
+
+	// 3. Background daemon branch (only reached after manifest allow_daemon AND HITL checks pass).
+	// Propagate trace, session, and authenticated actor context via context.WithoutCancel(ctx).
 	if call.IsDaemon {
+		bgCtx := context.WithoutCancel(ctx)
 		jobID := e.JobManager.SpawnDaemon(fmt.Sprintf("Skill %s", skillID), func() (string, error) {
-			// Create a background context that survives the parent stream closure
-			bgCtx := context.Background()
 			res, err := e.Runner.Execute(bgCtx, *manifest, call.Params)
 			if err != nil {
 				return "", err
@@ -614,21 +681,6 @@ func (e *ExecutionEngine) HandleStandardSkillWithBypass(ctx context.Context, out
 		msg := fmt.Sprintf("\n⚡ Spawned Daemon Job for '%s' (Job ID: %s)", skillID, jobID)
 		e.emitEvent(ctx, out, llm.StreamEvent{Type: llm.EventTypeToken, Content: msg})
 		return fmt.Sprintf("DAEMON SPAWNED: Skill '%s' is now running in the background with Job ID: %s. You will be notified when it completes.", skillID, jobID)
-	}
-
-	if !bypassApproval && manifest.RequiresApproval(e.RequireSkillApproval) {
-		e.recordAudit(ctx, audit.SessionIDFromContext(ctx), audit.ActorFromContext(ctx), audit.EventHITLDecision, map[string]interface{}{
-			"decision":    "REQUESTED",
-			"target_type": "skill",
-			"skill_id":    skillID,
-		})
-		payloadBytes, _ := json.Marshal(call)
-		e.emitEvent(ctx, out, llm.StreamEvent{
-			Type:    llm.EventTypeSkillApprovalRequest,
-			Content: string(payloadBytes),
-			SkillID: skillID,
-		})
-		return "!YIELD_FOR_APPROVAL" // Magic string intercepted by the ExecutionEngine
 	}
 
 	result, err := e.Runner.Execute(ctx, *manifest, call.Params)

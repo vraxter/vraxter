@@ -26,6 +26,7 @@ import (
 var (
 	auditDBFlag      string
 	auditJSONLFlag   string
+	auditPubFlag     string
 	auditOutFlag     string
 	auditSinceFlag   string
 	auditTraceIDFlag string
@@ -34,13 +35,24 @@ var (
 var auditCmd = &cobra.Command{
 	Use:   "audit",
 	Short: "Verify or export the immutable hash-chained forensic audit ledger",
+	Long: `Forensic audit ledger inspection and offline cryptographic verification.
+
+Every runtime event (request ingestion, policy decisions, WASM executions,
+host exec denials, and responses) is recorded in an append-only SHA-256 hash
+chain signed by the daemon's Ed25519 audit identity key.`,
 }
 
 var auditVerifyCmd = &cobra.Command{
 	Use:   "verify",
 	Short: "Cryptographically verify the hash chain and Ed25519 signatures of the audit ledger",
+	Long: `Verify forensic integrity of either the local SQLite audit ledger or an
+exported/live JSONL audit stream.
+
+For air-gapped or independent auditor hosts without a local Vraxter AppDir,
+supply both --jsonl and --pub <audit_identity.pub> to pin signature verification
+to the enclave's public key.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		count, err := runAuditVerify(auditDBFlag, auditJSONLFlag)
+		count, err := runAuditVerify(auditDBFlag, auditJSONLFlag, auditPubFlag)
 		if err != nil {
 			fmt.Printf("❌ AUDIT VERIFICATION FAILED: %v\n", err)
 			os.Exit(1)
@@ -62,19 +74,31 @@ var auditExportCmd = &cobra.Command{
 	},
 }
 
-func runAuditVerify(dbPathFlag, jsonlPathFlag string) (int, error) {
-	cfg := appConfig
-	if cfg.AppDir == "" {
-		cfg = config.Load()
-	}
-
+func runAuditVerify(dbPathFlag, jsonlPathFlag, pubPathFlag string) (int, error) {
 	if strings.TrimSpace(jsonlPathFlag) != "" {
 		var pubKey ed25519.PublicKey
-		pubPath := filepath.Join(cfg.AppDir, "audit_identity.pub")
-		if loadedPub, _, err := security.LoadEd25519PublicKey(pubPath); err == nil {
+		if p := strings.TrimSpace(pubPathFlag); p != "" {
+			loadedPub, _, err := security.LoadEd25519PublicKey(p)
+			if err != nil {
+				return 0, fmt.Errorf("failed loading explicit audit public key %s: %w", p, err)
+			}
 			pubKey = loadedPub
+		} else {
+			cfg := appConfig
+			if cfg.AppDir == "" {
+				cfg = config.LoadReadOnly()
+			}
+			pubPath := filepath.Join(cfg.AppDir, "audit_identity.pub")
+			if loadedPub, _, err := security.LoadEd25519PublicKey(pubPath); err == nil {
+				pubKey = loadedPub
+			}
 		}
 		return audit.VerifyJSONLFile(strings.TrimSpace(jsonlPathFlag), pubKey)
+	}
+
+	cfg := appConfig
+	if cfg.AppDir == "" {
+		cfg = config.LoadReadOnly()
 	}
 
 	targetDB := strings.TrimSpace(dbPathFlag)
@@ -143,7 +167,7 @@ func runAuditExport(dbPathFlag, outPathFlag, sinceFlag, traceIDFlag string) (int
 
 	cfg := appConfig
 	if cfg.AppDir == "" {
-		cfg = config.Load()
+		cfg = config.LoadReadOnly()
 	}
 
 	targetDB := strings.TrimSpace(dbPathFlag)
@@ -192,6 +216,7 @@ func runAuditExport(dbPathFlag, outPathFlag, sinceFlag, traceIDFlag string) (int
 func init() {
 	auditVerifyCmd.Flags().StringVar(&auditDBFlag, "db", "", "Path to SQLite database file (defaults to active Vraxter DB)")
 	auditVerifyCmd.Flags().StringVar(&auditJSONLFlag, "jsonl", "", "Path to exported or live JSONL audit file to verify offline")
+	auditVerifyCmd.Flags().StringVar(&auditPubFlag, "pub", "", "Path to enclave Ed25519 audit public key (audit_identity.pub) for independent offline JSONL verification")
 
 	auditExportCmd.Flags().StringVar(&auditDBFlag, "db", "", "Path to SQLite database file (defaults to active Vraxter DB)")
 	auditExportCmd.Flags().StringVar(&auditOutFlag, "out", "", "Output JSONL file path (required)")

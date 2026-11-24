@@ -162,7 +162,7 @@ func (sc *StreamCoordinator) Run(
 				}
 				return nil
 
-			case llm.EventTypeSkillCall:
+			case llm.EventTypeNativeToolCall, llm.EventTypeSkillCall:
 				isCommitted = true
 				if event.ToolCall != nil {
 					nativeToolCalls = append(nativeToolCalls, *event.ToolCall)

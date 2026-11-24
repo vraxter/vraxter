@@ -49,7 +49,7 @@ var listModelsCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// 1. Try gRPC first
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err == nil {
 			defer gClient.Close()
 			models, err := gClient.ListModels(ctx, modelFilterProv)
@@ -266,7 +266,7 @@ func init() {
 }
 
 func getModelManager() *services.ModelManager {
-	bootstrap()
+	ensureLocalStore()
 	mRepo := db.NewModelRepository(appStore, appCrypto)
 	pRepo := db.NewProviderRepository(appStore, appCrypto)
 	return services.NewModelManager(mRepo, pRepo)

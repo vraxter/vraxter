@@ -31,10 +31,16 @@ func (r *SpecialistRepository) CreateSpecialist(s types.Specialist) error {
 		s.CreatedAt = time.Now()
 	}
 
-	encExpertise := r.Store.EncryptField(s.Expertise)
-	encPrompt := r.Store.EncryptField(s.SystemPrompt)
+	encExpertise, err := r.Store.EncryptField(s.Expertise)
+	if err != nil {
+		return fmt.Errorf("failed encrypting specialist expertise: %w", err)
+	}
+	encPrompt, err := r.Store.EncryptField(s.SystemPrompt)
+	if err != nil {
+		return fmt.Errorf("failed encrypting specialist system prompt: %w", err)
+	}
 
-	_, err := r.Store.Conn.Exec(query, s.ID, s.Name, encExpertise, s.ModelID, encPrompt, s.CreatedAt)
+	_, err = r.Store.Conn.Exec(query, s.ID, s.Name, encExpertise, s.ModelID, encPrompt, s.CreatedAt)
 	return err
 }
 

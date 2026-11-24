@@ -481,7 +481,7 @@ func TestAuditLedger_EndToEndRuntimeOrchestratorAndWASMRunner(t *testing.T) {
 	_ = reg.Register(manifest)
 
 	orch, err := core.NewOrchestrator(
-		store, cryptoSvc, reg, runner, nil, nil, false, nil, false, "airgap", nil,
+		store, cryptoSvc, reg, runner, nil, false, nil, false, "airgap", nil,
 	)
 	if err != nil {
 		t.Fatalf("NewOrchestrator failed: %v", err)

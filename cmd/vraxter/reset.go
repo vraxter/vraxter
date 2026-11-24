@@ -10,7 +10,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -53,9 +52,7 @@ Examples:
 		}
 
 		if resetSessionsFlag {
-			if appStore == nil {
-				bootstrap()
-			}
+			ensureLocalStore()
 			chatRepo := db.NewChatRepository(appStore)
 			convs, err := chatRepo.ListConversations(1000)
 			if err != nil {
@@ -87,12 +84,12 @@ Examples:
 
 			// 1. Attempt to stop running daemon gracefully
 			fmt.Print("🛑 Shutting down any running background daemon... ")
-			gClient, err := client.NewGRPCClient(client.DefaultEndpoint(), daemonKey)
-			if err == nil {
-				_, _ = gClient.ExecuteStream(context.Background(), "SYSTEM_SHUTDOWN", "internal-mgmt", "", "")
-				gClient.Close()
-				time.Sleep(300 * time.Millisecond)
-				fmt.Println("[DONE]")
+			if probeDaemonEndpoint(client.DefaultEndpoint(), 250*time.Millisecond) {
+				if err := stopDaemonAndWait(client.DefaultEndpoint(), ensureDaemonKey(), appConfig.AppDir, daemonStopTimeout); err == nil {
+					fmt.Println("[DONE]")
+				} else {
+					fmt.Printf("[TIMEOUT: %v]\n", err)
+				}
 			} else {
 				fmt.Println("[OFFLINE]")
 			}

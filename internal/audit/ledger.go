@@ -150,6 +150,33 @@ func SessionIDFromContext(ctx context.Context) string {
 	return ""
 }
 
+type auditAuthActorCtxKey struct{}
+
+// WithAuthenticatedActor attaches a cryptographically verified principal identifier
+// (e.g., "mtls:<CN>" or "api_key:<id>") to ctx. It always takes precedence over
+// unverified client-supplied actor strings.
+func WithAuthenticatedActor(ctx context.Context, actor string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	trimmed := strings.TrimSpace(actor)
+	if trimmed == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, auditAuthActorCtxKey{}, trimmed)
+}
+
+// AuthenticatedActorFromContext extracts a cryptographically verified principal actor from ctx.
+func AuthenticatedActorFromContext(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	if v, ok := ctx.Value(auditAuthActorCtxKey{}).(string); ok && strings.TrimSpace(v) != "" {
+		return v, true
+	}
+	return "", false
+}
+
 // WithActor attaches an actor identifier ("user", "specialist:<name>", "system") to ctx.
 func WithActor(ctx context.Context, actor string) context.Context {
 	if ctx == nil {
@@ -158,10 +185,14 @@ func WithActor(ctx context.Context, actor string) context.Context {
 	return context.WithValue(ctx, auditActorCtxKey{}, strings.TrimSpace(actor))
 }
 
-// ActorFromContext extracts the actor identifier from ctx, defaulting to "system".
+// ActorFromContext extracts the actor identifier from ctx, strictly preferring a
+// cryptographically authenticated principal over unverified actor labels, defaulting to "system".
 func ActorFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return "system"
+	}
+	if v, ok := ctx.Value(auditAuthActorCtxKey{}).(string); ok && strings.TrimSpace(v) != "" {
+		return v
 	}
 	if v, ok := ctx.Value(auditActorCtxKey{}).(string); ok && strings.TrimSpace(v) != "" {
 		return v
@@ -278,11 +309,18 @@ func LoadOrCreateAuditIdentity(appDir string) (ed25519.PrivateKey, ed25519.Publi
 	privPath := filepath.Join(appDir, "audit_identity.key")
 	pubPath := filepath.Join(appDir, "audit_identity.pub")
 
-	if priv, _, err := security.LoadEd25519PrivateKey(privPath); err == nil {
+	if _, statErr := os.Stat(privPath); statErr == nil {
+		priv, _, err := security.LoadEd25519PrivateKey(privPath)
+		if err != nil {
+			// Fail closed: never silently regenerate a key over an existing unreadable/tampered audit_identity.key.
+			return nil, nil, "", fmt.Errorf("failed loading existing audit signing identity %s: %w", privPath, err)
+		}
 		pub := priv.Public().(ed25519.PublicKey)
 		keyID := security.ComputeEd25519KeyID(pub)
 		_ = os.Chmod(privPath, 0600)
 		return priv, pub, keyID, nil
+	} else if !os.IsNotExist(statErr) {
+		return nil, nil, "", fmt.Errorf("failed inspecting audit signing identity %s: %w", privPath, statErr)
 	}
 
 	kp, err := security.GenerateEd25519KeyPair("vraxter-daemon-audit")

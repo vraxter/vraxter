@@ -9,16 +9,19 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
+
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 	"github.com/vraxter/vraxter/internal/client"
 	"github.com/vraxter/vraxter/internal/db"
 	"github.com/vraxter/vraxter/internal/services"
 	"github.com/vraxter/vraxter/pkg/interfaces"
-	"log"
 )
 
 var providersCmd = &cobra.Command{
@@ -58,7 +61,7 @@ func executeDiscovery(providerID string) {
 
 	// 1. Try gRPC (Bypass for internal TUI sessions to preserve rich metadata)
 	if os.Getenv("VRAXTER_INTERNAL_SESSION") != "true" {
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err == nil {
 			defer gClient.Close()
 			models, err := gClient.DiscoverModels(ctx, providerID)
@@ -125,7 +128,7 @@ var providersSupportedCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// 1. Try gRPC
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err == nil {
 			defer gClient.Close()
 			list, err := gClient.GetSupportedProviders(ctx)
@@ -155,26 +158,64 @@ func renderSupported(types []string) {
 	fmt.Println("Use 'vraxter providers add --type <type>' to configure one.")
 }
 
+func readSecretMasked(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	fd := os.Stdin.Fd()
+	if term.IsTerminal(fd) {
+		raw, err := term.ReadPassword(fd)
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(raw)), nil
+	}
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
 var providersAddCmd = &cobra.Command{
 	Use:   "add <name>",
-	Short: "Add a new AI provider",
+	Short: "Register an inference provider (use --key-env or masked prompt to avoid exposing secrets in argv)",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
 		pType, _ := cmd.Flags().GetString("type")
 		key, _ := cmd.Flags().GetString("key")
+		keyEnv, _ := cmd.Flags().GetString("key-env")
 		url, _ := cmd.Flags().GetString("url")
 
+		pType = strings.ToLower(strings.TrimSpace(pType))
 		if pType == "" {
 			fmt.Printf("❌ Missing mandatory flag: --type is required\n")
-			fmt.Printf("Example: vraxter providers add %s --type google --key YOUR_TOKEN\n", name)
+			fmt.Printf("Example: vraxter providers add %s --type ollama --url http://127.0.0.1:11434\n", name)
+			fmt.Printf("Example: vraxter providers add %s --type openai --key-env OPENAI_API_KEY\n", name)
 			os.Exit(1)
+		}
+
+		if strings.TrimSpace(keyEnv) != "" {
+			envVal := strings.TrimSpace(os.Getenv(strings.TrimSpace(keyEnv)))
+			if envVal == "" {
+				fmt.Fprintf(os.Stderr, "❌ Environment variable %q specified via --key-env is unset or empty.\n", keyEnv)
+				os.Exit(1)
+			}
+			key = envVal
+		} else if key == "" && pType != "ollama" && pType != "custom" {
+			secret, err := readSecretMasked("Enter provider API key (input hidden): ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "❌ Failed reading API key: %v\n", err)
+				os.Exit(1)
+			}
+			key = secret
 		}
 
 		ctx := context.Background()
 
 		// 1. Try gRPC
-		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), daemonKey)
+		gClient, err := client.NewManagementClient(client.DefaultEndpoint(), ensureDaemonKey())
 		if err == nil {
 			defer gClient.Close()
 			id, err := gClient.ConfigureProvider(ctx, name, pType, key, url)
@@ -223,12 +264,16 @@ func executeSetup() {
 	pType = strings.ToLower(strings.TrimSpace(pType))
 
 	if pType != "ollama" && pType != "custom" {
-		fmt.Print("3. Enter API Key: ")
-		fmt.Scanln(&key)
+		secret, err := readSecretMasked("3. Enter API Key (input hidden): ")
+		if err != nil {
+			fmt.Printf("❌ Failed reading API key: %v\n", err)
+			return
+		}
+		key = secret
 	}
 
 	if pType == "custom" {
-		fmt.Print("3. Enter Base URL (e.g. http://192.168.1.35:11434/): ")
+		fmt.Print("3. Enter Base URL (e.g. http://127.0.0.1:11434/): ")
 	} else {
 		fmt.Print("4. Enter Base URL (Optional, press Enter to skip): ")
 	}
@@ -347,9 +392,10 @@ func formatContextWindow(n int) string {
 }
 
 func init() {
-	providersAddCmd.Flags().String("type", "", "Provider type (openai, google, anthropic, ollama)")
-	providersAddCmd.Flags().String("key", "", "API Key for the service")
-	providersAddCmd.Flags().String("url", "", "Custom Base URL (optional)")
+	providersAddCmd.Flags().String("type", "", "Provider type (ollama, custom, openai, google, anthropic)")
+	providersAddCmd.Flags().String("key", "", "API Key (discouraged on shared hosts; prefer --key-env or interactive hidden prompt)")
+	providersAddCmd.Flags().String("key-env", "", "Name of environment variable containing the provider API key")
+	providersAddCmd.Flags().String("url", "", "Custom Base URL (e.g. http://127.0.0.1:11434/)")
 	providersAddCmd.MarkFlagRequired("type")
 
 	// Global flags for positional model command
@@ -365,7 +411,7 @@ func init() {
 
 // Utility to get the manager
 func getProviderManager() *services.ProviderManager {
-	bootstrap() // Ensure appStore and appCrypto are ready
+	ensureLocalStore()
 	repo := db.NewProviderRepository(appStore, appCrypto)
-	return services.NewProviderManager(repo, appConfig.PrivacyPolicy, appConfig.WhitelistedIPs)
+	return services.NewProviderManager(repo, appConfig.PrivacyPolicy, appConfig.WhitelistedIPs, appConfig.IsolationMode)
 }

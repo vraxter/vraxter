@@ -1120,13 +1120,11 @@ func writeBenchmarkArtifacts(t *testing.T, report BenchmarkReport) {
 		t.Fatalf("marshal benchmark report: %v", err)
 	}
 
-	// Write benchmark_report.json in tests/benchmarks/ and repository root
+	// Write canonical benchmark_report.json and BENCHMARKS.md strictly inside tests/benchmarks/
 	localReportPath := "benchmark_report.json"
-	rootReportPath := filepath.Clean(filepath.Join("..", "..", "benchmark_report.json"))
-	rootMDPath := filepath.Clean(filepath.Join("..", "..", "BENCHMARKS.md"))
+	localMDPath := "BENCHMARKS.md"
 
 	_ = utils.AtomicWriteFile(localReportPath, reportJSON, 0644)
-	_ = utils.AtomicWriteFile(rootReportPath, reportJSON, 0644)
 
 	md := fmt.Sprintf(`# Vraxter Critical-Grade Benchmark Report
 
@@ -1156,7 +1154,7 @@ func writeBenchmarkArtifacts(t *testing.T, report BenchmarkReport) {
 		report.Bench07.EventsRecorded, report.Bench07.PerEventWriteLatency.P50MS, report.Bench07.WriteThroughputOpsSec, report.Bench07.VerifyChainEvents, report.Bench07.VerifyChainTotalTimeMS, report.Bench07.VerifyThroughputOpsSec,
 	)
 
-	_ = utils.AtomicWriteFile(rootMDPath, []byte(md), 0644)
+	_ = utils.AtomicWriteFile(localMDPath, []byte(md), 0644)
 }
 
 func TestBench01_ZeroEgressAirgap(t *testing.T) {

@@ -172,7 +172,7 @@ func TestDemo01_AerospaceTelemetryAirgapE2E(t *testing.T) {
 		store.Close()
 		t.Fatalf("NewCryptoService: %v", err)
 	}
-	orch, err := core.NewOrchestrator(store, cryptoSvc, reg, runner, nil, nil, false, nil, false, "airgap", nil)
+	orch, err := core.NewOrchestrator(store, cryptoSvc, reg, runner, nil, false, nil, false, "airgap", nil)
 	if err != nil {
 		store.Close()
 		t.Fatalf("NewOrchestrator: %v", err)
@@ -210,9 +210,9 @@ func TestDemo01_AerospaceTelemetryAirgapE2E(t *testing.T) {
 		},
 	})
 
-	execRes, err := runner.Execute(ctx, installed, map[string]interface{}{
-		"_input_dir": absDemoDir,
-		"file":       "/input/telemetry_batch.jsonl",
+	execCtx := skills.WithSessionDirs(ctx, skills.SessionDirs{InputDir: absDemoDir})
+	execRes, err := runner.Execute(execCtx, installed, map[string]interface{}{
+		"file": "/input/telemetry_batch.jsonl",
 	})
 	if err != nil {
 		store.Close()
@@ -452,7 +452,7 @@ func TestDemo02_SovereignSOCTriageE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCryptoService: %v", err)
 	}
-	orch, err := core.NewOrchestrator(store, cryptoSvc, reg, runner, nil, nil, false, nil, false, "local_lan", nil)
+	orch, err := core.NewOrchestrator(store, cryptoSvc, reg, runner, nil, false, nil, false, "local_lan", nil)
 	if err != nil {
 		t.Fatalf("NewOrchestrator: %v", err)
 	}
@@ -498,12 +498,12 @@ func TestDemo02_SovereignSOCTriageE2E(t *testing.T) {
 	approveCall := types.ToolCall{
 		SkillID: "vrx-soc-triage",
 		Params: map[string]interface{}{
-			"_input_dir": absDemoDir,
-			"file":       "/input/lan_incident_events.jsonl",
+			"file": "/input/lan_incident_events.jsonl",
 		},
 	}
 	approveBytes, _ := json.Marshal(approveCall)
-	stream2, err := orch.ProcessRawIntent(ctx, "demo02-soc-session", "!APPROVE_SKILL "+string(approveBytes), "", "", "", "soc_operator")
+	execCtx := skills.WithSessionDirs(ctx, skills.SessionDirs{InputDir: absDemoDir})
+	stream2, err := orch.ProcessRawIntent(execCtx, "demo02-soc-session", "!APPROVE_SKILL "+string(approveBytes), "", "", "", "soc_operator")
 	if err != nil {
 		t.Fatalf("ProcessRawIntent(!APPROVE_SKILL) failed: %v", err)
 	}

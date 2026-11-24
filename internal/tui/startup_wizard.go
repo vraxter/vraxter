@@ -20,7 +20,7 @@ type StartupWizardState int
 
 const (
 	StateSplash StartupWizardState = iota
-	StateImplementation
+	StateIsolationMode
 	StateUserProfile
 	StateProviderConfig
 	StateModelRegister
@@ -41,7 +41,7 @@ type StartupWizard struct {
 	provMgr  *services.ProviderManager
 	modelMgr *services.ModelManager
 
-	SelectedImplementation string
+	SelectedIsolationMode string
 
 	quitting bool
 	Done     bool
@@ -49,12 +49,13 @@ type StartupWizard struct {
 
 func NewStartupWizard(pMgr *services.ProviderManager, mMgr *services.ModelManager) *StartupWizard {
 	return &StartupWizard{
-		state:       StateSplash,
-		userWizard:  NewUserWizardModel(),
-		provWizard:  NewProviderWizard(pMgr),
-		modelWizard: NewModelWizard(pMgr, mMgr),
-		provMgr:     pMgr,
-		modelMgr:    mMgr,
+		state:                 StateSplash,
+		userWizard:            NewUserWizardModel(),
+		provWizard:            NewProviderWizard(pMgr),
+		modelWizard:           NewModelWizard(pMgr, mMgr),
+		provMgr:               pMgr,
+		modelMgr:              mMgr,
+		SelectedIsolationMode: "airgap",
 	}
 }
 
@@ -73,7 +74,7 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.state == StateSplash {
 			if msg.String() == "enter" {
-				m.state = StateImplementation
+				m.state = StateIsolationMode
 				return m, nil
 			}
 			if msg.String() == "esc" {
@@ -82,30 +83,22 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		
-		if m.state == StateImplementation {
+
+		if m.state == StateIsolationMode {
 			switch msg.String() {
 			case "shift+tab", "ctrl+b", "alt+left", "backspace":
 				m.state = StateSplash
 				return m, nil
+			case "a", "A", "enter":
+				m.SelectedIsolationMode = "airgap"
+				m.state = StateUserProfile
+				return m, m.userWizard.Init()
+			case "l", "L":
+				m.SelectedIsolationMode = "local_lan"
+				m.state = StateUserProfile
+				return m, m.userWizard.Init()
 			case "h", "H":
-				m.SelectedImplementation = "habitat"
-				m.state = StateUserProfile
-				return m, m.userWizard.Init()
-			case "f", "F":
-				m.SelectedImplementation = "facility"
-				m.state = StateUserProfile
-				return m, m.userWizard.Init()
-			case "e", "E":
-				m.SelectedImplementation = "enterprise"
-				m.state = StateUserProfile
-				return m, m.userWizard.Init()
-			case "s", "S":
-				m.SelectedImplementation = "sovereign"
-				m.state = StateUserProfile
-				return m, m.userWizard.Init()
-			case "c", "C":
-				m.SelectedImplementation = "core"
+				m.SelectedIsolationMode = "hybrid"
 				m.state = StateUserProfile
 				return m, m.userWizard.Init()
 			case "esc":
@@ -123,7 +116,7 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch km.String() {
 			case "shift+tab", "ctrl+b", "alt+left":
 				if m.userWizard.step == 0 {
-					m.state = StateImplementation
+					m.state = StateIsolationMode
 					return m, nil
 				}
 			}
@@ -207,15 +200,15 @@ func (m *StartupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *StartupWizard) View() tea.View {
 	if m.quitting {
-		return tea.NewView("Onboarding cancelled. Vraxter is ready when you are.")
+		return tea.NewView("Initialization cancelled. Run 'vraxter' when ready to configure the enclave.")
 	}
 
 	var content string
 	switch m.state {
 	case StateSplash:
 		content = m.renderSplash()
-	case StateImplementation:
-		content = m.renderImplementationSelector()
+	case StateIsolationMode:
+		content = m.renderIsolationSelector()
 	case StateUserProfile:
 		content = m.userWizard.View().Content
 	case StateProviderConfig:
@@ -236,17 +229,18 @@ func (m *StartupWizard) renderSplash() string {
 
 	var s strings.Builder
 	s.WriteString("\n\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("    ◈ WELCOME TO VRAXTER") + "\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(colorAsh).Render("    The autonomous workstation for the modern engineer.") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("    ◈ VRAXTER SOVEREIGN RUNTIME — ENCLAVE INITIALIZATION") + "\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorAsh).Render("    Zero-egress autonomous execution runtime for critical environments.") + "\n\n")
 
 	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Foreground(colorStone).Width(width - 8).Render(
-		"This wizard will guide you through the initial configuration:\n\n" +
-			" 1. Create your Identity\n" +
-			" 2. Connect a Provider (OpenAI, Google, etc.)\n" +
-			" 3. Register your first Model\n",
+		"This setup configures the local enclave:\n\n" +
+			" 1. Select Network Isolation Mode (airgap / local_lan / hybrid)\n" +
+			" 2. Configure Operator Profile\n" +
+			" 3. Connect an Inference Provider (Ollama, vLLM, etc.)\n" +
+			" 4. Register an Operational Model\n",
 	))
 
-	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorCopperLight).Render("Press ENTER to begin your journey..."))
+	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorCopperLight).Render("Press ENTER to configure enclave..."))
 
 	return renderSolidBox(s.String(), width, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper)
 }
@@ -259,22 +253,22 @@ func (m *StartupWizard) renderFinished() string {
 
 	var s strings.Builder
 	s.WriteString("\n\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(setupDoneStyle.GetForeground()).Bold(true).Render("    ◈ CONFIGURATION COMPLETE") + "\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(colorAsh).Render("    Vraxter has been initialized and is ready for action.") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(setupDoneStyle.GetForeground()).Bold(true).Render("    ◈ ENCLAVE INITIALIZED") + "\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorAsh).Render("    Vraxter runtime policies and operator settings are active.") + "\n\n")
 
 	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Foreground(colorStone).Width(width - 8).Render(
-		"You can now start chatting with your models. Simply type your request \n" +
-			"in the console after exiting this wizard.\n\n" +
-			"To modify these settings later, use:\n" +
+		"Runtime security policies (isolation mode, encrypted SQLite, audit ledger)\n" +
+			"are enforced on all subsequent sessions.\n\n" +
+			"Manage configuration later with:\n" +
 			" /user setup      /providers setup      /models setup",
 	))
 
-	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorCopperLight).Render("Press ENTER to enter the workstation..."))
+	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorCopperLight).Render("Press ENTER to enter the operator console..."))
 
 	return renderSolidBox(s.String(), width, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper)
 }
 
-func (m *StartupWizard) renderImplementationSelector() string {
+func (m *StartupWizard) renderIsolationSelector() string {
 	width := m.width
 	if width <= 0 {
 		width = 80
@@ -282,19 +276,17 @@ func (m *StartupWizard) renderImplementationSelector() string {
 
 	var s strings.Builder
 	s.WriteString("\n\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("    ◈ SELECT IMPLEMENTATION WORLD") + "\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(colorAsh).Render("    Vraxter activates different powers based on your environment.") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorCopperLight).Bold(true).Render("    ◈ SELECT ENCLAVE ISOLATION MODE") + "\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(colorAsh).Render("    Controls network perimeter enforcement and provider egress policy.") + "\n\n")
 
 	s.WriteString(lipgloss.NewStyle().PaddingLeft(4).Foreground(colorStone).Width(width - 8).Render(
-		"Please select your implementation type:\n\n" +
-			" [c] Core        (Engineering Workstation & Local Skills)\n" +
-			" [h] Habitat     (Spatial Awareness & IoT Routing)\n" +
-			" [f] Facility    (Building Management Systems)\n" +
-			" [e] Enterprise  (Air-Gapped Telemetry, RBAC)\n" +
-			" [s] Sovereign   (All Powers Unlocked)\n",
+		"Select network isolation posture:\n\n" +
+			" [a] Airgap      (Recommended — Zero-egress, loopback-only inference, strict_local)\n" +
+			" [l] Local LAN   (Private RFC 1918 intranet endpoints only, zero public internet)\n" +
+			" [h] Hybrid      (Controlled egress to explicitly configured endpoints)\n",
 	))
 
-	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorCopperLight).Render("Press the corresponding key to select..."))
+	s.WriteString("\n\n" + lipgloss.NewStyle().PaddingLeft(4).Foreground(colorCopperLight).Render("Press [a], [l], or [h] (ENTER defaults to airgap)..."))
 
 	return renderSolidBox(s.String(), width, 1, 2, hexHeaderBg, hexIvory, lipgloss.NormalBorder(), hexCopper)
 }

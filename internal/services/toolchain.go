@@ -23,47 +23,22 @@ import (
 	"github.com/vraxter/vraxter/internal/utils"
 )
 
-// defaultSDKChecksums maps official SDK archive filenames to their expected SHA-256 digests.
+// defaultSDKChecksums maps verified official SDK archive filenames to their upstream SHA-256 digests.
+// Unverified archives (e.g., TinyGo, Rust, WASI SDK, or non-x86_64 Zig builds) are intentionally omitted
+// so SetupSDK fails closed unless an operator explicitly pins verified SHA-256 digests via
+// <sdkDir>/checksums.json or SetSDKChecksum.
 var defaultSDKChecksums = map[string]string{
-	// Go 1.22.5
+	// Go 1.22.5 — verified against official go.dev release checksums
 	"go1.22.5.linux-amd64.tar.gz":  "904b924d435eaea086515bc63235b192ea441bd8c9b198c507e85009e6e4c7f0",
-	"go1.22.5.linux-arm64.tar.gz":  "df6c6bde1ec4bbd0fb8fb4ebd9ab9a0c8d718f54ee5b20d161b6f3775810f7ba",
-	"go1.22.5.darwin-amd64.tar.gz": "bc3fc2aae5fc0f8341c4a977c09dece1802f7002b28cd7f589cd6fb057ec22e1",
-	"go1.22.5.darwin-arm64.tar.gz": "ef8d32fa7a8858f9f1a0fb08341d89c6cc2c0d39ebfd1f0f641c096c1f16cd37",
-	"go1.22.5.windows-amd64.zip":   "59f8bfcfb1ab76e1791a6abca18ff88c07ef4df9bb9b29fb7fb8bd5563fa1a55",
-	"go1.22.5.windows-arm64.zip":   "a5d5b68fb45212dc6ab60cf18dc92fd506b892174247151db79cb1c16f0d0f31",
+	"go1.22.5.linux-arm64.tar.gz":  "8d21325bfcf431be3660527c1a39d3d9ad71535fabdf5041c826e44e31642b5a",
+	"go1.22.5.darwin-amd64.tar.gz": "95d9933cdcf45f211243c42c7705c37353cccd99f27eb4d8e2d1bf2f4165cb50",
+	"go1.22.5.darwin-arm64.tar.gz": "4cd1bcb05be03cecb77bccd765785d5ff69d79adf4dd49790471d00c06b41133",
+	"go1.22.5.windows-amd64.zip":   "59968438b8d90f108fd240d4d2f95b037e59716995f7409e0a322dcb996e9f42",
+	"go1.22.5.windows-arm64.zip":   "6717d5841162aa8c05f932eb74a643f1310b8a88f80f0830e86d194289734bbf",
 
-	// TinyGo 0.32.0
-	"tinygo0.32.0.linux-amd64.tar.gz":  "22a2a0a64231c0b3a2e72f1ef2bf3979f5a5a1983be7ed2c5a6c74f1e4f825b3",
-	"tinygo0.32.0.linux-arm64.tar.gz":  "4c3a4d3f59b1d45b2f8d7c58b35e2ef84d5e373a8a8e36fb8dc79238d4c49621",
-	"tinygo0.32.0.darwin-amd64.tar.gz": "d818e0d5319f8e8c818781d18b8531b6067e54e1629c57188f64b5b3688894c8",
-	"tinygo0.32.0.darwin-arm64.tar.gz": "0146e7806e84056262f5829a08708b06b34b082707a60b67d57b604e05173717",
-	"tinygo0.32.0.windows-amd64.zip":   "e7a480f7c812c4eb57f61bc21c46fc71e8c493e50f491d044eb02f22786a3a41",
-	"tinygo0.32.0.windows-arm64.zip":   "6897f62039e5082a82e0b6c751d707f020323e4f96c1f1a0a7c71c4a9c6e8f12",
-
-	// Rust 1.80.0
-	"rust-1.80.0-x86_64-unknown-linux-gnu.tar.gz":  "d66c278f2511334d72276a4a7b224bf7a23b12711b69b5a6939a6d56f89b8d42",
-	"rust-1.80.0-aarch64-unknown-linux-gnu.tar.gz": "e8896f3210b3a0d174129b4528b7915f2269926b88e2561d722937d538e46b47",
-	"rust-1.80.0-x86_64-apple-darwin.tar.gz":       "1b007b5d3e1123493a3228b16a468b525c799573f33e93f1612630750b4d1236",
-	"rust-1.80.0-aarch64-apple-darwin.tar.gz":      "2a4f501e0f2d14e6b1f8236f6e621f452d263861a26901b95e2f5b415a8e6128",
-	"rust-1.80.0-x86_64-pc-windows-msvc.tar.gz":    "7f47106f3e209b32169081b761c8256958e30f92b305638641122a4068757d13",
-	"rust-1.80.0-aarch64-pc-windows-msvc.tar.gz":   "9b8619251a19057cff70779273e95aa6c063199b08e3218b98a8830d62107721",
-
-	// Zig 0.13.0
-	"zig-linux-x86_64-0.13.0.tar.xz":  "d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea",
-	"zig-linux-aarch64-0.13.0.tar.xz": "c9bc4fc9df5ef1e3c4c63cc53e3d3fb977610f7c4f0a4267e4f824197a2d5a48",
-	"zig-macos-x86_64-0.13.0.tar.xz":  "08be7f2fb9c5c9c43ef2d6f186414b63bb1734cd7c3a85845d01b25d49514041",
-	"zig-macos-aarch64-0.13.0.tar.xz": "b1387c11185966a3102f9468b4046e4b5263f7e8e3824c58732a7d9b85b3a76b",
-	"zig-windows-x86_64-0.13.0.zip":   "6c1a2e1a21b43ef4d399c7311b02a29d7bf7cf3121edb8028fb1bc3a5bd6f1fc",
-	"zig-windows-aarch64-0.13.0.zip":  "5a41e825341b6d16a64d1b720b9f6e8618a21b4d8e1a9d6d0e1a8f3b2c4d5e6f",
-
-	// WASI SDK 24.0
-	"wasi-sdk-24.0-x86_64-linux.tar.gz":   "87fc5f5a5ebed80c7ab3c48cf0b2fa2ebbd3219fb0c8ef5d484d62857b4a8c32",
-	"wasi-sdk-24.0-arm64-linux.tar.gz":    "4f6b18d3a1c2e5b7d9f0a3c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4",
-	"wasi-sdk-24.0-x86_64-macos.tar.gz":   "9d5e2f7a1c3b6d8e0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d",
-	"wasi-sdk-24.0-arm64-macos.tar.gz":    "3a7c9e1b5d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c",
-	"wasi-sdk-24.0-x86_64-windows.tar.gz": "5e8b1d4f7a0c3e6b9d2f5a8c1e4b7d0f3a6c9e2b5d8f1a4c7e0b3d6f9a2c5e8b",
-	"wasi-sdk-24.0-arm64-windows.tar.gz":  "7c0f3a6d9e2b5c8f1a4d7e0b3c6f9a2d5e8b1c4f7a0d3e6b9c2f5a8d1e4b7c0f",
+	// Zig 0.13.0 — verified upstream x86_64 release checksums
+	"zig-linux-x86_64-0.13.0.tar.xz": "d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea",
+	"zig-windows-x86_64-0.13.0.zip":  "d859994725ef9402381e557c60bb57497215682e355204d754ee3df75ee3c158",
 }
 
 type ToolchainManager struct {

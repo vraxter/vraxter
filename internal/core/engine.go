@@ -12,6 +12,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/vraxter/vraxter/internal/audit"
 	"github.com/vraxter/vraxter/internal/db"
@@ -48,7 +49,6 @@ func NewEngine(
 	reg *skills.Registry,
 	run *skills.Runner,
 	coder *services.CoderService,
-	spatialSvc *services.SpatialService,
 	verbose bool,
 	appDir string, // needed to load routing.yaml
 	requireSkillApproval bool,
@@ -64,14 +64,16 @@ func NewEngine(
 	// Ensure a documented sample is written on first run
 	_ = appcfg.WriteSampleRoutingConfig(appDir)
 
-	orch, err := NewOrchestrator(store, crypto, reg, run, coder, spatialSvc, verbose, routingCfg.Routes, requireSkillApproval, isolationMode, whitelistedIPs)
+	orch, err := NewOrchestrator(store, crypto, reg, run, coder, verbose, routingCfg.Routes, requireSkillApproval, isolationMode, whitelistedIPs)
 	if err != nil {
 		return nil, err
 	}
-	if ledger, lErr := audit.NewLedger(store, appDir, ""); lErr == nil {
-		orch.SetAuditLedger(ledger)
-		audit.SetDefaultLedger(ledger)
+	ledger, lErr := audit.NewLedger(store, appDir, "")
+	if lErr != nil {
+		return nil, fmt.Errorf("failed initializing forensic audit ledger: %w", lErr)
 	}
+	orch.SetAuditLedger(ledger)
+	audit.SetDefaultLedger(ledger)
 	return &Engine{
 		orch:           orch,
 		SpecialistRepo: orch.SpecialistRepo,
@@ -141,6 +143,20 @@ func (e *Engine) UnregisterSkill(id string) {
 func (e *Engine) SetHostExecGuard(guard *security.HostExecGuard) {
 	if e != nil && e.orch != nil && e.orch.ExecEngine != nil {
 		e.orch.ExecEngine.HostExecGuard = guard
+	}
+}
+
+// SetAllowRuntimeCodegen toggles whether LLM-initiated runtime WASM code generation is permitted.
+func (e *Engine) SetAllowRuntimeCodegen(allow bool) {
+	if e != nil && e.orch != nil {
+		e.orch.SetAllowRuntimeCodegen(allow)
+	}
+}
+
+// SetInferenceDefaults configures deterministic LLM inference parameters (Temperature, Seed, MaxTokens).
+func (e *Engine) SetInferenceDefaults(temp *float64, seed *int64, maxTokens int) {
+	if e != nil && e.orch != nil {
+		e.orch.SetInferenceDefaults(temp, seed, maxTokens)
 	}
 }
 

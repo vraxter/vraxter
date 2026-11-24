@@ -109,7 +109,6 @@ func init() {
 
 type BaseSystemParams struct {
 	SourceZone          string
-	DeviceMap           map[string][]string
 	ExistingSpecialists string
 	AvailableModels     string
 	AvailableTools      string
@@ -126,7 +125,6 @@ type BaseSystemParams struct {
 
 type SpecialistParams struct {
 	SourceZone          string
-	DeviceMap           map[string][]string
 	SpecialistName      string
 	SpecialistExpertise string
 	SpecialistPrompt    string

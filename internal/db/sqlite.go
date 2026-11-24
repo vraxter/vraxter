@@ -11,6 +11,7 @@ package db
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -24,6 +25,10 @@ import (
 	_ "modernc.org/sqlite" // Pure Go SQLite driver without CGO
 )
 
+// ErrEncryptionUnavailable is returned when at-rest field/blob encryption cannot be
+// performed because the store's cryptographic service is missing or uninitialized.
+var ErrEncryptionUnavailable = errors.New("database at-rest encryption service is unavailable")
+
 // StoreOptions configures at-rest encryption and key management for a SQLite Store.
 type StoreOptions struct {
 	EncryptAtRest bool
@@ -31,7 +36,7 @@ type StoreOptions struct {
 	MasterKeyPath string
 }
 
-// Store manages the core SQLite connection, schema, and at-rest AES-256-GCM encryption.
+// Store manages the core SQLite connection, schema, exclusive file lock, and at-rest AES-256-GCM encryption.
 type Store struct {
 	Conn          *sql.DB
 	dbPath        string
@@ -39,6 +44,7 @@ type Store struct {
 	sealedEncPath string
 	encryptAtRest bool
 	crypto        *security.CryptoService
+	fileLock      *dbFileLock
 }
 
 // NewStore initializes the database connection, durability PRAGMAs, WAL-safe VACUUM INTO backup, and schema.
@@ -46,9 +52,24 @@ func NewStore(dbPath string) (*Store, error) {
 	return NewStoreWithOptions(dbPath, StoreOptions{})
 }
 
-// NewStoreWithOptions initializes the SQLite Store with optional full-file at-rest sealing (encrypt_db_at_rest)
-// and column-level AES-256-GCM encryption backed by db_master.key.
+// NewStoreWithOptions initializes the SQLite Store with exclusive database locking (vraxter.db.lock),
+// optional full-file at-rest sealing (encrypt_db_at_rest), and column-level AES-256-GCM encryption
+// backed by db_master.key.
 func NewStoreWithOptions(dbPath string, opts StoreOptions) (*Store, error) {
+	var fileLock *dbFileLock
+	if dbPath != "" && dbPath != ":memory:" {
+		var lockErr error
+		fileLock, lockErr = acquireDBFileLock(dbPath)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+	}
+	releaseOnErr := func() {
+		if fileLock != nil {
+			_ = fileLock.Release()
+		}
+	}
+
 	crypto := opts.Crypto
 	if crypto == nil {
 		var err error
@@ -60,6 +81,7 @@ func NewStoreWithOptions(dbPath string, opts StoreOptions) (*Store, error) {
 			crypto, err = security.NewDBMasterCryptoService("")
 		}
 		if err != nil {
+			releaseOnErr()
 			return nil, fmt.Errorf("failed initializing db_master.key crypto service: %w", err)
 		}
 	}
@@ -87,6 +109,7 @@ func NewStoreWithOptions(dbPath string, opts StoreOptions) (*Store, error) {
 
 			if infoEnc, err := os.Stat(sealedEncPath); err == nil && infoEnc.Size() > 0 {
 				if err := crypto.DecryptFile(sealedEncPath, workingPath); err != nil {
+					releaseOnErr()
 					return nil, fmt.Errorf("failed decrypting sealed SQLite database %s: %w", sealedEncPath, err)
 				}
 				_ = os.Remove(dbPath)
@@ -95,18 +118,22 @@ func NewStoreWithOptions(dbPath string, opts StoreOptions) (*Store, error) {
 			} else if infoPlain, err := os.Stat(dbPath); err == nil && infoPlain.Size() > 0 {
 				raw, readErr := os.ReadFile(dbPath)
 				if readErr != nil {
+					releaseOnErr()
 					return nil, fmt.Errorf("failed reading existing SQLite file %s: %w", dbPath, readErr)
 				}
 				if bytes.HasPrefix(raw, []byte(security.EncryptedBlobMagic)) {
 					plain, decErr := crypto.DecryptBytes(raw)
 					if decErr != nil {
+						releaseOnErr()
 						return nil, fmt.Errorf("failed decrypting sealed SQLite file %s: %w", dbPath, decErr)
 					}
 					if err := utils.AtomicWriteFile(workingPath, plain, 0600); err != nil {
+						releaseOnErr()
 						return nil, err
 					}
 				} else {
 					if err := utils.AtomicWriteFile(workingPath, raw, 0600); err != nil {
+						releaseOnErr()
 						return nil, err
 					}
 				}
@@ -126,6 +153,7 @@ func NewStoreWithOptions(dbPath string, opts StoreOptions) (*Store, error) {
 
 	db, err := sql.Open("sqlite", workingPath)
 	if err != nil {
+		releaseOnErr()
 		return nil, fmt.Errorf("could not open db: %w", err)
 	}
 
@@ -135,6 +163,7 @@ func NewStoreWithOptions(dbPath string, opts StoreOptions) (*Store, error) {
 
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
+		releaseOnErr()
 		return nil, fmt.Errorf("could not ping db: %w", err)
 	}
 
@@ -151,6 +180,7 @@ func NewStoreWithOptions(dbPath string, opts StoreOptions) (*Store, error) {
 	for _, p := range pragmas {
 		if _, err := db.Exec(p); err != nil {
 			_ = db.Close()
+			releaseOnErr()
 			return nil, fmt.Errorf("could not set pragma %s: %w", p, err)
 		}
 	}
@@ -176,11 +206,13 @@ func NewStoreWithOptions(dbPath string, opts StoreOptions) (*Store, error) {
 		sealedEncPath: sealedEncPath,
 		encryptAtRest: encryptAtRest,
 		crypto:        crypto,
+		fileLock:      fileLock,
 	}
 
 	// Bootstrap required tables
 	if err := store.initSchema(); err != nil {
 		_ = db.Close()
+		releaseOnErr()
 		return nil, fmt.Errorf("failed to init db schema: %w", err)
 	}
 
@@ -207,15 +239,20 @@ func (s *Store) SetCrypto(c *security.CryptoService) {
 }
 
 // EncryptField encrypts a sensitive column string with AES-256-GCM ("vraxter-enc-v1:...").
-func (s *Store) EncryptField(plain string) string {
-	if s == nil || s.crypto == nil || plain == "" {
-		return plain
+// It fails closed and returns an error if the encryption service is unavailable or fails,
+// never silently falling back to plaintext storage.
+func (s *Store) EncryptField(plain string) (string, error) {
+	if plain == "" {
+		return "", nil
+	}
+	if s == nil || s.crypto == nil {
+		return "", ErrEncryptionUnavailable
 	}
 	enc, err := s.crypto.EncryptEnvelope(plain)
 	if err != nil {
-		return plain
+		return "", fmt.Errorf("failed encrypting database field: %w", err)
 	}
-	return enc
+	return enc, nil
 }
 
 // DecryptField decrypts an AES-256-GCM "vraxter-enc-v1:..." column string (or returns legacy plaintext).
@@ -231,15 +268,20 @@ func (s *Store) DecryptField(val string) string {
 }
 
 // EncryptBlob encrypts a sensitive binary column with AES-256-GCM ("VRXENC01" header).
-func (s *Store) EncryptBlob(plain []byte) []byte {
-	if s == nil || s.crypto == nil || len(plain) == 0 {
-		return plain
+// It fails closed and returns an error if the encryption service is unavailable or fails,
+// never silently falling back to plaintext storage.
+func (s *Store) EncryptBlob(plain []byte) ([]byte, error) {
+	if len(plain) == 0 {
+		return plain, nil
+	}
+	if s == nil || s.crypto == nil {
+		return nil, ErrEncryptionUnavailable
 	}
 	enc, err := s.crypto.EncryptBytes(plain)
 	if err != nil {
-		return plain
+		return nil, fmt.Errorf("failed encrypting database blob: %w", err)
 	}
-	return enc
+	return enc, nil
 }
 
 // DecryptBlob decrypts an AES-256-GCM "VRXENC01" binary column (or returns legacy blob).
@@ -435,14 +477,25 @@ func (s *Store) initSchema() error {
 }
 
 func (s *Store) Close() error {
-	if s == nil || s.Conn == nil {
+	if s == nil {
 		return nil
 	}
+	defer func() {
+		if s.fileLock != nil {
+			_ = s.fileLock.Release()
+			s.fileLock = nil
+		}
+	}()
+	if s.Conn == nil {
+		return nil
+	}
+	conn := s.Conn
+	s.Conn = nil
 	if s.encryptAtRest && s.workingPath != "" && s.workingPath != ":memory:" && s.crypto != nil {
 		snapTmp := s.workingPath + ".seal.tmp"
 		_ = os.Remove(snapTmp)
-		_, vacErr := s.Conn.Exec("VACUUM INTO ?", snapTmp)
-		closeErr := s.Conn.Close()
+		_, vacErr := conn.Exec("VACUUM INTO ?", snapTmp)
+		closeErr := conn.Close()
 
 		srcToEncrypt := snapTmp
 		if vacErr != nil {
@@ -470,7 +523,7 @@ func (s *Store) Close() error {
 		}
 		return encErr
 	}
-	return s.Conn.Close()
+	return conn.Close()
 }
 
 func autoBackupEncrypted(conn *sql.DB, dbPath string, crypto *security.CryptoService) (string, error) {

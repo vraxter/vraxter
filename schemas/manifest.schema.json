@@ -56,7 +56,12 @@
           "type": "string",
           "enum": ["never", "always", "on_risk", "conditional"],
           "default": "on_risk",
-          "description": "User approval policy before execution."
+          "description": "Operator HITL approval policy before execution."
+        },
+        "allow_daemon": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicit opt-in required before permitting detached background daemon execution (always gated by HITL approval)."
         }
       },
       "additionalProperties": false
@@ -316,6 +321,12 @@
           "maximum": 300000,
           "default": 30000,
           "description": "Maximum execution runtime in milliseconds before hard timeout."
+        },
+        "max_cpu_fuel": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 50000000,
+          "description": "Deterministic WASM CPU fuel budget (basic blocks / loop back-edges) before runtime trap."
         }
       },
       "additionalProperties": false

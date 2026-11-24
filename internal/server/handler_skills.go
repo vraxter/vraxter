@@ -11,7 +11,8 @@ package server
 import (
 	"context"
 	"fmt"
-	
+	"strings"
+
 	v1 "github.com/vraxter/vraxter/api/v1"
 	"github.com/vraxter/vraxter/pkg/types"
 )
@@ -77,14 +78,25 @@ func (h *AgentHandler) InstallSkill(ctx context.Context, req *v1.InstallSkillReq
 	}
 	h.cfgMu.RLock()
 	privacyPolicy := h.config.PrivacyPolicy
+	isolationMode := h.config.IsolationMode
+	hubURL := strings.TrimSpace(h.config.HubURL)
 	h.cfgMu.RUnlock()
-	if privacyPolicy == "strict_local" {
+	if isolationMode == "airgap" || privacyPolicy == "strict_local" {
 		return &v1.InstallSkillResponse{
 			Success: false,
-			Message: "Error: Vraxter is in strict_local mode. Hub interaction is disabled. Use 'vraxter skills inject' for local files.",
+			Message: "Error: remote skill registry access is blocked in airgap/strict_local mode. Use 'vraxter skill verify' and 'vraxter skills inject' with offline signed artifacts.",
 		}, nil
 	}
-	return &v1.InstallSkillResponse{Success: true, Message: "Connecting to Hub URL... (Mocked)"}, nil
+	if hubURL == "" {
+		return &v1.InstallSkillResponse{
+			Success: false,
+			Message: "Error: no remote skill registry URL is configured. Use 'vraxter skills inject' to register locally verified WASM skills.",
+		}, nil
+	}
+	return &v1.InstallSkillResponse{
+		Success: false,
+		Message: "Error: remote hub installation is disabled in this release; import signed artifacts via 'vraxter skills inject'.",
+	}, nil
 }
 
 func (h *AgentHandler) DownloadSkill(ctx context.Context, req *v1.DownloadSkillRequest) (*v1.DownloadSkillResponse, error) {
@@ -93,14 +105,25 @@ func (h *AgentHandler) DownloadSkill(ctx context.Context, req *v1.DownloadSkillR
 	}
 	h.cfgMu.RLock()
 	privacyPolicy := h.config.PrivacyPolicy
+	isolationMode := h.config.IsolationMode
+	hubURL := strings.TrimSpace(h.config.HubURL)
 	h.cfgMu.RUnlock()
-	if privacyPolicy == "strict_local" {
+	if isolationMode == "airgap" || privacyPolicy == "strict_local" {
 		return &v1.DownloadSkillResponse{
 			Success: false,
-			Message: "Error: Vraxter is in strict_local mode. Hub interaction is disabled.",
+			Message: "Error: remote skill downloads are blocked in airgap/strict_local mode.",
 		}, nil
 	}
-	return &v1.DownloadSkillResponse{Success: true, Message: fmt.Sprintf("Downloading skill to %s... (Mocked)", req.DestPath)}, nil
+	if hubURL == "" {
+		return &v1.DownloadSkillResponse{
+			Success: false,
+			Message: "Error: no remote skill registry URL is configured.",
+		}, nil
+	}
+	return &v1.DownloadSkillResponse{
+		Success: false,
+		Message: "Error: remote hub downloads are disabled in this release; transfer signed skill bundles offline.",
+	}, nil
 }
 
 func (h *AgentHandler) InjectSkill(ctx context.Context, req *v1.InjectSkillRequest) (*v1.InjectSkillResponse, error) {
